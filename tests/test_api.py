@@ -7,7 +7,7 @@ from core.store import ArcStore
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("ORACLE_ARC_API_KEY", "owner-test-secret")
+    monkeypatch.setenv("ORACLE_ARC_API_KEY", "owner-test-secret-0123456789-abcdef")
     monkeypatch.setenv("ORACLE_ARC_MODEL", "qwen2.5:7b")
     monkeypatch.setenv("ORACLE_ARC_DB_PATH", str(tmp_path / "oracle.sqlite3"))
     api._store = ArcStore(tmp_path / "oracle.sqlite3")
@@ -17,7 +17,7 @@ def client(tmp_path, monkeypatch):
 
 
 def auth():
-    return {"Authorization": "Bearer owner-test-secret"}
+    return {"Authorization": "Bearer owner-test-secret-0123456789-abcdef"}
 
 
 def test_private_endpoints_require_owner_auth(client):
@@ -42,7 +42,7 @@ def test_memory_create_list_and_permanent_delete(client):
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
     assert all(item["id"] != memory_id for item in client.get("/v1/memories", headers=auth()).json()["data"])
-    with api.get_store()._connect() as conn:
+    with api.get_store()._session() as conn:
         assert conn.execute("SELECT 1 FROM memories WHERE id=?", (memory_id,)).fetchone() is None
 
 
