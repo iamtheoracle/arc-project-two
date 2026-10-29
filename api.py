@@ -1,4 +1,4 @@
-""""Private, single-owner HTTP API for Oracle Arc. Inference stays on the configured Ollama host."""
+"""Private, single-owner HTTP API for Oracle Arc. Inference stays on the configured Ollama host."""
 from __future__ import annotations
 
 import hmac
