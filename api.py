@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import time
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -131,7 +132,7 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
         raise HTTPException(status_code=503, detail="The local model returned an empty response.")
     store.add_message(conversation_id, "assistant", answer)
     return {"id": "chatcmpl-" + conversation_id, "object": "chat.completion",
-            "created": 0, "model": model, "conversation_id": conversation_id,
+            "created": int(time.time()), "model": model, "conversation_id": conversation_id,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": answer},
                          "finish_reason": "stop"}]}
 
@@ -139,6 +140,13 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
 @app.get("/v1/conversations", dependencies=[Depends(require_owner)])
 def conversations(limit: int = Query(default=50, ge=1, le=100), store: ArcStore = Depends(get_store)):
     return {"data": store.list_conversations(limit)}
+
+
+@app.delete("/v1/conversations/{conversation_id}", dependencies=[Depends(require_owner)])
+def delete_conversation(conversation_id: str, store: ArcStore = Depends(get_store)):
+    if not store.delete_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"deleted": True, "id": conversation_id}
 
 
 @app.get("/v1/memories", dependencies=[Depends(require_owner)])
@@ -151,6 +159,16 @@ def create_memory(request: MemoryCreate, store: ArcStore = Depends(get_store)):
     if not request.content.strip():
         raise HTTPException(status_code=422, detail="Memory content cannot be blank.")
     return store.save_memory(request.content, request.tags)
+
+
+@app.put("/v1/memories/{memory_id}", dependencies=[Depends(require_owner)])
+def update_memory(memory_id: str, request: MemoryCreate, store: ArcStore = Depends(get_store)):
+    if not request.content.strip():
+        raise HTTPException(status_code=422, detail="Memory content cannot be blank.")
+    memory = store.update_memory(memory_id, request.content, request.tags)
+    if memory is None:
+        raise HTTPException(status_code=404, detail="Memory not found.")
+    return memory
 
 
 @app.delete("/v1/memories/{memory_id}", dependencies=[Depends(require_owner)])
