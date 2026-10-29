@@ -26,8 +26,8 @@ def get_store() -> ArcStore:
 
 def require_owner(authorization: str | None = Header(default=None)) -> None:
     expected = os.environ.get("ORACLE_ARC_API_KEY", "").strip()
-    if not expected:
-        raise HTTPException(status_code=503, detail="Oracle Arc is not configured: set ORACLE_ARC_API_KEY on the server.")
+    if not expected or expected.startswith("replace-with-") or len(expected) < 32:
+        raise HTTPException(status_code=503, detail="Oracle Arc requires a generated server-side API secret of at least 32 characters.")
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not token or not hmac.compare_digest(token, expected):
         raise HTTPException(status_code=401, detail="Owner authentication required.")
@@ -85,7 +85,7 @@ def _system_prompt(store: ArcStore) -> str:
 
 @app.get("/healthz")
 def healthz():
-    return {"service": "oracle-arc", "status": "ready", "model": os.environ.get("ORACLE_ARC_MODEL", "qwen2.5:7b"),
+    return {"service": "oracle-arc", "status": "running", "model": os.environ.get("ORACLE_ARC_MODEL", "qwen2.5:7b"),
             "authentication_required": True}
 
 
