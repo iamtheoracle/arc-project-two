@@ -4,3 +4,4 @@ python-dotenv>=1.0.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pytest>=8.0.0
+psutil>=5.9.0
