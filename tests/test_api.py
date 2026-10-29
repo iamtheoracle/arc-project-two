@@ -38,6 +38,10 @@ def test_memory_create_list_and_permanent_delete(client):
     memory_id = created.json()["id"]
     listed = client.get("/v1/memories", headers=auth()).json()["data"]
     assert any(item["id"] == memory_id for item in listed)
+    updated = client.put(f"/v1/memories/{memory_id}", headers=auth(),
+                         json={"content": "I prefer simple explanations.", "tags": ["style"]})
+    assert updated.status_code == 200
+    assert updated.json()["content"] == "I prefer simple explanations."
     deleted = client.delete(f"/v1/memories/{memory_id}", headers=auth())
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
@@ -95,6 +99,15 @@ def test_conversation_history_is_persistent_and_owned(client, monkeypatch):
     assert [m["role"] for m in history] == ["user", "assistant", "user", "assistant"]
     assert history[2]["content"] == "What did I just say?"
 
+
+
+def test_owner_can_permanently_delete_a_conversation(client):
+    conversation_id = api.get_store().create_conversation("Delete me")
+    api.get_store().add_message(conversation_id, "user", "private")
+    response = client.delete(f"/v1/conversations/{conversation_id}", headers=auth())
+    assert response.status_code == 200
+    assert not api.get_store().conversation_exists(conversation_id)
+    assert api.get_store().get_messages(conversation_id) == []
 
 
 def test_owner_memory_is_injected_into_model_context(client):
