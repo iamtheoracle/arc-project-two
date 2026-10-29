@@ -1,111 +1,104 @@
-# Arc Project Two
+# THE ORACLE-ARC
 
-**LLM-Independent Local AI System** — No API keys required. Premium, smart, and sharp.
+**A private, single-owner AI assistant powered by a locally hosted Ollama model.**
 
-Runs entirely on your machine using Ollama. Modular plugin architecture for tools and capabilities.
+Oracle Arc is a standalone project. It is not Vantoris X Money, UNIBUD, The Arc Space, or a My Realm business application.
 
-## Features
+## What is implemented
 
-- **Zero external API keys** — Pure local inference via Ollama
-- **Modular Plugin System** — Drop-in plugins with automatic tool discovery
-- **Sharp Agent Loop** — Structured reasoning, tool use, and multi-step execution
-- **Conversation Memory** — Persistent session context
-- **Premium UX** — Clean CLI + optional web interface
-- **Extensible** — Easy to add new plugins (Python modules)
+- Local inference through Ollama; default model: `qwen2.5:7b`.
+- Owner-only HTTP API using a server-side bearer secret and constant-time token comparison.
+- OpenAI-compatible chat endpoint: `POST /v1/chat/completions`.
+- Persistent SQLite conversations and owner-managed memories.
+- Memory list, save, and permanent-delete endpoints.
+- Tool permissions default to denied. The owner must explicitly approve or revoke each installed tool.
+- Tool audit history records approvals, revocations, denials, and executions without storing tool arguments.
+- API model selection is pinned to the server-configured model; clients cannot trigger arbitrary model pulls.
+- Automated tests for authentication, persistence, memory deletion, permissions, and agent denial behavior.
 
-## Quick Start
+## Run locally
 
-### 1. Install Ollama
+Requirements: Python 3.11+ and [Ollama](https://ollama.com/).
+
 ```bash
-# macOS / Linux
-curl -fsSL https://ollama.com/install.sh | sh
+# 1. Install and start Ollama using its official instructions.
+ollama pull qwen2.5:7b
 
-# Windows: download from https://ollama.com
-```
-
-### 2. Pull a model
-```bash
-ollama pull llama3.1:8b
-# or: ollama pull qwen2.5:7b / mistral / gemma2
-```
-
-### 3. Setup project
-```bash
-git clone https://github.com/iamtheoracle/arc-project-two.git
-cd arc-project-two
+# 2. Create an isolated Python environment.
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+source .venv/bin/activate     # Windows: .venv\Scripts\activate
+python -m pip install -r requirements.txt
+
+# 3. Configure a server-only key. Do not commit .env.
+cp .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+# Put the generated value in ORACLE_ARC_API_KEY in .env.
+
+# 4. Load the environment variables into this shell.
+set -a
+. ./.env
+set +a
+
+# 5. Start the API bound to loopback, not the public internet.
+uvicorn api:app --host 127.0.0.1 --port 8090
 ```
 
-### 4. Run
+The model must already be available in Ollama. Oracle Arc does not automatically download arbitrary models from API requests.
+
+## API examples
+
+Set `ORACLE_ARC_API_KEY` in the server environment and use the same value only in a trusted client:
+
 ```bash
-python main.py
+export ORACLE_ARC_API_KEY='your-server-generated-secret'
+
+curl http://127.0.0.1:8090/v1/chat/completions \
+  -H "Authorization: Bearer $ORACLE_ARC_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hello, Oracle Arc."}]}'
 ```
 
-Or with the web UI:
+Save a memory:
+
 ```bash
-python web.py
+curl -X POST http://127.0.0.1:8090/v1/memories \
+  -H "Authorization: Bearer $ORACLE_ARC_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"I prefer clear, direct explanations.","tags":["preferences"]}'
 ```
 
-## Plugin System
+Other owner-authenticated routes:
 
-Plugins live in `plugins/`. Each plugin is a Python file that exports a `PLUGIN` dict or class.
+- `GET /v1/models`
+- `GET /v1/conversations`
+- `GET /v1/memories`
+- `DELETE /v1/memories/{memory_id}` — permanent deletion
+- `GET /v1/tools`
+- `PUT /v1/tools/{tool_name}/approval` with `{"approved":true}` or `false`
+- `GET /v1/audit/tools`
 
-### Example plugin structure
-```python
-# plugins/calculator.py
-PLUGIN = {
-    "name": "calculator",
-    "description": "Perform precise mathematical calculations",
-    "tools": [
-        {
-            "name": "calculate",
-            "description": "Evaluate a math expression safely",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expression": {"type": "string", "description": "Math expression to evaluate"}
-                },
-                "required": ["expression"]
-            }
-        }
-    ]
-}
+Conversation continuity: the first chat response returns `conversation_id`. Send it on later requests to continue that persisted conversation.
 
-def calculate(expression: str) -> str:
-    # Safe eval implementation
-    ...
+## Security boundaries
+
+- The API refuses protected requests if `ORACLE_ARC_API_KEY` is missing or incorrect.
+- Keep `ORACLE_ARC_API_KEY` and the SQLite database on a trusted server. Never use a `VITE_*` or other browser-exposed variable for secrets.
+- The API binds to `127.0.0.1` by default in the documented command. For a remote platform integration, use a private network or authenticated gateway with TLS; do not expose this port publicly without that layer.
+- No tools are approved initially. Review each plugin before enabling it.
+- Plugin code runs with the operating-system permissions of the Oracle Arc process. Tool approval is not a sandbox: run with least-privilege OS permissions and avoid granting access to sensitive files unnecessarily.
+- SQLite is local persistent storage, not encrypted-at-rest storage. Protect the host disk and backups.
+- This repository's current GitHub visibility is public. Never put private conversations, memories, keys, or real personal data in source control. If source-code confidentiality is required, change repository visibility to private in GitHub settings.
+
+## Verification
+
+Run:
+
+```bash
+pytest -q
 ```
 
-## Recommended Models
+CI runs the same tests on pushes and pull requests. Passing tests validate the mocked API and permission boundaries; they do **not** prove that Ollama is installed, that a model has been downloaded, or that a live model response has been tested on your hardware.
 
-| Model | Size | Strengths | VRAM |
-|-------|------|-----------|------|
-| llama3.1:8b | 4.7GB | Balanced, good tool use | ~6GB |
-| qwen2.5:7b | 4.7GB | Excellent reasoning | ~6GB |
-| gemma2:9b | 5.4GB | Sharp, concise | ~7GB |
-| mistral:7b | 4.1GB | Fast, solid | ~5GB |
+## Status
 
-## Architecture
-
-```
-arc-project-two/
-├── main.py          # CLI agent entrypoint
-├── web.py           # Optional Gradio web UI
-├── core/
-│   ├── agent.py      # Main agent loop
-│   ├── llm.py        # Ollama interface
-│   ├── plugins.py    # Plugin loader & registry
-│   └── memory.py     # Conversation memory
-├── plugins/         # Drop-in plugins
-│   ├── calculator.py
-│   ├── system.py
-│   ├── files.py
-│   └── ...
-└── requirements.txt
-```
-
-## License
-
-MIT
+This is the first implementation pass of the personal core. Real Ollama inference, remote platform integration, production hosting, and hardware performance still require environment setup and live verification.
