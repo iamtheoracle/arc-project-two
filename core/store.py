@@ -16,10 +16,6 @@ class ArcStore:
         self.path = Path(configured)
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            try:
-                self.path.parent.chmod(0o700)
-            except OSError:
-                pass
         self._initialize()
         if str(self.path) != ":memory:":
             try:
