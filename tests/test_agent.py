@@ -32,4 +32,4 @@ def test_unapproved_tool_is_never_executed():
     agent.tool_audit = None
     result = agent.chat("calculate 1+1")
     assert result == "I need permission before using that tool."
-    assert llm.calls[1][0][-1]["content"].startswith("Permission denied")
+    assert agent.messages[-2]["content"].startswith("Permission denied")
