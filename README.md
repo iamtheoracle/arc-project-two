@@ -72,7 +72,9 @@ Other owner-authenticated routes:
 - `GET /v1/models`
 - `GET /v1/conversations`
 - `GET /v1/memories`
+- `PUT /v1/memories/{memory_id}` — edit a memory
 - `DELETE /v1/memories/{memory_id}` — permanent deletion
+- `DELETE /v1/conversations/{conversation_id}` — permanently delete a conversation and its messages
 - `GET /v1/tools`
 - `PUT /v1/tools/{tool_name}/approval` with `{"approved":true}` or `false`
 - `GET /v1/audit/tools`
