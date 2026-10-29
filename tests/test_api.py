@@ -151,3 +151,30 @@ def test_chat_requires_latest_message_to_be_user(client):
         "messages": [{"role": "assistant", "content": "Not a user prompt"}]
     })
     assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_detail"),
+    [
+        (RuntimeError("private internal model error"), "The local model is unavailable. Check Ollama and the configured model."),
+        ("   ", "The local model returned an empty response."),
+    ],
+)
+def test_model_failures_return_safe_503_without_leaking_internal_errors(client, monkeypatch, answer, expected_detail):
+    class FailingAgent:
+        def __init__(self, model, approved_tools):
+            self.messages = []
+            self.tool_audit = None
+
+        def chat(self, user_input, max_steps=8):
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    monkeypatch.setattr(api, "_agent", lambda model, approved_tools: FailingAgent(model, approved_tools))
+    response = client.post("/v1/chat/completions", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Please answer"}]
+    })
+    assert response.status_code == 503
+    assert response.json()["detail"] == expected_detail
+    assert "private internal model error" not in response.text
