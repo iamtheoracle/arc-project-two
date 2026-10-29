@@ -31,7 +31,12 @@ class ArcAgent:
 
     def chat(self, user_input: str, max_steps: int = 8) -> str:
         self.messages.append({"role": "user", "content": user_input})
-        tools = self.plugins.get_tools_schema()
+        # Never offer unapproved tools to the model. A forged or unexpected tool call
+        # is still rejected below, so schema filtering is defense in depth.
+        tools = [
+            schema for schema in self.plugins.get_tools_schema()
+            if schema.get("function", {}).get("name") in self.approved_tools
+        ]
 
         for _ in range(max_steps):
             response = self.llm.chat(self.messages, tools=tools if tools else None)
@@ -59,8 +64,9 @@ class ArcAgent:
                 else:
                     try:
                         result = self.plugins.execute(name, args)
+                        outcome = "execution_error" if str(result).startswith("Error") else "executed"
                         if self.tool_audit:
-                            self.tool_audit(name, "executed")
+                            self.tool_audit(name, outcome)
                     except Exception:
                         result = f"Tool '{name}' failed. No successful result is available."
                         if self.tool_audit:
