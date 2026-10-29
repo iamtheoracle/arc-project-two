@@ -1,0 +1,103 @@
+import pytest
+from fastapi.testclient import TestClient
+
+import api
+from core.store import ArcStore
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORACLE_ARC_API_KEY", "owner-test-secret")
+    monkeypatch.setenv("ORACLE_ARC_MODEL", "qwen2.5:7b")
+    monkeypatch.setenv("ORACLE_ARC_DB_PATH", str(tmp_path / "oracle.sqlite3"))
+    api._store = ArcStore(tmp_path / "oracle.sqlite3")
+    with TestClient(api.app) as test_client:
+        yield test_client
+    api._store = None
+
+
+def auth():
+    return {"Authorization": "Bearer owner-test-secret"}
+
+
+def test_private_endpoints_require_owner_auth(client):
+    assert client.get("/v1/memories").status_code == 401
+    assert client.post("/v1/memories", json={"content": "private"}).status_code == 401
+    assert client.get("/v1/tools").status_code == 401
+
+
+def test_missing_server_secret_fails_closed(client, monkeypatch):
+    monkeypatch.delenv("ORACLE_ARC_API_KEY")
+    assert client.get("/v1/memories", headers=auth()).status_code == 503
+
+
+def test_memory_create_list_and_permanent_delete(client):
+    created = client.post("/v1/memories", headers=auth(),
+                          json={"content": "I prefer short explanations.", "tags": ["preference"]})
+    assert created.status_code == 201
+    memory_id = created.json()["id"]
+    listed = client.get("/v1/memories", headers=auth()).json()["data"]
+    assert any(item["id"] == memory_id for item in listed)
+    deleted = client.delete(f"/v1/memories/{memory_id}", headers=auth())
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert all(item["id"] != memory_id for item in client.get("/v1/memories", headers=auth()).json()["data"])
+    with api.get_store()._connect() as conn:
+        assert conn.execute("SELECT 1 FROM memories WHERE id=?", (memory_id,)).fetchone() is None
+
+
+def test_tool_permissions_default_to_denied_and_can_be_revoked(client):
+    assert api.get_store().approved_tools() == set()
+    response = client.put("/v1/tools/calculate/approval", headers=auth(), json={"approved": True})
+    assert response.status_code == 200
+    assert "calculate" in api.get_store().approved_tools()
+    response = client.put("/v1/tools/calculate/approval", headers=auth(), json={"approved": False})
+    assert response.status_code == 200
+    assert "calculate" not in api.get_store().approved_tools()
+
+
+def test_unknown_tool_cannot_be_approved(client):
+    response = client.put("/v1/tools/arbitrary_code/approval", headers=auth(), json={"approved": True})
+    assert response.status_code == 404
+
+
+def test_model_override_is_rejected(client):
+    response = client.post("/v1/chat/completions", headers=auth(), json={
+        "model": "different-model", "messages": [{"role": "user", "content": "hello"}]
+    })
+    assert response.status_code == 400
+
+
+def test_conversation_history_is_persistent_and_owned(client, monkeypatch):
+    class FakeAgent:
+        def __init__(self, model, approved_tools):
+            self.messages = []
+            self.tool_audit = None
+
+        def chat(self, user_input, max_steps=8):
+            assert any(m["role"] == "system" for m in self.messages)
+            assert self.messages[-1]["content"] != user_input
+            return "Mocked model response for test."
+
+    monkeypatch.setattr(api, "_agent", lambda model, approved_tools: FakeAgent(model, approved_tools))
+    first = client.post("/v1/chat/completions", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Remember this conversation"}]
+    })
+    assert first.status_code == 200
+    conversation_id = first.json()["conversation_id"]
+    assert api.get_store().conversation_exists(conversation_id)
+    second = client.post("/v1/chat/completions", headers=auth(), json={
+        "conversation_id": conversation_id,
+        "messages": [{"role": "user", "content": "What did I just say?"}]
+    })
+    assert second.status_code == 200
+    history = api.get_store().get_messages(conversation_id)
+    assert [m["role"] for m in history] == ["user", "assistant", "user", "assistant"]
+    assert history[2]["content"] == "What did I just say?"
+
+
+def test_chat_requires_latest_message_to_be_user(client):
+    response = client.post("/v1/chat/completions", headers=auth(), json={
+        "messages": [{"role": "assistant", "content": "Not a user prompt"}]
+    })
+    assert response.status_code == 400
