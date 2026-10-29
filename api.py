@@ -1,4 +1,4 @@
-"""Private, single-owner HTTP API for Oracle Arc. Inference stays on the configured Ollama host."""
+""""Private, single-owner HTTP API for Oracle Arc. Inference stays on the configured Ollama host."""
 from __future__ import annotations
 
 import hmac
@@ -14,7 +14,7 @@ from core.agent import ArcAgent, SYSTEM_PROMPT
 from core.plugins import PluginRegistry
 from core.store import ArcStore
 
-app = FastAPI(title="Oracle Arc", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
 
 
@@ -42,7 +42,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     model: str | None = None
     messages: list[ChatMessage] = Field(min_length=1, max_length=100)
-    conversation_id: str | None = None
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=64)
     max_steps: int = Field(default=4, ge=1, le=8)
 
 
@@ -86,8 +86,9 @@ def _system_prompt(store: ArcStore) -> str:
 
 @app.get("/healthz")
 def healthz():
-    return {"service": "oracle-arc", "status": "running", "model": os.environ.get("ORACLE_ARC_MODEL", "qwen2.5:7b"),
-            "authentication_required": True}
+    # Liveness only: this does not claim that Ollama or the configured model is ready.
+    # Keep this unauthenticated endpoint free of model names and configuration details.
+    return {"service": "oracle-arc", "status": "alive", "authentication_required": True}
 
 
 @app.get("/v1/models", dependencies=[Depends(require_owner)])
