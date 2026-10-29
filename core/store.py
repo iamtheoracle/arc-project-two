@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 import sqlite3
 import uuid
 from pathlib import Path
@@ -14,8 +15,17 @@ class ArcStore:
         configured = path or os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
         self.path = Path(configured)
         if str(self.path) != ":memory:":
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            try:
+                self.path.parent.chmod(0o700)
+            except OSError:
+                pass
         self._initialize()
+        if str(self.path) != ":memory:":
+            try:
+                self.path.chmod(0o600)
+            except OSError:
+                pass
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path), timeout=10)
@@ -24,8 +34,20 @@ class ArcStore:
         conn.execute("PRAGMA busy_timeout=10000")
         return conn
 
+    @contextmanager
+    def _session(self):
+        conn = self._connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def _initialize(self) -> None:
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
@@ -63,7 +85,7 @@ class ArcStore:
 
     def create_conversation(self, title: str = "") -> str:
         conversation_id = str(uuid.uuid4())
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.execute("INSERT INTO conversations(id,title) VALUES(?,?)", (conversation_id, title[:160]))
         return conversation_id
 
