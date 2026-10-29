@@ -96,6 +96,14 @@ def test_conversation_history_is_persistent_and_owned(client, monkeypatch):
     assert history[2]["content"] == "What did I just say?"
 
 
+
+def test_owner_memory_is_injected_into_model_context(client):
+    api.get_store().save_memory("The owner prefers concise explanations.", ["preferences"])
+    prompt = api._system_prompt(api.get_store())
+    assert "Owner-managed persistent memory" in prompt
+    assert "The owner prefers concise explanations." in prompt
+
+
 def test_chat_requires_latest_message_to_be_user(client):
     response = client.post("/v1/chat/completions", headers=auth(), json={
         "messages": [{"role": "assistant", "content": "Not a user prompt"}]
