@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 import os
-from contextlib import contextmanager
 import sqlite3
+from contextlib import contextmanager
 import uuid
 from pathlib import Path
 from typing import Any
@@ -90,20 +90,20 @@ class ArcStore:
         return conversation_id
 
     def conversation_exists(self, conversation_id: str) -> bool:
-        with self._connect() as conn:
+        with self._session() as conn:
             return conn.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone() is not None
 
     def add_message(self, conversation_id: str, role: str, content: str) -> None:
         if role not in ("user", "assistant"):
             raise ValueError("Unsupported message role")
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.execute("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)",
                          (conversation_id, role, content))
             conn.execute("UPDATE conversations SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
                          (conversation_id,))
 
     def get_messages(self, conversation_id: str, limit: int = 80) -> list[dict[str, str]]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 "SELECT role,content FROM (SELECT id,role,content FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT ?) ORDER BY id",
                 (conversation_id, max(1, min(limit, 200))),
@@ -111,7 +111,7 @@ class ArcStore:
         return [{"role": row["role"], "content": row["content"]} for row in rows]
 
     def list_conversations(self, limit: int = 50) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 "SELECT c.id,c.title,c.created_at,c.updated_at,(SELECT content FROM messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message FROM conversations c ORDER BY c.updated_at DESC LIMIT ?",
                 (max(1, min(limit, 100)),),
@@ -121,20 +121,20 @@ class ArcStore:
     def save_memory(self, content: str, tags: list[str] | None = None) -> dict[str, Any]:
         memory_id = str(uuid.uuid4())
         clean_tags = list(dict.fromkeys(t.strip()[:40] for t in (tags or []) if isinstance(t, str) and t.strip()))[:20]
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.execute("INSERT INTO memories(id,content,tags_json) VALUES(?,?,?)",
                          (memory_id, content.strip(), json.dumps(clean_tags)))
             row = conn.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
         return self._memory_dict(row)
 
     def list_memories(self, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute("SELECT * FROM memories ORDER BY created_at DESC LIMIT ?",
                                  (max(1, min(limit, 500)),)).fetchall()
         return [self._memory_dict(row) for row in rows]
 
     def delete_memory(self, memory_id: str) -> bool:
-        with self._connect() as conn:
+        with self._session() as conn:
             result = conn.execute("DELETE FROM memories WHERE id=?", (memory_id,))
         return result.rowcount > 0
 
@@ -144,12 +144,12 @@ class ArcStore:
                 "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
     def approved_tools(self) -> set[str]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute("SELECT name FROM tool_permissions WHERE approved=1").fetchall()
         return {row["name"] for row in rows}
 
     def set_tool_approval(self, name: str, approved: bool) -> None:
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.execute(
                 "INSERT INTO tool_permissions(name,approved,updated_at) VALUES(?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
                 "ON CONFLICT(name) DO UPDATE SET approved=excluded.approved,updated_at=excluded.updated_at",
@@ -159,11 +159,11 @@ class ArcStore:
                          (name, "owner_approved" if approved else "owner_revoked"))
 
     def audit_tool(self, name: str, outcome: str) -> None:
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.execute("INSERT INTO tool_audit(tool_name,outcome) VALUES(?,?)", (name, outcome))
 
     def list_tool_audit(self, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute("SELECT id,tool_name,outcome,created_at FROM tool_audit ORDER BY id DESC LIMIT ?",
                                 (max(1, min(limit, 500)),)).fetchall()
         return [dict(row) for row in rows]
