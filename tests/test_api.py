@@ -31,6 +31,14 @@ def test_missing_server_secret_fails_closed(client, monkeypatch):
     assert client.get("/v1/memories", headers=auth()).status_code == 503
 
 
+
+@pytest.mark.parametrize("secret", ["replace-with-a-long-random-secret", "short"])
+def test_placeholder_or_weak_server_secret_fails_closed(client, monkeypatch, secret):
+    monkeypatch.setenv("ORACLE_ARC_API_KEY", secret)
+    response = client.get("/v1/memories", headers=auth())
+    assert response.status_code == 503
+
+
 def test_memory_create_list_and_permanent_delete(client):
     created = client.post("/v1/memories", headers=auth(),
                           json={"content": "I prefer short explanations.", "tags": ["preference"]})
