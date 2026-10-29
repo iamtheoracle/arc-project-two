@@ -106,6 +106,11 @@ class ArcStore:
             ).fetchall()
         return [{"role": row["role"], "content": row["content"]} for row in rows]
 
+    def delete_conversation(self, conversation_id: str) -> bool:
+        with self._session() as conn:
+            result = conn.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+        return result.rowcount > 0
+
     def list_conversations(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._session() as conn:
             rows = conn.execute(
@@ -120,6 +125,18 @@ class ArcStore:
         with self._session() as conn:
             conn.execute("INSERT INTO memories(id,content,tags_json) VALUES(?,?,?)",
                          (memory_id, content.strip(), json.dumps(clean_tags)))
+            row = conn.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
+        return self._memory_dict(row)
+
+    def update_memory(self, memory_id: str, content: str, tags: list[str] | None = None) -> dict[str, Any] | None:
+        clean_tags = list(dict.fromkeys(t.strip()[:40] for t in (tags or []) if isinstance(t, str) and t.strip()))[:20]
+        with self._session() as conn:
+            result = conn.execute(
+                "UPDATE memories SET content=?,tags_json=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+                (content.strip(), json.dumps(clean_tags), memory_id),
+            )
+            if result.rowcount == 0:
+                return None
             row = conn.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
         return self._memory_dict(row)
 
