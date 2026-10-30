@@ -172,8 +172,8 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
         if not store.conversation_exists(request.conversation_id):
             raise HTTPException(status_code=404, detail="Conversation not found.")
         history = store.get_messages(request.conversation_id)
-        store.add_message(request.conversation_id, "user", latest_user)
         conversation_id = request.conversation_id
+        pending_message_id = store.add_message(conversation_id, "user", latest_user)
         agent_history = history[-79:]
     else:
         conversation_id = store.create_conversation(latest_user[:120])
@@ -181,8 +181,9 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
         # caller-supplied user/assistant context, with the final user turn added by chat().
         history = [{"role": item["role"], "content": item["content"]}
                    for item in incoming if item["role"] in ("user", "assistant")]
-        for item in history:
+        for item in history[:-1]:
             store.add_message(conversation_id, item["role"], item["content"])
+        pending_message_id = store.add_message(conversation_id, "user", latest_user)
         agent_history = history[:-1][-79:]
 
     agent = _agent(model, store.approved_tools())
@@ -190,10 +191,16 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
     agent.tool_audit = lambda name, outcome: store.audit_tool(name, outcome)
     try:
         answer = agent.chat(latest_user, max_steps=request.max_steps)
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError("The local model returned an empty response.")
     except Exception:
-        raise HTTPException(status_code=503, detail="The local model is unavailable. Check Ollama and the configured model.")
-    if not isinstance(answer, str) or not answer.strip():
-        raise HTTPException(status_code=503, detail="The local model returned an empty response.")
+        store.rollback_pending_turn(conversation_id, pending_message_id)
+        detail = (
+            "The local model returned an empty response."
+            if isinstance(locals().get("answer"), str)
+            else "The local model is unavailable. Check Ollama and the configured model."
+        )
+        raise HTTPException(status_code=503, detail=detail)
     store.add_message(conversation_id, "assistant", answer)
     return {"id": "chatcmpl-" + conversation_id, "object": "chat.completion",
             "created": int(time.time()), "model": model, "conversation_id": conversation_id,
