@@ -620,3 +620,15 @@ def test_unknown_agent_session_is_not_created_in_backup(client, monkeypatch, tmp
     })
     assert response.status_code == 404
     assert not ArcStore(backup_path).conversation_exists(missing_id)
+
+
+def test_owner_can_cancel_queued_agent_task(client):
+    task_id = "owner-cancel-task"
+    api._create_agent_task(api.get_store(), task_id, "bud", "oracle", ["reasoning"])
+    response = client.post(f"/v1/agent-tasks/{task_id}/cancel", headers=auth())
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    status = client.get(f"/v1/agent-tasks/{task_id}", headers=auth())
+    assert status.json()["status"] == "cancelled"
+    again = client.post(f"/v1/agent-tasks/{task_id}/cancel", headers=auth())
+    assert again.status_code == 409
