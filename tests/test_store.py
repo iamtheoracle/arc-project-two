@@ -169,4 +169,4 @@ def test_outbox_dead_letters_events_after_delivery_attempt_limit(tmp_path):
     with store._session() as conn:
         row = conn.execute("SELECT dead_letter,status FROM agent_task_outbox WHERE event_id=?", (event_id,)).fetchone()
     assert row["dead_letter"] == 1
-    assert row["status"] == "leased"
+    assert row["status"] == "pending"
