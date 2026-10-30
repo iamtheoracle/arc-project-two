@@ -165,3 +165,12 @@ The current control-plane foundation now assigns every agent chat a durable task
 This remains a single-service control plane: task state and connector health are not yet shared across replicas, there is no lease/claim protocol or durable distributed queue, and task cancellation/replay/reconciliation are not implemented. Do not deploy multiple API replicas expecting coordinated task ownership until those pieces exist.
 
 CI now installs rootless Podman, builds the worker image, runs the actual calculator container, and verifies effective UID, zero capabilities, no-new-privileges, no default network route and read-only root mount before the Python test suite. The worker receives request input through an explicitly interactive stdin pipe. A successful image build alone is not considered proof of worker execution; the real runtime smoke test must pass. Recovery tests make the primary SQLite path inaccessible at the filesystem level and verify that both conversation messages and task status continue through the independent backup.
+
+
+## Durable task queue, worker leases and transactional outbox
+
+The agent task store now supports atomic task claims using SQLite immediate transactions, worker ownership, lease renewal, expiry recovery and bounded retries. A worker can renew only its own live lease; a task completion can be accepted only from the current lease owner. Expired work is requeued until its attempt limit, after which it is marked failed with a sanitized failure code. Owners can cancel queued or running tasks through an authenticated endpoint.
+
+Task creation and lifecycle changes append an outbox event in the same SQLite transaction. Outbox consumers claim events with expiring leases and acknowledge them after delivery. This is at-least-once delivery: consumers must deduplicate using the event ID and must not assume exactly-once external side effects.
+
+The API's current chat path claims a short-lived lease and performs the model call synchronously. The queue/outbox primitives are suitable for concurrent claimers sharing one transactional database, but no independent worker daemon, broker, distributed scheduler, or cross-host database is deployed yet. Separate SQLite files on different hosts do not coordinate claims. The configured backup database is a recovery mirror, not a distributed consensus system.
