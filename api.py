@@ -467,6 +467,9 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
         answer = result["result"]
         if not isinstance(answer, str) or not answer.strip():
             raise RegistryError("Agent returned an empty response")
+        task_state = _get_agent_task(store, task_id)
+        if task_state and task_state["status"] == "cancelled":
+            raise HTTPException(status_code=409, detail="This task was cancelled before its result could be saved.")
         sessions.save(session_id, [{"role": "assistant", "content": answer,
                                     "event_id": uuid.uuid4().hex}])
         _update_agent_task(store, task_id, "succeeded",
@@ -474,13 +477,18 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
                                 worker_id=worker_id)
         lease_stop.set()
         lease_thread.join(timeout=2)
+    except HTTPException:
+        if "lease_stop" in locals():
+            lease_stop.set()
+            lease_thread.join(timeout=2)
+        raise
     except SessionNotFoundError:
         if "lease_stop" in locals():
             lease_stop.set()
             lease_thread.join(timeout=2)
         try:
             _update_agent_task(store, task_id, "failed", error_code="session_not_found", worker_id=worker_id)
-        except RegistryError:
+        except Exception:
             pass
         raise HTTPException(status_code=404, detail="Session not found.")
     except RegistryError as exc:
@@ -489,7 +497,7 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
             lease_thread.join(timeout=2)
         try:
             _update_agent_task(store, task_id, "failed", error_code="agent_registry_failure", worker_id=worker_id)
-        except RegistryError:
+        except Exception:
             pass
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
@@ -498,7 +506,7 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
             lease_thread.join(timeout=2)
         try:
             _update_agent_task(store, task_id, "failed", error_code="agent_execution_failure", worker_id=worker_id)
-        except RegistryError:
+        except Exception:
             pass
         raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
     return {"task_id": task_id, "agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
