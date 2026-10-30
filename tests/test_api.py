@@ -609,3 +609,14 @@ def test_agent_chat_persists_task_trace_and_owner_can_read_status(client, monkey
 
 def test_agent_task_status_requires_owner_auth(client):
     assert client.get("/v1/agent-tasks/not-a-task").status_code == 401
+
+def test_unknown_agent_session_is_not_created_in_backup(client, monkeypatch, tmp_path):
+    backup_path = tmp_path / "unknown-session-backup.sqlite3"
+    monkeypatch.setenv("ORACLE_ARC_SESSION_BACKUP_DB_PATH", str(backup_path))
+    missing_id = "session-does-not-exist"
+    response = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "session_id": missing_id,
+        "messages": [{"role": "user", "content": "This must not create a session"}]
+    })
+    assert response.status_code == 404
+    assert not ArcStore(backup_path).conversation_exists(missing_id)
