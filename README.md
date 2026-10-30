@@ -151,3 +151,16 @@ CI runs the same tests on pushes and pull requests. Passing tests validate the m
 ## Status
 
 This is the first implementation pass of the personal core. Real Ollama inference, remote platform integration, production hosting, and hardware performance still require environment setup and live verification.
+
+
+## Durable agent task execution
+
+Owner-authenticated task routes:
+- `GET /v1/agent-tasks/{task_id}` — inspect task status and routing metadata.
+- `POST /v1/agent-tasks/{task_id}/cancel` — cancel a queued or running task. Finished tasks cannot be cancelled again.
+
+Task claims use SQLite `BEGIN IMMEDIATE` transactions, worker ownership and expiring leases. Expired leases are recovered and requeued up to a bounded attempt count; tasks that exhaust the retry limit are marked failed. A worker can renew only its own unexpired lease, and only the lease owner can complete the task.
+
+Task creation and lifecycle changes write transactional outbox events in the same database transaction. Outbox consumers claim events with expiring leases and acknowledge delivery. Delivery is at-least-once, so consumers must deduplicate by event ID.
+
+**Current boundary:** the durable queue, leases and outbox primitives are implemented, but the HTTP chat route still runs agent work synchronously in the API process. A separately deployed worker service, broker-backed fan-out and cross-host database are not yet implemented. Multiple API instances must share the same transactional database; independent SQLite files on separate hosts do not coordinate claims.
