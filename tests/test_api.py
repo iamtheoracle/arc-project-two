@@ -423,3 +423,38 @@ def test_only_bud_can_delegate_to_oracle(client):
     )
     assert response.status_code == 400
 
+
+
+def test_bud_automatically_delegates_clear_research_task(client, monkeypatch):
+    class FakeAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            return "ORACLE result: " + latest_user
+
+    monkeypatch.setattr(api, "ArcAgent", FakeAgent)
+    response = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Research and analyze the causes of this problem."}]
+    })
+    assert response.status_code == 200
+    assert response.json()["handled_by"] == "oracle"
+    assert response.json()["automatic_delegation"] is True
+    assert "specialist intent" in response.json()["delegation_reason"]
+
+
+def test_bud_keeps_ordinary_companion_chat(client, monkeypatch):
+    class FakeAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            return "BUD result: " + latest_user
+
+    monkeypatch.setattr(api, "ArcAgent", FakeAgent)
+    response = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Hello, how are you today?"}]
+    })
+    assert response.status_code == 200
+    assert response.json()["handled_by"] == "bud"
+    assert response.json()["automatic_delegation"] is False
