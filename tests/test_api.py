@@ -220,3 +220,44 @@ def test_model_failures_return_safe_503_without_leaking_internal_errors(client, 
     assert response.status_code == 503
     assert response.json()["detail"] == expected_detail
     assert "private internal model error" not in response.text
+
+
+def test_boundaries_are_persisted_loaded_into_prompt_and_revocable(client):
+    created = client.post("/v1/boundaries", headers=auth(), json={
+        "boundary": "Do not use that nickname for me.",
+        "context": "I have clearly asked not to be addressed that way.",
+    })
+    assert created.status_code == 201
+    boundary_id = created.json()["id"]
+    assert created.json()["active"] == 1
+
+    active = client.get("/v1/boundaries", headers=auth()).json()["data"]
+    assert any(item["id"] == boundary_id for item in active)
+    prompt = api._system_prompt(api.get_store())
+    assert "ACTIVE USER BOUNDARIES" in prompt
+    assert "Do not use that nickname for me." in prompt
+
+    revoked = client.delete(f"/v1/boundaries/{boundary_id}", headers=auth())
+    assert revoked.status_code == 200
+    assert revoked.json()["revoked"] is True
+    assert all(item["id"] != boundary_id for item in api.get_store().list_boundaries())
+    history = api.get_store().list_boundaries(active_only=False)
+    assert any(item["id"] == boundary_id and item["active"] == 0 for item in history)
+
+
+def test_boundary_routes_require_owner_auth(client):
+    assert client.get("/v1/boundaries").status_code == 401
+    assert client.post("/v1/boundaries", json={"boundary": "Do not do this."}).status_code == 401
+    assert client.delete("/v1/boundaries/not-real").status_code == 401
+
+
+def test_blank_boundary_is_rejected(client):
+    response = client.post("/v1/boundaries", headers=auth(), json={"boundary": "   "})
+    assert response.status_code == 422
+
+
+def test_system_prompt_defaults_to_brief_clear_responses(client):
+    prompt = api._system_prompt(api.get_store())
+    assert "Default to concise answers" in prompt
+    assert "Expand only when asked" in prompt
+
