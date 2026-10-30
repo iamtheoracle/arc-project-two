@@ -129,3 +129,21 @@ def test_agent_task_outbox_is_transactional_leased_and_acknowledged(tmp_path):
     assert store.acknowledge_task_outbox(event["event_id"], "wrong-worker") is False
     assert store.acknowledge_task_outbox(event["event_id"], "outbox-worker") is True
     assert store.claim_task_outbox("another-worker") == []
+
+
+def test_outbox_event_is_redelivered_after_worker_lease_expires(tmp_path):
+    store = ArcStore(tmp_path / "outbox-recovery.sqlite3")
+    store.create_agent_task("task-redeliver", "bud", "oracle", ["reasoning"])
+    first = store.claim_task_outbox("worker-lost", lease_seconds=5)
+    assert len(first) == 1
+    with store._session() as conn:
+        conn.execute(
+            "UPDATE agent_task_outbox SET lease_expires_at=0 WHERE event_id=?",
+            (first[0]["event_id"],),
+        )
+    second = store.claim_task_outbox("worker-replacement", lease_seconds=5)
+    assert len(second) == 1
+    assert second[0]["event_id"] == first[0]["event_id"]
+    assert second[0]["attempts"] == 2
+    assert store.acknowledge_task_outbox(first[0]["event_id"], "worker-lost") is False
+    assert store.acknowledge_task_outbox(second[0]["event_id"], "worker-replacement") is True
