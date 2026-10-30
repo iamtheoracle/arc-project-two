@@ -504,3 +504,78 @@ def test_uninitialized_backup_does_not_mask_unreadable_primary(monkeypatch, tmp_
     sessions = api._session_registry(primary, session_id)
     with pytest.raises(RegistryError):
         sessions.load(session_id)
+
+def test_agent_chat_recovers_through_backup_when_primary_store_is_unavailable(client, monkeypatch, tmp_path):
+    backup_path = tmp_path / "primary-failure-backup.sqlite3"
+    monkeypatch.setenv("ORACLE_ARC_SESSION_BACKUP_DB_PATH", str(backup_path))
+
+    class FakeAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            return "Recovered through backup"
+
+    monkeypatch.setattr(api, "ArcAgent", FakeAgent)
+    first = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Start durable session"}]
+    })
+    assert first.status_code == 200
+    session_id = first.json()["session_id"]
+    primary = api.get_store()
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("deliberate primary database outage")
+
+    monkeypatch.setattr(primary, "get_messages", unavailable)
+    monkeypatch.setattr(primary, "add_message", unavailable)
+    second = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "session_id": session_id,
+        "messages": [{"role": "user", "content": "Continue during outage"}]
+    })
+    assert second.status_code == 200
+    assert second.json()["message"]["content"] == "Recovered through backup"
+    backup = ArcStore(backup_path)
+    history = backup.get_messages(session_id)
+    assert [item["role"] for item in history] == ["user", "assistant", "user", "assistant"]
+    assert history[2]["content"] == "Continue during outage"
+    assert history[3]["content"] == "Recovered through backup"
+
+
+def test_backup_failover_does_not_duplicate_message_when_primary_partially_writes(client, monkeypatch, tmp_path):
+    backup_path = tmp_path / "partial-write-backup.sqlite3"
+    monkeypatch.setenv("ORACLE_ARC_SESSION_BACKUP_DB_PATH", str(backup_path))
+
+    class FakeAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            return "Turn completed"
+
+    monkeypatch.setattr(api, "ArcAgent", FakeAgent)
+    first = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Initialize"}]
+    })
+    session_id = first.json()["session_id"]
+    primary = api.get_store()
+    original_add = primary.add_message
+    fail_once = {"done": False}
+
+    def write_then_fail(session_id_arg, role, content, event_id=None):
+        if not fail_once["done"]:
+            fail_once["done"] = True
+            original_add(session_id_arg, role, content, event_id)
+            raise OSError("primary connection lost after commit")
+        return original_add(session_id_arg, role, content, event_id)
+
+    monkeypatch.setattr(primary, "add_message", write_then_fail)
+    second = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "session_id": session_id,
+        "messages": [{"role": "user", "content": "Retry safely"}]
+    })
+    assert second.status_code == 200
+    primary_history = primary.get_messages(session_id)
+    backup_history = ArcStore(backup_path).get_messages(session_id)
+    assert primary_history == backup_history
+    assert [item["content"] for item in primary_history].count("Retry safely") == 1
