@@ -18,3 +18,13 @@ def test_runtime_rejects_unexpected_tool_arguments():
 def test_runtime_rejects_non_object_arguments():
     registry = PluginRegistry()
     assert registry.execute("calculate", []) == "Error: Tool arguments must be a JSON object"
+
+def test_calculator_runs_in_separate_restricted_worker():
+    registry = PluginRegistry()
+    assert registry.execute("calculate", {"expression": "sqrt(81) + 3 * 2"}) == "Result: 15.0"
+
+
+def test_worker_rejects_unsafe_calculator_expression():
+    registry = PluginRegistry()
+    result = registry.execute("calculate", {"expression": "__import__('os').getcwd()"})
+    assert result.startswith("Error:")
