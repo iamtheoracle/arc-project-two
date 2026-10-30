@@ -140,8 +140,9 @@ def _build_agent_registry(store: ArcStore):
             adapter = OpenAICompatibleProvider(config)
 
             def run_remote(payload, selected_adapter=adapter, selected_agent=agent_id):
+                runtime_store = _available_context_store(store)
                 messages = [
-                    {"role": "system", "content": _system_prompt(store) + "\\n\\n" + prompts[selected_agent]}
+                    {"role": "system", "content": _system_prompt(runtime_store) + "\\n\\n" + prompts[selected_agent]}
                 ] + payload["history"] + [
                     {"role": "user", "content": payload["latest_user"]}
                 ]
