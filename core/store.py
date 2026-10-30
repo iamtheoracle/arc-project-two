@@ -146,6 +146,9 @@ class ArcStore:
                 if name not in task_columns:
                     conn.execute(f"ALTER TABLE agent_tasks ADD COLUMN {name} {definition}")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_tasks_claim ON agent_tasks(status, lease_expires_at, created_at)")
+            outbox_columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_task_outbox)").fetchall()}
+            if "dead_letter" not in outbox_columns:
+                conn.execute("ALTER TABLE agent_task_outbox ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0")
 
     def create_conversation(self, title: str = "", conversation_id: str | None = None) -> str:
         conversation_id = conversation_id or str(uuid.uuid4())
@@ -411,20 +414,25 @@ class ArcStore:
             return recovered
 
     def claim_task_outbox(self, worker_id: str, limit: int = 25,
-                          lease_seconds: int = 60) -> list[dict[str, Any]]:
+                          lease_seconds: int = 60, max_attempts: int = 10) -> list[dict[str, Any]]:
         if not worker_id or len(worker_id) > 128:
             raise ValueError("Invalid worker identity")
-        if not 1 <= limit <= 100 or not 5 <= lease_seconds <= 3600:
+        if not 1 <= limit <= 100 or not 5 <= lease_seconds <= 3600 or not 1 <= max_attempts <= 50:
             raise ValueError("Invalid outbox claim limits")
         now = int(time.time())
         with self._session() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE agent_task_outbox SET dead_letter=1,lease_owner=NULL,lease_expires_at=NULL "
+                "WHERE status='leased' AND lease_expires_at<=? AND attempts>=?",
+                (now, max_attempts),
+            )
             rows = conn.execute(
-                "SELECT event_id FROM agent_task_outbox WHERE "
+                "SELECT event_id FROM agent_task_outbox WHERE dead_letter=0 AND attempts<? AND ("
                 "(status='pending' AND available_at<=?) OR "
-                "(status='leased' AND lease_expires_at<=?) "
+                "(status='leased' AND lease_expires_at<=?)) "
                 "ORDER BY created_at,event_id LIMIT ?",
-                (now, now, limit),
+                (max_attempts, now, now, limit),
             ).fetchall()
             ids = [row["event_id"] for row in rows]
             for event_id in ids:
