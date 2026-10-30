@@ -77,6 +77,22 @@ class BoundaryCreate(BaseModel):
 
 
 
+def _automatic_delegate(agent_id: str, user_text: str) -> tuple[str, str | None]:
+    """Conservatively route clear specialist tasks from BUD to ORACLE."""
+    if agent_id != "bud":
+        return agent_id, None
+    import re
+    patterns = (
+        r"\b(research|investigate|analy[sz]e|debug|troubleshoot|audit|architect)\b",
+        r"\b(compare|evaluate|assess|design|calculate|solve|diagnose)\b",
+        r"\b(build|implement|write code|review code|plan)\b.{0,60}\b(system|api|application|architecture|strategy|solution|project)\b",
+        r"\b(step[- ]by[- ]step|technical deep dive|root cause)\b",
+    )
+    if any(re.search(pattern, user_text.casefold()) for pattern in patterns):
+        return "oracle", "Clear specialist intent detected; BUD routed the task to ORACLE."
+    return "bud", None
+
+
 def _model_name(requested: str | None) -> str:
     configured = os.environ.get("ORACLE_ARC_MODEL", "qwen2.5:7b").strip()
     if requested and requested != configured:
@@ -256,7 +272,13 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
 
     if request.delegate_to and agent_id != "bud":
         raise HTTPException(status_code=400, detail="Only BUD can delegate a task to a specialist.")
-    target_agent_id = request.delegate_to or agent_id
+    if request.delegate_to:
+        target_agent_id = request.delegate_to
+        delegation_reason = "The caller explicitly requested ORACLE."
+        automatic_delegation = False
+    else:
+        target_agent_id, delegation_reason = _automatic_delegate(agent_id, incoming[-1]["content"])
+        automatic_delegation = target_agent_id != agent_id
     sessions = _session_registry(store)
     try:
         history = sessions.load(session_id)["result"]
@@ -274,6 +296,8 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
         raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
     return {"agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
             "provider": result["provider"], "fallback_used": result["fallback_used"],
+            "automatic_delegation": automatic_delegation,
+            "delegation_reason": delegation_reason,
             "session_id": session_id, "message": {"role": "assistant", "content": answer}}
 
 
