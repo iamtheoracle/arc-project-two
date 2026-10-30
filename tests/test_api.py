@@ -533,7 +533,7 @@ def test_agent_chat_recovers_through_backup_when_primary_store_is_unavailable(cl
         "session_id": session_id,
         "messages": [{"role": "user", "content": "Continue during outage"}]
     })
-    assert second.status_code == 200
+    assert second.status_code == 200, second.text
     assert second.json()["message"]["content"] == "Recovered through backup"
     backup = ArcStore(backup_path)
     history = backup.get_messages(session_id)
