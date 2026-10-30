@@ -524,11 +524,11 @@ def test_agent_chat_recovers_through_backup_when_primary_store_is_unavailable(cl
     session_id = first.json()["session_id"]
     primary = api.get_store()
 
-    def unavailable(*_args, **_kwargs):
-        raise OSError("deliberate primary database outage")
-
-    monkeypatch.setattr(primary, "get_messages", unavailable)
-    monkeypatch.setattr(primary, "add_message", unavailable)
+    # Point the live ArcStore at a directory: sqlite3 cannot open it as a
+    # database file, so every real SQLite read/write fails at the storage layer.
+    unavailable_primary_path = tmp_path / "primary-database-unavailable"
+    unavailable_primary_path.mkdir()
+    primary.path = unavailable_primary_path
     second = client.post("/v1/agents/bud/chat", headers=auth(), json={
         "session_id": session_id,
         "messages": [{"role": "user", "content": "Continue during outage"}]
@@ -540,6 +540,9 @@ def test_agent_chat_recovers_through_backup_when_primary_store_is_unavailable(cl
     assert [item["role"] for item in history] == ["user", "assistant", "user", "assistant"]
     assert history[2]["content"] == "Continue during outage"
     assert history[3]["content"] == "Recovered through backup"
+    task_status = client.get(f"/v1/agent-tasks/{second.json()['task_id']}", headers=auth())
+    assert task_status.status_code == 200
+    assert task_status.json()["status"] == "succeeded"
 
 
 def test_backup_failover_does_not_duplicate_message_when_primary_partially_writes(client, monkeypatch, tmp_path):
