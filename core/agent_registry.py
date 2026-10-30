@@ -124,7 +124,7 @@ class AgentRegistry:
                         "task_id": payload.get("task_id"),
                         "required_capabilities": list(required_capabilities),
                         "attempted_connectors": list(attempted),
-                        "fallback_used": len(attempted) > 1}
+                        "fallback_used": connector is not connectors[0]}
             except Exception:
                 continue
         raise RegistryError("No healthy connector could complete this request")
