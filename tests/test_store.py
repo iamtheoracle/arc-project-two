@@ -52,3 +52,12 @@ def test_in_memory_store_is_shared_across_its_request_connections():
     assert store.get_messages(conversation_id) == [
         {"role": "user", "content": "Hello"}
     ]
+
+def test_message_event_ids_make_replicated_writes_idempotent(tmp_path):
+    store = ArcStore(tmp_path / "idempotent.sqlite3")
+    session_id = store.create_conversation("Replication")
+    first = store.add_message(session_id, "user", "same event", event_id="event-123")
+    second = store.add_message(session_id, "user", "same event", event_id="event-123")
+    assert first > 0
+    assert second == 0
+    assert store.get_messages(session_id) == [{"role": "user", "content": "same event"}]
