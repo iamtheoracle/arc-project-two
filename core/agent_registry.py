@@ -15,6 +15,10 @@ class RegistryError(RuntimeError):
     pass
 
 
+class SessionNotFoundError(RegistryError):
+    pass
+
+
 @dataclass(frozen=True)
 class AgentDefinition:
     agent_id: str
@@ -194,8 +198,12 @@ class SessionConnectorRegistry:
 
     def _run(self, operation: str, *args: Any) -> dict[str, Any]:
         attempted = []
+        not_found = 0
+        failures = 0
+        skipped = 0
         for connector in self._connectors:
             if not connector.available():
+                skipped += 1
                 continue
             attempted.append(connector.connector_id)
             try:
@@ -204,11 +212,16 @@ class SessionConnectorRegistry:
                 connector.failures = 0
                 connector.unavailable_until = 0.0
                 return {"connector_id": connector.connector_id, "result": result,
-                        "fallback_used": len(attempted) > 1}
+                        "fallback_used": connector is not self._connectors[0]}
+            except SessionNotFoundError:
+                not_found += 1
             except Exception:
+                failures += 1
                 connector.failures += 1
                 if connector.failures >= 2:
                     connector.unavailable_until = time.monotonic() + 30.0
+        if operation == "load" and attempted and not_found == len(attempted) and not skipped:
+            raise SessionNotFoundError("Session not found")
         raise RegistryError("No healthy session connector is available")
 
     def load(self, session_id: str) -> dict[str, Any]:
