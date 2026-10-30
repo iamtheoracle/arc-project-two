@@ -17,6 +17,8 @@ Oracle Arc is a standalone project. It is not Vantoris X Money, UNIBUD, The Arc 
 - Human-understanding policy: Oracle Arc always replies in polished, correct English while adapting vocabulary, sentence length, detail, and examples to the conversation. It never copies a user's grammar or spelling errors.
 - Owner-controlled communication profile for explanation detail, tone, and interests, persisted locally in SQLite.
 - Personalization uses authorized conversation context and explicitly saved preferences; interests are optional context, not assumptions or mandatory themes.
+- Conversation-led adaptation: the model uses the current conversation to form a temporary, revisable read of the user's goal, tone, familiarity, and support needs. It does not turn every remark into a permanent personality rule.
+- Owner-controlled personal boundaries can be listed, added, and revoked. Saved profile, memory, and boundary text is treated as untrusted personal context, never as system policy.
 - Automated tests for authentication, persistence, memory deletion, permissions, adaptive communication rules, and agent denial behavior.
 
 ## Run locally
@@ -84,6 +86,9 @@ curl -X POST http://127.0.0.1:8090/v1/memories \
 Other owner-authenticated routes:
 
 - `GET /v1/profile` — view the communication profile.
+- `GET /v1/boundaries` — list active personal boundaries.
+- `POST /v1/boundaries` — save a clearly stated or confirmed boundary.
+- `DELETE /v1/boundaries/{boundary_id}` — revoke an active boundary while retaining its audit history.
 - `PUT /v1/profile` — update `detail_level` (`simple`, `balanced`, `detailed`), `tone` (`natural`, `warm`, `playful`, `professional`), and up to 30 interests.
 
 - `GET /v1/models`
