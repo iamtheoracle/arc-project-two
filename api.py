@@ -425,10 +425,10 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
 
     task_id = uuid.uuid4().hex
     required_capabilities = ["reasoning"] if target_agent_id == "oracle" else ["conversation"]
-    _create_agent_task(store, task_id, agent_id, target_agent_id, required_capabilities)
     worker_id = "api-sync-" + uuid.uuid4().hex
-    _claim_agent_task(store, task_id, worker_id, lease_seconds=120)
     try:
+        _create_agent_task(store, task_id, agent_id, target_agent_id, required_capabilities)
+        _claim_agent_task(store, task_id, worker_id, lease_seconds=120)
         sessions = _session_registry(store, session_id)
         history = sessions.load(session_id)["result"]
         sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"],
@@ -446,13 +446,22 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
                                 connector_id=result["connector_id"], provider=result["provider"],
                                 worker_id=worker_id)
     except SessionNotFoundError:
-        _update_agent_task(store, task_id, "failed", error_code="session_not_found", worker_id=worker_id)
+        try:
+            _update_agent_task(store, task_id, "failed", error_code="session_not_found", worker_id=worker_id)
+        except RegistryError:
+            pass
         raise HTTPException(status_code=404, detail="Session not found.")
     except RegistryError as exc:
-        _update_agent_task(store, task_id, "failed", error_code="agent_registry_failure", worker_id=worker_id)
+        try:
+            _update_agent_task(store, task_id, "failed", error_code="agent_registry_failure", worker_id=worker_id)
+        except RegistryError:
+            pass
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
-        _update_agent_task(store, task_id, "failed", error_code="agent_execution_failure", worker_id=worker_id)
+        try:
+            _update_agent_task(store, task_id, "failed", error_code="agent_execution_failure", worker_id=worker_id)
+        except RegistryError:
+            pass
         raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
     return {"task_id": task_id, "agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
             "provider": result["provider"], "fallback_used": result["fallback_used"],
