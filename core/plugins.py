@@ -1,29 +1,55 @@
-"""Explicit allowlist for trusted built-in tools.
-
-Arbitrary files in the plugins directory are never discovered or imported. Built-ins still
-run in the API process; they are not a security sandbox and must remain narrowly scoped.
-"""
+"""Allowlisted plugin registry with a fail-closed container execution boundary."""
 from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
-import sys
-import tempfile
-from pathlib import Path
 from typing import Any, Callable
 
-
-# Only reviewed, repository-owned modules may be loaded here. Do not add third-party
-# or user-uploaded modules until an isolated worker execution boundary exists.
 BUILTIN_PLUGIN_MODULES = ("plugins.calculator",)
 
 
+def run_isolated_worker(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Run a one-shot worker in a locked-down Docker container.
+
+    Docker must be available to the service and the pinned worker image must be built
+    before calculator execution is enabled. Missing Docker/image fails closed.
+    """
+    image = os.environ.get("ORACLE_ARC_PLUGIN_WORKER_IMAGE", "oracle-arc-plugin-worker:local").strip()
+    if not image or any(ch.isspace() for ch in image):
+        raise RuntimeError("Invalid worker image configuration")
+    command = [
+        "docker", "run", "--rm", "--pull=never",
+        "--network=none", "--ipc=none",
+        "--read-only", "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--pids-limit=16", "--memory=128m", "--memory-swap=128m",
+        "--cpus=0.5", "--user=65534:65534",
+        "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m",
+        "--ulimit=nofile=32:32", "--log-driver=none",
+        image, "python", "-I", "/app/plugin_worker.py",
+    ]
+    completed = subprocess.run(
+        command, input=json.dumps(arguments), text=True,
+        capture_output=True, timeout=5, check=False,
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("Isolated plugin worker failed")
+    result = json.loads(completed.stdout)
+    if not isinstance(result, dict) or "result" not in result:
+        raise RuntimeError("Invalid isolated worker response")
+    return result
+
+
 class PluginRegistry:
-    def __init__(self, plugins_dir: str = "plugins"):
+    def __init__(self, plugins_dir: str = "plugins",
+                 worker_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None):
         self.plugins = {}
         self.tools = []
         self.handlers: dict[str, Callable[..., Any]] = {}
+        self.worker_runner = worker_runner or run_isolated_worker
         self.load_all()
 
     def load_all(self):
@@ -50,23 +76,13 @@ class PluginRegistry:
                     self.handlers[tool_name] = handler
 
     def get_tools_schema(self):
-        schemas = []
-        for tool in self.tools:
-            schemas.append({
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {
-                        "type": "object", "properties": {},
-                    }),
-                },
-            })
-        return schemas
+        return [{"type": "function", "function": {
+            "name": tool["name"], "description": tool.get("description", ""),
+            "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+        }} for tool in self.tools]
 
     def execute(self, tool_name: str, arguments: dict[str, Any]) -> str:
-        handler = self.handlers.get(tool_name)
-        if handler is None:
+        if tool_name not in self.handlers:
             return "Error: Tool is not in the trusted built-in allowlist"
         if not isinstance(arguments, dict):
             return "Error: Tool arguments must be a JSON object"
@@ -74,8 +90,7 @@ class PluginRegistry:
         if tool is None:
             return "Error: Tool manifest is unavailable"
         schema = tool.get("parameters", {})
-        required = schema.get("required", [])
-        properties = schema.get("properties", {})
+        required, properties = schema.get("required", []), schema.get("properties", {})
         if any(key not in arguments for key in required):
             return "Error: Required tool arguments are missing"
         if any(key not in properties for key in arguments):
@@ -92,25 +107,10 @@ class PluginRegistry:
             }.get(expected)
             if valid and not valid(value):
                 return "Error: Tool argument type is invalid"
-        try:
-            if tool_name == "calculate":
-                worker = Path(__file__).with_name("plugin_worker.py")
-                completed = subprocess.run(
-                    [sys.executable, "-I", str(worker)],
-                    input=json.dumps(arguments),
-                    text=True,
-                    capture_output=True,
-                    timeout=3,
-                    cwd=tempfile.gettempdir(),
-                    env={"PYTHONIOENCODING": "utf-8"},
-                    check=False,
-                )
-                if completed.returncode != 0:
-                    return "Error: Isolated plugin worker rejected or failed the request"
-                result = json.loads(completed.stdout)
-                if "result" not in result:
-                    return "Error: Isolated plugin worker returned no result"
-                return "Result: " + str(result["result"])
+        if tool_name != "calculate":
             return "Error: This built-in has no isolated worker"
-        except (subprocess.TimeoutExpired, OSError, ValueError, json.JSONDecodeError):
-            return "Error: Isolated plugin worker failed"
+        try:
+            result = self.worker_runner(arguments)
+            return "Result: " + str(result["result"])
+        except (subprocess.TimeoutExpired, OSError, ValueError, RuntimeError, KeyError, TypeError):
+            return "Error: Isolated plugin worker unavailable or failed"
