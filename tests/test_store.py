@@ -39,3 +39,16 @@ def test_failed_turn_rollback_removes_only_pending_message_and_empty_new_chat(tm
     empty_pending_id = store.add_message(empty_conversation, "user", "Failed first request")
     store.rollback_pending_turn(empty_conversation, empty_pending_id)
     assert not store.conversation_exists(empty_conversation)
+
+
+
+def test_in_memory_store_is_shared_across_its_request_connections():
+    store = ArcStore(":memory:")
+    memory = store.save_memory("Visible across connections.")
+    conversation_id = store.create_conversation("Memory-backed chat")
+    store.add_message(conversation_id, "user", "Hello")
+
+    assert store.list_memories()[0]["id"] == memory["id"]
+    assert store.get_messages(conversation_id) == [
+        {"role": "user", "content": "Hello"}
+    ]
