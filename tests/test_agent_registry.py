@@ -70,3 +70,29 @@ def test_session_connector_falls_back_after_primary_failure():
     assert result["connector_id"] == "backup"
     assert result["fallback_used"] is True
     assert result["result"] == {"messages": ["hello"]}
+
+def test_agent_registry_enforces_declared_task_capabilities():
+    registry = default_agent_registry()
+    registry.register_connector("bud", Connector(
+        "bud-test", "test", 10, lambda payload: {"ok": True}))
+    with pytest.raises(RegistryError, match="not authorized"):
+        registry.dispatch("bud", {"task_id": "task-1"}, required_capabilities=("reasoning",))
+    result = registry.dispatch("bud", {"task_id": "task-2"}, required_capabilities=("conversation",))
+    assert result["task_id"] == "task-2"
+    assert result["required_capabilities"] == ["conversation"]
+
+
+def test_agent_registry_reports_connector_failure_health_without_error_details():
+    registry = AgentRegistry()
+    registry.register_agent(AgentDefinition("oracle", "ORACLE", "Reasoning", ("reasoning",)))
+    registry.register_connector("oracle", Connector(
+        "offline", "test", 10,
+        lambda payload: (_ for _ in ()).throw(ConnectionError("sensitive endpoint detail")),
+        failure_threshold=1, cooldown_seconds=60))
+    with pytest.raises(RegistryError):
+        registry.dispatch("oracle", {})
+    status = registry.list_agents()[0]["connectors"][0]
+    assert status["healthy"] is False
+    assert status["failure_count"] == 1
+    assert status["last_error_type"] == "ConnectionError"
+    assert "sensitive endpoint detail" not in str(status)
