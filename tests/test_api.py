@@ -82,6 +82,48 @@ def test_unknown_tool_cannot_be_approved(client):
     assert response.status_code == 404
 
 
+def test_profile_defaults_and_owner_can_update_preferences(client):
+    initial = client.get("/v1/profile", headers=auth())
+    assert initial.status_code == 200
+    assert initial.json() == {"detail_level": "simple", "tone": "natural", "interests": []}
+
+    updated = client.put("/v1/profile", headers=auth(), json={
+        "detail_level": "balanced",
+        "tone": "warm",
+        "interests": ["football", "anime", "football"],
+    })
+    assert updated.status_code == 200
+    assert updated.json()["profile"] == {
+        "detail_level": "balanced",
+        "tone": "warm",
+        "interests": ["football", "anime"],
+    }
+    assert client.get("/v1/profile", headers=auth()).json()["interests"] == ["football", "anime"]
+
+
+def test_profile_endpoints_require_owner_auth(client):
+    assert client.get("/v1/profile").status_code == 401
+    assert client.put("/v1/profile", json={}).status_code == 401
+
+
+def test_system_prompt_always_includes_polished_plain_english_policy(client):
+    prompt = api._system_prompt(api.get_store())
+    assert "Always write correct, natural, grammatically sound English" in prompt
+    assert "Adapt the complexity of the explanation, not the quality of the language" in prompt
+    assert "Never imitate, reproduce, mock" in prompt
+
+
+def test_saved_interests_are_available_as_optional_context(client):
+    client.put("/v1/profile", headers=auth(), json={
+        "detail_level": "simple",
+        "tone": "natural",
+        "interests": ["football"],
+    })
+    prompt = api._system_prompt(api.get_store())
+    assert "football" in prompt
+    assert "Do not force an interest into every answer" in prompt
+
+
 def test_model_override_is_rejected(client):
     response = client.post("/v1/chat/completions", headers=auth(), json={
         "model": "different-model", "messages": [{"role": "user", "content": "hello"}]
