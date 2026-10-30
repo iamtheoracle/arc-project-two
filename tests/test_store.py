@@ -105,6 +105,8 @@ def test_expired_agent_task_lease_is_requeued_and_retry_limit_is_enforced(tmp_pa
     assert first["attempts"] == 1
     with store._session() as conn:
         conn.execute("UPDATE agent_tasks SET lease_expires_at=0 WHERE task_id='task-expired'")
+    with pytest.raises(ValueError, match="lease has expired"):
+        store.update_agent_task("task-expired", "succeeded", worker_id="worker-crashed")
     assert store.recover_expired_agent_tasks(max_attempts=2) == 1
     assert store.get_agent_task("task-expired")["status"] == "queued"
     second = store.claim_agent_task("worker-retry", task_id="task-expired", max_attempts=2)
@@ -141,6 +143,7 @@ def test_outbox_event_is_redelivered_after_worker_lease_expires(tmp_path):
             "UPDATE agent_task_outbox SET lease_expires_at=0 WHERE event_id=?",
             (first[0]["event_id"],),
         )
+    assert store.acknowledge_task_outbox(first[0]["event_id"], "worker-lost") is False
     second = store.claim_task_outbox("worker-replacement", lease_seconds=5)
     assert len(second) == 1
     assert second[0]["event_id"] == first[0]["event_id"]
