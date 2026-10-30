@@ -53,6 +53,7 @@ class ChatRequest(BaseModel):
 class AgentChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=100)
     session_id: str | None = Field(default=None, min_length=1, max_length=64)
+    delegate_to: Literal["oracle"] | None = None
     max_steps: int = Field(default=4, ge=1, le=8)
 
 
@@ -253,13 +254,16 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
     else:
         session_id = store.create_conversation(incoming[-1]["content"][:120])
 
+    if request.delegate_to and agent_id != "bud":
+        raise HTTPException(status_code=400, detail="Only BUD can delegate a task to a specialist.")
+    target_agent_id = request.delegate_to or agent_id
     sessions = _session_registry(store)
     try:
         history = sessions.load(session_id)["result"]
         sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"]}])
         payload = {"model": _model_name(None), "history": history[-79:],
                    "latest_user": incoming[-1]["content"], "max_steps": request.max_steps}
-        result = _build_agent_registry(store).dispatch(agent_id, payload)
+        result = _build_agent_registry(store).dispatch(target_agent_id, payload)
         answer = result["result"]
         if not isinstance(answer, str) or not answer.strip():
             raise RegistryError("Agent returned an empty response")
@@ -268,7 +272,7 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
         raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
-    return {"agent_id": agent_id, "connector_id": result["connector_id"],
+    return {"agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
             "provider": result["provider"], "fallback_used": result["fallback_used"],
             "session_id": session_id, "message": {"role": "assistant", "content": answer}}
 
