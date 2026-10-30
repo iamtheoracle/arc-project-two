@@ -322,31 +322,46 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
     else:
         target_agent_id, delegation_reason = select_agent(agent_id, incoming[-1]["content"])
         automatic_delegation = target_agent_id != agent_id
+
+    task_id = uuid.uuid4().hex
+    required_capabilities = ["reasoning"] if target_agent_id == "oracle" else ["conversation"]
+    store.create_agent_task(task_id, agent_id, target_agent_id, required_capabilities)
+    store.update_agent_task(task_id, "running")
     try:
         sessions = _session_registry(store, session_id)
         history = sessions.load(session_id)["result"]
         sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"],
                                     "event_id": uuid.uuid4().hex}])
-        task_id = uuid.uuid4().hex
         payload = {"task_id": task_id, "model": _model_name(None), "history": history[-79:],
                    "latest_user": incoming[-1]["content"], "max_steps": request.max_steps}
-        required_capabilities = ("reasoning",) if target_agent_id == "oracle" else ("conversation",)
         result = _build_agent_registry(store).dispatch(
-            target_agent_id, payload, required_capabilities=required_capabilities)
+            target_agent_id, payload, required_capabilities=tuple(required_capabilities))
         answer = result["result"]
         if not isinstance(answer, str) or not answer.strip():
             raise RegistryError("Agent returned an empty response")
         sessions.save(session_id, [{"role": "assistant", "content": answer,
                                     "event_id": uuid.uuid4().hex}])
+        store.update_agent_task(task_id, "succeeded",
+                                connector_id=result["connector_id"], provider=result["provider"])
     except RegistryError as exc:
+        store.update_agent_task(task_id, "failed", error_code="agent_registry_failure")
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
+        store.update_agent_task(task_id, "failed", error_code="agent_execution_failure")
         raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
     return {"task_id": task_id, "agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
             "provider": result["provider"], "fallback_used": result["fallback_used"],
             "automatic_delegation": automatic_delegation,
             "delegation_reason": delegation_reason,
             "session_id": session_id, "message": {"role": "assistant", "content": answer}}
+
+
+@app.get("/v1/agent-tasks/{task_id}", dependencies=[Depends(require_owner)])
+def get_agent_task(task_id: str, store: ArcStore = Depends(get_store)):
+    task = store.get_agent_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Agent task not found.")
+    return task
 
 
 @app.get("/v1/models", dependencies=[Depends(require_owner)])
