@@ -17,7 +17,7 @@ from core.providers import OpenAICompatibleProvider, PROVIDERS
 from core.plugins import PluginRegistry
 from core.store import ArcStore
 from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_context, normalize_profile
-from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, default_agent_registry)
+from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, SessionNotFoundError, default_agent_registry)
 
 app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
@@ -165,7 +165,8 @@ def _session_registry(store: ArcStore, session_id: str | None = None):
         backup_store = ArcStore(backup_path)
         if session_id and not backup_store.conversation_exists(session_id):
             try:
-                primary_history = store.get_messages(session_id)
+                primary_exists = store.conversation_exists(session_id)
+                primary_history = store.get_messages(session_id) if primary_exists else None
             except Exception:
                 # Never manufacture an empty backup session when the primary cannot
                 # be read; the backup connector will fail closed for this session.
@@ -182,9 +183,14 @@ def _session_registry(store: ArcStore, session_id: str | None = None):
             for item in items:
                 backup_store.add_message(current_session_id, item["role"], item["content"], item.get("event_id"))
 
+    def load_primary(current_session_id):
+        if not store.conversation_exists(current_session_id):
+            raise SessionNotFoundError("Session not found")
+        return store.get_messages(current_session_id)
+
     sessions.register(SessionConnector(
         "sqlite-primary", 10,
-        load=lambda current_session_id: store.get_messages(current_session_id),
+        load=load_primary,
         save=save_primary,
     ))
     if backup_store is not None:
@@ -199,7 +205,7 @@ def _session_registry(store: ArcStore, session_id: str | None = None):
             load=lambda current_session_id: (
                 backup_store.get_messages(current_session_id)
                 if backup_store.conversation_exists(current_session_id)
-                else (_ for _ in ()).throw(RegistryError("Backup session has not been initialized"))
+                else (_ for _ in ()).throw(SessionNotFoundError("Session not found"))
             ),
             save=save_backup,
         ))
@@ -307,8 +313,8 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
     if incoming[-1]["role"] != "user":
         raise HTTPException(status_code=400, detail="The last message must be a user message.")
     if request.session_id:
-        if not store.conversation_exists(request.session_id):
-            raise HTTPException(status_code=404, detail="Session not found.")
+        # Existence is checked through the ordered session connectors below so a
+        # primary-database outage does not block recovery from the backup store.
         session_id = request.session_id
     else:
         session_id = store.create_conversation(incoming[-1]["content"][:120])
@@ -343,6 +349,9 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
                                     "event_id": uuid.uuid4().hex}])
         store.update_agent_task(task_id, "succeeded",
                                 connector_id=result["connector_id"], provider=result["provider"])
+    except SessionNotFoundError:
+        store.update_agent_task(task_id, "failed", error_code="session_not_found")
+        raise HTTPException(status_code=404, detail="Session not found.")
     except RegistryError as exc:
         store.update_agent_task(task_id, "failed", error_code="agent_registry_failure")
         raise HTTPException(status_code=503, detail=str(exc))
