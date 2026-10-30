@@ -36,13 +36,14 @@ VALID_TONES = {"natural", "warm", "playful", "professional"}
 
 def normalize_profile(profile: dict[str, Any] | None) -> dict[str, Any]:
     """Return a safe, bounded profile with conservative defaults."""
-    profile = profile or {}
+    if not isinstance(profile, dict):
+        profile = {}
     detail = profile.get("detail_level", "simple")
     tone = profile.get("tone", "natural")
     interests = profile.get("interests", [])
-    if detail not in VALID_DETAIL_LEVELS:
+    if not isinstance(detail, str) or detail not in VALID_DETAIL_LEVELS:
         detail = "simple"
-    if tone not in VALID_TONES:
+    if not isinstance(tone, str) or tone not in VALID_TONES:
         tone = "natural"
     if not isinstance(interests, list):
         interests = []
