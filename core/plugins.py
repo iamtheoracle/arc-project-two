@@ -6,6 +6,11 @@ run in the API process; they are not a security sandbox and must remain narrowly
 from __future__ import annotations
 
 import importlib
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from typing import Any, Callable
 
 
@@ -88,8 +93,24 @@ class PluginRegistry:
             if valid and not valid(value):
                 return "Error: Tool argument type is invalid"
         try:
-            result = handler(**arguments)
-            return str(result)[:12000]
-        except Exception:
-            # Do not expose exception details to the model or caller.
-            return "Error: Trusted built-in tool execution failed"
+            if tool_name == "calculate":
+                worker = Path(__file__).with_name("plugin_worker.py")
+                completed = subprocess.run(
+                    [sys.executable, "-I", str(worker)],
+                    input=json.dumps(arguments),
+                    text=True,
+                    capture_output=True,
+                    timeout=3,
+                    cwd=tempfile.gettempdir(),
+                    env={"PYTHONIOENCODING": "utf-8"},
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    return "Error: Isolated plugin worker rejected or failed the request"
+                result = json.loads(completed.stdout)
+                if "result" not in result:
+                    return "Error: Isolated plugin worker returned no result"
+                return "Result: " + str(result["result"])
+            return "Error: This built-in has no isolated worker"
+        except (subprocess.TimeoutExpired, OSError, ValueError, json.JSONDecodeError):
+            return "Error: Isolated plugin worker failed"
