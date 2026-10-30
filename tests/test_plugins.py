@@ -50,7 +50,7 @@ def test_docker_worker_uses_restrictive_runtime_flags(monkeypatch):
     assert command[0] == "podman"
     for flag in ("--network=none", "--read-only", "--cap-drop=ALL",
                  "--security-opt=no-new-privileges", "--pids-limit=16",
-                 "--memory=128m", "--cpus=0.5",
+                 "--memory=128m", "--memory-swap=128m", "--cpus=0.5",
                  "--user=65534:65534", "--ipc=none"):
         assert flag in command
     assert seen["kwargs"]["timeout"] == 5
