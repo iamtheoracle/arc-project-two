@@ -11,10 +11,10 @@ BUILTIN_PLUGIN_MODULES = ("plugins.calculator",)
 
 
 def run_isolated_worker(arguments: dict[str, Any]) -> dict[str, Any]:
-    """Run a one-shot worker in a locked-down Docker container.
+    """Run a one-shot worker in a locked-down rootless Podman container.
 
-    Docker must be available to the service and the pinned worker image must be built
-    before calculator execution is enabled. Missing Docker/image fails closed.
+    Rootless Podman and the prebuilt worker image must be available to the service.
+    Missing runtime/image fails closed; no in-process execution fallback exists.
     """
     image = os.environ.get("ORACLE_ARC_PLUGIN_WORKER_IMAGE", "oracle-arc-plugin-worker:local").strip()
     if not image or any(ch.isspace() for ch in image):
