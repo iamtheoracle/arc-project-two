@@ -19,15 +19,18 @@ def run_isolated_worker(arguments: dict[str, Any]) -> dict[str, Any]:
     image = os.environ.get("ORACLE_ARC_PLUGIN_WORKER_IMAGE", "oracle-arc-plugin-worker:local").strip()
     if not image or any(ch.isspace() for ch in image):
         raise RuntimeError("Invalid worker image configuration")
+    runtime = os.environ.get("ORACLE_ARC_PLUGIN_RUNTIME", "podman").strip()
+    if runtime != "podman":
+        raise RuntimeError("Only rootless Podman is supported for plugin workers")
     command = [
-        "docker", "run", "--rm", "--pull=never",
+        runtime, "run", "--rm", "--pull=never",
         "--network=none", "--ipc=none",
         "--read-only", "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
-        "--pids-limit=16", "--memory=128m", "--memory-swap=128m",
+        "--pids-limit=16", "--memory=128m",
         "--cpus=0.5", "--user=65534:65534",
         "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m",
-        "--ulimit=nofile=32:32", "--log-driver=none",
+        "--ulimit=nofile=32:32",
         image,
     ]
     completed = subprocess.run(
