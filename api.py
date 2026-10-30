@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import time
+import uuid
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -169,10 +170,10 @@ def _session_registry(store: ArcStore, session_id: str | None = None):
 
     def save_primary(current_session_id, items):
         for item in items:
-            store.add_message(current_session_id, item["role"], item["content"])
+            store.add_message(current_session_id, item["role"], item["content"], item.get("event_id"))
         if backup_store is not None:
             for item in items:
-                backup_store.add_message(current_session_id, item["role"], item["content"])
+                backup_store.add_message(current_session_id, item["role"], item["content"], item.get("event_id"))
 
     sessions.register(SessionConnector(
         "sqlite-primary", 10,
@@ -184,7 +185,7 @@ def _session_registry(store: ArcStore, session_id: str | None = None):
             if not backup_store.conversation_exists(current_session_id):
                 backup_store.create_conversation(conversation_id=current_session_id)
             for item in items:
-                backup_store.add_message(current_session_id, item["role"], item["content"])
+                backup_store.add_message(current_session_id, item["role"], item["content"], item.get("event_id"))
 
         sessions.register(SessionConnector(
             "sqlite-independent-backup", 20,
@@ -313,14 +314,16 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
     sessions = _session_registry(store, session_id)
     try:
         history = sessions.load(session_id)["result"]
-        sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"]}])
+        sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"],
+                                    "event_id": uuid.uuid4().hex}])
         payload = {"model": _model_name(None), "history": history[-79:],
                    "latest_user": incoming[-1]["content"], "max_steps": request.max_steps}
         result = _build_agent_registry(store).dispatch(target_agent_id, payload)
         answer = result["result"]
         if not isinstance(answer, str) or not answer.strip():
             raise RegistryError("Agent returned an empty response")
-        sessions.save(session_id, [{"role": "assistant", "content": answer}])
+        sessions.save(session_id, [{"role": "assistant", "content": answer,
+                                    "event_id": uuid.uuid4().hex}])
     except RegistryError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
