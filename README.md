@@ -107,6 +107,27 @@ Other owner-authenticated routes:
 
 Conversation continuity: the first chat response returns `conversation_id`. Send it on later requests to continue that persisted conversation.
 
+## Agent registry and connector routing
+
+The authenticated agent API currently registers BUD and ORACLE. SPARK and ORBITS are present in the registry catalogue but remain disabled until their memory and visual runtimes are implemented.
+
+- \`GET /v1/agents\` — list agent roles and configured connectors.
+- \`POST /v1/agents/bud/chat\` — send a turn to BUD.
+- \`POST /v1/agents/oracle/chat\` — send a turn to ORACLE.
+- \`GET /v1/plugins\` — list plugin manifests and required permissions; this is a catalogue, not an execution endpoint.
+
+Agent chat accepts a messages array and an optional existing \`session_id\`. Session history is stored in the existing SQLite conversation store. The session connector interface supports ordered fallback adapters, but SQLite is the only session adapter wired in this first pass.
+
+Set \`ORACLE_ARC_OLLAMA_FALLBACK_HOSTS\` to a comma-separated list of independent Ollama service URLs to enable model-connector failover, for example:
+
+\`\`\`bash
+ORACLE_ARC_OLLAMA_FALLBACK_HOSTS=http://ollama-backup:11434,http://ollama-secondary:11434
+\`\`\`
+
+The first configured host is attempted first; a failed connector is skipped for its cooldown period and the next configured host is tried. These backup services must already be running with the selected model available. No backup host is assumed or invented. If the variable is empty, there is no model-provider failover.
+
+Only the reviewed calculator module is currently in the executable built-in allowlist. File and system plugins are not exposed for execution. Arbitrary plugin discovery has been removed. The calculator remains an in-process trusted built-in, not an isolated sandbox; external or third-party plugins must stay disabled until a separate restricted worker is implemented. Tool approval remains default-deny.
+
 ## Security boundaries
 
 - The API refuses protected requests if `ORACLE_ARC_API_KEY` is missing or incorrect.
