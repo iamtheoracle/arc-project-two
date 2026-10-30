@@ -14,17 +14,29 @@ class ArcStore:
     def __init__(self, path: str | Path | None = None):
         configured = path or os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
         self.path = Path(configured)
-        if str(self.path) != ":memory:":
+        self._memory_uri: str | None = None
+        self._memory_keeper: sqlite3.Connection | None = None
+        if str(self.path) == ":memory:":
+            # Each request uses a fresh connection. Keep a shared in-memory database
+            # alive so those connections see the same schema and records.
+            self._memory_uri = f"file:oracle_arc_{uuid.uuid4().hex}?mode=memory&cache=shared"
+            self._memory_keeper = sqlite3.connect(
+                self._memory_uri, uri=True, check_same_thread=False
+            )
+        else:
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._initialize()
-        if str(self.path) != ":memory:":
+        if self._memory_uri is None:
             try:
                 self.path.chmod(0o600)
             except OSError:
                 pass
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.path), timeout=10)
+        target = self._memory_uri or str(self.path)
+        conn = sqlite3.connect(
+            target, timeout=10, uri=self._memory_uri is not None
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=10000")
