@@ -122,11 +122,12 @@ def _build_agent_registry(store: ArcStore):
             provider = "ollama-local" if index == 0 else "ollama-fallback"
 
             def run(payload, selected_host=host, selected_agent=agent_id):
-                runtime = ArcAgent(model=payload["model"], approved_tools=store.approved_tools(),
+                runtime_store = _available_context_store(store)
+                runtime = ArcAgent(model=payload["model"], approved_tools=runtime_store.approved_tools(),
                                    host=selected_host)
-                runtime.tool_audit = lambda name, outcome: store.audit_tool(name, outcome)
+                runtime.tool_audit = lambda name, outcome: runtime_store.audit_tool(name, outcome)
                 runtime.messages = [
-                    {"role": "system", "content": _system_prompt(store) + "\n\n" + prompts[selected_agent]}
+                    {"role": "system", "content": _system_prompt(runtime_store) + "\n\n" + prompts[selected_agent]}
                 ] + payload["history"]
                 return runtime.chat(payload["latest_user"], max_steps=payload["max_steps"])
 
@@ -164,6 +165,19 @@ def _task_store_candidates(store: ArcStore) -> list[ArcStore]:
         except Exception:
             pass
     return candidates
+
+
+def _available_context_store(store: ArcStore) -> ArcStore:
+    for candidate in _task_store_candidates(store):
+        try:
+            candidate.approved_tools()
+            candidate.list_memories(limit=1)
+            candidate.get_user_profile()
+            candidate.list_boundaries(active_only=True)
+            return candidate
+        except Exception:
+            continue
+    raise RegistryError("No readable context store is available")
 
 
 def _create_agent_task(store: ArcStore, task_id: str, source_agent: str,
