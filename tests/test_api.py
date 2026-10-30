@@ -579,3 +579,30 @@ def test_backup_failover_does_not_duplicate_message_when_primary_partially_write
     backup_history = ArcStore(backup_path).get_messages(session_id)
     assert primary_history == backup_history
     assert [item["content"] for item in primary_history].count("Retry safely") == 1
+
+def test_agent_chat_persists_task_trace_and_owner_can_read_status(client, monkeypatch):
+    class FakeAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            return "Task trace verified"
+
+    monkeypatch.setattr(api, "ArcAgent", FakeAgent)
+    response = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Please research and analyze this system"}]
+    })
+    assert response.status_code == 200
+    task_id = response.json()["task_id"]
+    assert response.json()["handled_by"] == "oracle"
+    status = client.get(f"/v1/agent-tasks/{task_id}", headers=auth())
+    assert status.status_code == 200
+    assert status.json()["status"] == "succeeded"
+    assert status.json()["source_agent"] == "bud"
+    assert status.json()["target_agent"] == "oracle"
+    assert status.json()["required_capabilities"] == ["reasoning"]
+    assert status.json()["provider"] == response.json()["provider"]
+
+
+def test_agent_task_status_requires_owner_auth(client):
+    assert client.get("/v1/agent-tasks/not-a-task").status_code == 401
