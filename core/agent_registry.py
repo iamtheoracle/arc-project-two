@@ -92,17 +92,25 @@ class AgentRegistry:
                 "connectors": [
                     {"connector_id": c.connector_id, "provider": c.provider,
                      "priority": c.priority, "enabled": c.enabled,
-                     "healthy": c.available()}
+                     "healthy": c.available(),
+                     "failure_count": c.failures,
+                     "last_error_type": c.last_error,
+                     "cooldown_seconds_remaining": max(0.0, round(c.unavailable_until - time.monotonic(), 2))}
                     for c in connectors
                 ],
                 "has_configured_connector": any(c.enabled for c in connectors),
             })
         return rows
 
-    def dispatch(self, agent_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def dispatch(self, agent_id: str, payload: dict[str, Any],
+                 required_capabilities: tuple[str, ...] = ()) -> dict[str, Any]:
         agent = self._agents.get(agent_id)
         if agent is None or not agent.enabled:
             raise RegistryError("Agent is unknown or disabled")
+        if not isinstance(payload, dict):
+            raise RegistryError("Agent task payload must be an object")
+        if not set(required_capabilities).issubset(set(agent.capabilities)):
+            raise RegistryError("Agent is not authorized for the requested task capabilities")
         connectors = self._connectors[agent_id]
         attempted: list[str] = []
         for connector in connectors:
@@ -113,6 +121,9 @@ class AgentRegistry:
                 result = connector.invoke(payload)
                 return {"agent_id": agent_id, "connector_id": connector.connector_id,
                         "provider": connector.provider, "result": result,
+                        "task_id": payload.get("task_id"),
+                        "required_capabilities": list(required_capabilities),
+                        "attempted_connectors": list(attempted),
                         "fallback_used": len(attempted) > 1}
             except Exception:
                 continue
