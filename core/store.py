@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 import uuid
 from pathlib import Path
@@ -106,6 +107,20 @@ class ArcStore:
                     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_tasks_created ON agent_tasks(created_at DESC);
+                CREATE TABLE IF NOT EXISTS agent_task_outbox (
+                    event_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','leased','published')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    available_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    lease_owner TEXT,
+                    lease_expires_at INTEGER,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_outbox_pending
+                    ON agent_task_outbox(status, available_at, created_at);
                 CREATE TABLE IF NOT EXISTS tool_permissions (
                     name TEXT PRIMARY KEY,
                     approved INTEGER NOT NULL CHECK(approved IN (0,1)),
@@ -122,6 +137,15 @@ class ArcStore:
             if "event_id" not in columns:
                 conn.execute("ALTER TABLE messages ADD COLUMN event_id TEXT")
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_event_id ON messages(event_id) WHERE event_id IS NOT NULL")
+            task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_tasks)").fetchall()}
+            for name, definition in (
+                ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+                ("worker_id", "TEXT"),
+                ("lease_expires_at", "INTEGER"),
+            ):
+                if name not in task_columns:
+                    conn.execute(f"ALTER TABLE agent_tasks ADD COLUMN {name} {definition}")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_tasks_claim ON agent_tasks(status, lease_expires_at, created_at)")
 
     def create_conversation(self, title: str = "", conversation_id: str | None = None) -> str:
         conversation_id = conversation_id or str(uuid.uuid4())
@@ -279,30 +303,177 @@ class ArcStore:
             )
         return result.rowcount > 0
 
+    @staticmethod
+    def _insert_task_event(conn: sqlite3.Connection, task_id: str, event_type: str,
+                           payload: dict[str, Any]) -> None:
+        conn.execute(
+            "INSERT INTO agent_task_outbox(event_id,task_id,event_type,payload_json) VALUES(?,?,?,?)",
+            (uuid.uuid4().hex, task_id, event_type, json.dumps(payload, separators=(",", ":"))),
+        )
+
     def create_agent_task(self, task_id: str, source_agent: str, target_agent: str,
                           required_capabilities: list[str]) -> dict[str, Any]:
+        capabilities = sorted(set(required_capabilities))
         with self._session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "INSERT INTO agent_tasks(task_id,source_agent,target_agent,required_capabilities_json,status) "
                 "VALUES(?,?,?,?, 'queued')",
-                (task_id, source_agent, target_agent,
-                 json.dumps(sorted(set(required_capabilities)))),
+                (task_id, source_agent, target_agent, json.dumps(capabilities)),
             )
+            self._insert_task_event(conn, task_id, "task.queued", {
+                "task_id": task_id, "source_agent": source_agent,
+                "target_agent": target_agent, "required_capabilities": capabilities,
+            })
             row = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
         return self._agent_task_row(row)
 
+    def claim_agent_task(self, worker_id: str, lease_seconds: int = 60,
+                         max_attempts: int = 5) -> dict[str, Any] | None:
+        if not worker_id or len(worker_id) > 128:
+            raise ValueError("Invalid worker identity")
+        if not 5 <= lease_seconds <= 3600 or not 1 <= max_attempts <= 20:
+            raise ValueError("Invalid lease or retry limit")
+        now = int(time.time())
+        with self._session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM agent_tasks WHERE attempts < ? AND "
+                "(status='queued' OR (status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at<=?)) "
+                "ORDER BY created_at,task_id LIMIT 1",
+                (max_attempts, now),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE agent_tasks SET status='running',worker_id=?,lease_expires_at=?,attempts=attempts+1,"
+                "error_code=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE task_id=?",
+                (worker_id, now + lease_seconds, row["task_id"]),
+            )
+            self._insert_task_event(conn, row["task_id"], "task.claimed", {
+                "task_id": row["task_id"], "worker_id": worker_id,
+                "attempt": row["attempts"] + 1, "lease_expires_at": now + lease_seconds,
+            })
+            claimed = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (row["task_id"],)).fetchone()
+        return self._agent_task_row(claimed)
+
+    def renew_agent_task_lease(self, task_id: str, worker_id: str,
+                               lease_seconds: int = 60) -> bool:
+        if not 5 <= lease_seconds <= 3600:
+            raise ValueError("Invalid lease duration")
+        now = int(time.time())
+        with self._session() as conn:
+            cursor = conn.execute(
+                "UPDATE agent_tasks SET lease_expires_at=?,"
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE task_id=? AND status='running' AND worker_id=? AND lease_expires_at>?",
+                (now + lease_seconds, task_id, worker_id, now),
+            )
+            return cursor.rowcount == 1
+
+    def recover_expired_agent_tasks(self, max_attempts: int = 5) -> int:
+        now = int(time.time())
+        with self._session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT task_id,attempts FROM agent_tasks WHERE status='running' "
+                "AND lease_expires_at IS NOT NULL AND lease_expires_at<=?",
+                (now,),
+            ).fetchall()
+            recovered = 0
+            for row in rows:
+                if row["attempts"] >= max_attempts:
+                    conn.execute(
+                        "UPDATE agent_tasks SET status='failed',worker_id=NULL,lease_expires_at=NULL,"
+                        "error_code='worker_lease_expired',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                        "WHERE task_id=? AND status='running' AND lease_expires_at<=?",
+                        (row["task_id"], now),
+                    )
+                    self._insert_task_event(conn, row["task_id"], "task.failed", {
+                        "task_id": row["task_id"], "error_code": "worker_lease_expired",
+                    })
+                else:
+                    conn.execute(
+                        "UPDATE agent_tasks SET status='queued',worker_id=NULL,lease_expires_at=NULL,"
+                        "error_code='worker_lease_expired',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                        "WHERE task_id=? AND status='running' AND lease_expires_at<=?",
+                        (row["task_id"], now),
+                    )
+                    self._insert_task_event(conn, row["task_id"], "task.requeued", {
+                        "task_id": row["task_id"], "attempts": row["attempts"],
+                    })
+                recovered += 1
+            return recovered
+
+    def claim_task_outbox(self, worker_id: str, limit: int = 25,
+                          lease_seconds: int = 60) -> list[dict[str, Any]]:
+        if not worker_id or len(worker_id) > 128:
+            raise ValueError("Invalid worker identity")
+        if not 1 <= limit <= 100 or not 5 <= lease_seconds <= 3600:
+            raise ValueError("Invalid outbox claim limits")
+        now = int(time.time())
+        with self._session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT event_id FROM agent_task_outbox WHERE "
+                "(status='pending' AND available_at<=?) OR "
+                "(status='leased' AND lease_expires_at<=?) "
+                "ORDER BY created_at,event_id LIMIT ?",
+                (now, now, limit),
+            ).fetchall()
+            ids = [row["event_id"] for row in rows]
+            for event_id in ids:
+                conn.execute(
+                    "UPDATE agent_task_outbox SET status='leased',lease_owner=?,"
+                    "lease_expires_at=?,attempts=attempts+1 WHERE event_id=?",
+                    (worker_id, now + lease_seconds, event_id),
+                )
+            if not ids:
+                return []
+            placeholders = ",".join("?" for _ in ids)
+            claimed = conn.execute(
+                f"SELECT * FROM agent_task_outbox WHERE event_id IN ({placeholders}) "
+                "ORDER BY created_at,event_id", ids,
+            ).fetchall()
+        return [dict(row, payload=json.loads(row["payload_json"])) for row in claimed]
+
+    def acknowledge_task_outbox(self, event_id: str, worker_id: str) -> bool:
+        with self._session() as conn:
+            cursor = conn.execute(
+                "UPDATE agent_task_outbox SET status='published',lease_owner=NULL,lease_expires_at=NULL "
+                "WHERE event_id=? AND status='leased' AND lease_owner=?",
+                (event_id, worker_id),
+            )
+            return cursor.rowcount == 1
+
+    def retry_task_outbox(self, event_id: str, worker_id: str, delay_seconds: int = 5) -> bool:
+        if not 0 <= delay_seconds <= 3600:
+            raise ValueError("Invalid retry delay")
+        with self._session() as conn:
+            cursor = conn.execute(
+                "UPDATE agent_task_outbox SET status='pending',lease_owner=NULL,lease_expires_at=NULL,"
+                "available_at=?,attempts=attempts WHERE event_id=? AND status='leased' AND lease_owner=?",
+                (int(time.time()) + delay_seconds, event_id, worker_id),
+            )
+            return cursor.rowcount == 1
+
     def update_agent_task(self, task_id: str, status: str, connector_id: str | None = None,
-                          provider: str | None = None, error_code: str | None = None) -> dict[str, Any] | None:
+                          provider: str | None = None, error_code: str | None = None,
+                          worker_id: str | None = None) -> dict[str, Any] | None:
         allowed = {"queued", "running", "succeeded", "failed", "cancelled"}
         if status not in allowed:
             raise ValueError("Invalid agent task status")
         with self._session() as conn:
-            current = conn.execute("SELECT status FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
             if current is None:
                 return None
+            if worker_id is not None and current["worker_id"] != worker_id:
+                raise ValueError("Worker does not own this task lease")
             transitions = {
                 "queued": {"running", "failed", "cancelled"},
-                "running": {"succeeded", "failed", "cancelled"},
+                "running": {"succeeded", "failed", "cancelled", "queued"},
                 "succeeded": set(), "failed": set(), "cancelled": set(),
             }
             if status != current["status"] and status not in transitions[current["status"]]:
@@ -310,9 +481,15 @@ class ArcStore:
             conn.execute(
                 "UPDATE agent_tasks SET status=?,connector_id=COALESCE(?,connector_id),"
                 "provider=COALESCE(?,provider),error_code=?,"
+                "worker_id=CASE WHEN ? IN ('succeeded','failed','cancelled','queued') THEN NULL ELSE worker_id END,"
+                "lease_expires_at=CASE WHEN ? IN ('succeeded','failed','cancelled','queued') THEN NULL ELSE lease_expires_at END,"
                 "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=?",
-                (status, connector_id, provider, error_code, task_id),
+                (status, connector_id, provider, error_code, status, status, task_id),
             )
+            self._insert_task_event(conn, task_id, "task." + status, {
+                "task_id": task_id, "status": status, "connector_id": connector_id,
+                "provider": provider, "error_code": error_code,
+            })
             row = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
         return self._agent_task_row(row)
 
