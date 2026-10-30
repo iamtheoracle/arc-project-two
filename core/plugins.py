@@ -1,69 +1,95 @@
-"""Plugin loader and registry."""
-import importlib.util
-import inspect
-from pathlib import Path
-from typing import Dict, List, Callable, Any, Optional
+"""Explicit allowlist for trusted built-in tools.
+
+Arbitrary files in the plugins directory are never discovered or imported. Built-ins still
+run in the API process; they are not a security sandbox and must remain narrowly scoped.
+"""
+from __future__ import annotations
+
+import importlib
+from typing import Any, Callable
+
+
+# Only reviewed, repository-owned modules may be loaded here. Do not add third-party
+# or user-uploaded modules until an isolated worker execution boundary exists.
+BUILTIN_PLUGIN_MODULES = ("plugins.calculator",)
+
 
 class PluginRegistry:
     def __init__(self, plugins_dir: str = "plugins"):
-        self.plugins_dir = Path(plugins_dir)
-        self.plugins: Dict[str, Dict] = {}
-        self.tools: List[Dict] = []
-        self.handlers: Dict[str, Callable] = {}
+        self.plugins = {}
+        self.tools = []
+        self.handlers: dict[str, Callable[..., Any]] = {}
         self.load_all()
 
     def load_all(self):
-        if not self.plugins_dir.exists():
-            self.plugins_dir.mkdir(parents=True, exist_ok=True)
-            return
-
-        for file in self.plugins_dir.glob("*.py"):
-            if file.name.startswith("_"):
+        for module_name in BUILTIN_PLUGIN_MODULES:
+            module = importlib.import_module(module_name)
+            plugin = getattr(module, "PLUGIN", None)
+            if not isinstance(plugin, dict):
                 continue
-            self._load_plugin(file)
+            plugin_name = plugin.get("name")
+            if not isinstance(plugin_name, str) or not plugin_name:
+                continue
+            self.plugins[plugin_name] = plugin
+            for tool in plugin.get("tools", []):
+                if not isinstance(tool, dict):
+                    continue
+                tool_name = tool.get("name")
+                if not isinstance(tool_name, str) or not tool_name:
+                    continue
+                if tool_name in self.handlers:
+                    raise ValueError("Duplicate built-in tool name")
+                handler = getattr(module, tool_name, None)
+                if callable(handler):
+                    self.tools.append(tool)
+                    self.handlers[tool_name] = handler
 
-    def _load_plugin(self, path: Path):
-        spec = importlib.util.spec_from_file_location(path.stem, path)
-        if not spec or not spec.loader:
-            return
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        plugin = getattr(module, "PLUGIN", None)
-        if not plugin or not isinstance(plugin, dict):
-            return
-
-        name = plugin.get("name", path.stem)
-        self.plugins[name] = plugin
-
-        for tool in plugin.get("tools", []):
-            tool_name = tool["name"]
-            self.tools.append(tool)
-            # Look for handler function with same name
-            handler = getattr(module, tool_name, None)
-            if handler and callable(handler):
-                self.handlers[tool_name] = handler
-
-    def get_tools_schema(self) -> List[Dict]:
-        """Return OpenAI-compatible tool schemas for Ollama."""
+    def get_tools_schema(self):
         schemas = []
         for tool in self.tools:
             schemas.append({
                 "type": "function",
                 "function": {
                     "name": tool["name"],
-                    "description": tool["description"],
-                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
-                }
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {
+                        "type": "object", "properties": {},
+                    }),
+                },
             })
         return schemas
 
-    def execute(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+    def execute(self, tool_name: str, arguments: dict[str, Any]) -> str:
         handler = self.handlers.get(tool_name)
-        if not handler:
-            return f"Error: No handler found for tool '{tool_name}'"
+        if handler is None:
+            return "Error: Tool is not in the trusted built-in allowlist"
+        if not isinstance(arguments, dict):
+            return "Error: Tool arguments must be a JSON object"
+        tool = next((item for item in self.tools if item["name"] == tool_name), None)
+        if tool is None:
+            return "Error: Tool manifest is unavailable"
+        schema = tool.get("parameters", {})
+        required = schema.get("required", [])
+        properties = schema.get("properties", {})
+        if any(key not in arguments for key in required):
+            return "Error: Required tool arguments are missing"
+        if any(key not in properties for key in arguments):
+            return "Error: Unexpected tool arguments"
+        for key, value in arguments.items():
+            expected = properties.get(key, {}).get("type")
+            valid = {
+                "string": lambda v: isinstance(v, str),
+                "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+                "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+                "boolean": lambda v: isinstance(v, bool),
+                "object": lambda v: isinstance(v, dict),
+                "array": lambda v: isinstance(v, list),
+            }.get(expected)
+            if valid and not valid(value):
+                return "Error: Tool argument type is invalid"
         try:
             result = handler(**arguments)
-            return str(result)
-        except Exception as e:
-            return f"Error executing {tool_name}: {e}"
+            return str(result)[:12000]
+        except Exception:
+            # Do not expose exception details to the model or caller.
+            return "Error: Trusted built-in tool execution failed"
