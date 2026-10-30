@@ -23,7 +23,7 @@ def run_isolated_worker(arguments: dict[str, Any]) -> dict[str, Any]:
     if runtime != "podman":
         raise RuntimeError("Only rootless Podman is supported for plugin workers")
     command = [
-        runtime, "run", "--rm", "--pull=never",
+        runtime, "run", "--rm", "--interactive", "--pull=never",
         "--network=none", "--ipc=none",
         "--read-only", "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
