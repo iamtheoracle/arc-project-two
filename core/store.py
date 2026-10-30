@@ -66,6 +66,11 @@ class ArcStore:
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+                CREATE TABLE IF NOT EXISTS user_profile (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    profile_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
                 CREATE TABLE IF NOT EXISTS tool_permissions (
                     name TEXT PRIMARY KEY,
                     approved INTEGER NOT NULL CHECK(approved IN (0,1)),
@@ -155,6 +160,25 @@ class ArcStore:
     def _memory_dict(row: sqlite3.Row) -> dict[str, Any]:
         return {"id": row["id"], "content": row["content"], "tags": json.loads(row["tags_json"]),
                 "created_at": row["created_at"], "updated_at": row["updated_at"]}
+
+    def get_user_profile(self) -> dict[str, Any]:
+        with self._session() as conn:
+            row = conn.execute("SELECT profile_json FROM user_profile WHERE id=1").fetchone()
+        return json.loads(row["profile_json"]) if row else {}
+
+    def save_user_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
+        payload = json.dumps(profile, ensure_ascii=False)
+        with self._session() as conn:
+            conn.execute(
+                "INSERT INTO user_profile(id,profile_json) VALUES(1,?) "
+                "ON CONFLICT(id) DO UPDATE SET profile_json=excluded.profile_json,"
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+                (payload,),
+            )
+            row = conn.execute(
+                "SELECT profile_json,updated_at FROM user_profile WHERE id=1"
+            ).fetchone()
+        return {"profile": json.loads(row["profile_json"]), "updated_at": row["updated_at"]}
 
     def approved_tools(self) -> set[str]:
         with self._session() as conn:
