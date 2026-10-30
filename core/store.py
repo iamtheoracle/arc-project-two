@@ -103,14 +103,32 @@ class ArcStore:
         with self._session() as conn:
             return conn.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone() is not None
 
-    def add_message(self, conversation_id: str, role: str, content: str) -> None:
+    def add_message(self, conversation_id: str, role: str, content: str) -> int:
         if role not in ("user", "assistant"):
             raise ValueError("Unsupported message role")
         with self._session() as conn:
-            conn.execute("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)",
-                         (conversation_id, role, content))
-            conn.execute("UPDATE conversations SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
-                         (conversation_id,))
+            cursor = conn.execute(
+                "INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)",
+                (conversation_id, role, content),
+            )
+            conn.execute(
+                "UPDATE conversations SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+                (conversation_id,),
+            )
+            return int(cursor.lastrowid)
+
+    def rollback_pending_turn(self, conversation_id: str, message_id: int) -> None:
+        """Remove only the failed request's user message and any now-empty new chat."""
+        with self._session() as conn:
+            conn.execute(
+                "DELETE FROM messages WHERE id=? AND conversation_id=? AND role='user'",
+                (message_id, conversation_id),
+            )
+            conn.execute(
+                "DELETE FROM conversations WHERE id=? "
+                "AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id=?)",
+                (conversation_id, conversation_id),
+            )
 
     def get_messages(self, conversation_id: str, limit: int = 80) -> list[dict[str, str]]:
         with self._session() as conn:
