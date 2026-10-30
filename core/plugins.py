@@ -27,7 +27,7 @@ def run_isolated_worker(arguments: dict[str, Any]) -> dict[str, Any]:
         "--network=none", "--ipc=none",
         "--read-only", "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
-        "--pids-limit=16", "--memory=128m",
+        "--pids-limit=16", "--memory=128m", "--memory-swap=128m",
         "--cpus=0.5", "--user=65534:65534",
         "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m",
         "--ulimit=nofile=32:32",
@@ -36,7 +36,11 @@ def run_isolated_worker(arguments: dict[str, Any]) -> dict[str, Any]:
     completed = subprocess.run(
         command, input=json.dumps(arguments), text=True,
         capture_output=True, timeout=5, check=False,
-        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        env={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", ""),
+            "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", ""),
+        },
     )
     if completed.returncode != 0:
         raise RuntimeError("Isolated plugin worker failed")
