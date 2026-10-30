@@ -93,6 +93,19 @@ class ArcStore:
                     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
                 CREATE INDEX IF NOT EXISTS idx_user_boundaries_active ON user_boundaries(active, created_at);
+                CREATE TABLE IF NOT EXISTS agent_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    source_agent TEXT NOT NULL,
+                    target_agent TEXT NOT NULL,
+                    required_capabilities_json TEXT NOT NULL DEFAULT '[]',
+                    status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed','cancelled')),
+                    connector_id TEXT,
+                    provider TEXT,
+                    error_code TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_tasks_created ON agent_tasks(created_at DESC);
                 CREATE TABLE IF NOT EXISTS tool_permissions (
                     name TEXT PRIMARY KEY,
                     approved INTEGER NOT NULL CHECK(approved IN (0,1)),
@@ -265,6 +278,54 @@ class ArcStore:
                 (boundary_id,),
             )
         return result.rowcount > 0
+
+    def create_agent_task(self, task_id: str, source_agent: str, target_agent: str,
+                          required_capabilities: list[str]) -> dict[str, Any]:
+        with self._session() as conn:
+            conn.execute(
+                "INSERT INTO agent_tasks(task_id,source_agent,target_agent,required_capabilities_json,status) "
+                "VALUES(?,?,?,?, 'queued')",
+                (task_id, source_agent, target_agent,
+                 json.dumps(sorted(set(required_capabilities)))),
+            )
+            row = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
+        return self._agent_task_row(row)
+
+    def update_agent_task(self, task_id: str, status: str, connector_id: str | None = None,
+                          provider: str | None = None, error_code: str | None = None) -> dict[str, Any] | None:
+        allowed = {"queued", "running", "succeeded", "failed", "cancelled"}
+        if status not in allowed:
+            raise ValueError("Invalid agent task status")
+        with self._session() as conn:
+            current = conn.execute("SELECT status FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
+            if current is None:
+                return None
+            transitions = {
+                "queued": {"running", "failed", "cancelled"},
+                "running": {"succeeded", "failed", "cancelled"},
+                "succeeded": set(), "failed": set(), "cancelled": set(),
+            }
+            if status != current["status"] and status not in transitions[current["status"]]:
+                raise ValueError("Invalid agent task state transition")
+            conn.execute(
+                "UPDATE agent_tasks SET status=?,connector_id=COALESCE(?,connector_id),"
+                "provider=COALESCE(?,provider),error_code=?,"
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=?",
+                (status, connector_id, provider, error_code, task_id),
+            )
+            row = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
+        return self._agent_task_row(row)
+
+    @staticmethod
+    def _agent_task_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["required_capabilities"] = json.loads(item.pop("required_capabilities_json"))
+        return item
+
+    def get_agent_task(self, task_id: str) -> dict[str, Any] | None:
+        with self._session() as conn:
+            row = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
+        return self._agent_task_row(row) if row else None
 
     def approved_tools(self) -> set[str]:
         with self._session() as conn:
