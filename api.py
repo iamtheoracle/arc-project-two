@@ -199,8 +199,10 @@ def _claim_agent_task(store: ArcStore, task_id: str, worker_id: str,
                       lease_seconds: int = 120) -> dict[str, Any]:
     for candidate in _task_store_candidates(store):
         try:
-            task = candidate.claim_agent_task(worker_id, lease_seconds=lease_seconds)
-            if task and task["task_id"] == task_id:
+            task = candidate.claim_agent_task(
+                worker_id, lease_seconds=lease_seconds, task_id=task_id
+            )
+            if task:
                 # Mirror lifecycle metadata to the independent store where possible.
                 for mirror in _task_store_candidates(store):
                     if mirror is candidate:
@@ -210,10 +212,6 @@ def _claim_agent_task(store: ArcStore, task_id: str, worker_id: str,
                     except Exception:
                         continue
                 return task
-            if task:
-                # Do not strand a different task claimed by this request's worker.
-                candidate.update_agent_task(task["task_id"], "queued", error_code="claim_not_requested",
-                                             worker_id=worker_id)
         except Exception:
             continue
     raise RegistryError("No durable task store could claim this task")
