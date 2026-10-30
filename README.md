@@ -4,6 +4,10 @@
 
 Oracle Arc is a standalone project. It is not Vantoris X Money, UNIBUD, The Arc Space, or a My Realm business application.
 
+## Planned specialist agents
+
+The architecture defines four coordinated roles: **BUD** (everyday companion and coordinator), **SPARK** (permissioned memory and continuity), **ORACLE** (reasoning, research and problem-solving), and **ORBITS** (visual understanding and creative workflows). They are intended to use one shared, provider-independent Oracle Arc service with separate identities and least-privilege permissions. This is an architecture direction, not a claim that the multi-agent runtime is already shipped.
+
 ## What is implemented
 
 - Local inference through Ollama; default model: `qwen2.5:7b`.
