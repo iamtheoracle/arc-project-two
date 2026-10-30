@@ -164,9 +164,16 @@ def _session_registry(store: ArcStore, session_id: str | None = None):
             raise RegistryError("Session backup must use a separate database file")
         backup_store = ArcStore(backup_path)
         if session_id and not backup_store.conversation_exists(session_id):
-            backup_store.create_conversation(conversation_id=session_id)
-            for item in store.get_messages(session_id):
-                backup_store.add_message(session_id, item["role"], item["content"])
+            try:
+                primary_history = store.get_messages(session_id)
+            except Exception:
+                # Never manufacture an empty backup session when the primary cannot
+                # be read; the backup connector will fail closed for this session.
+                primary_history = None
+            if primary_history is not None:
+                backup_store.create_conversation(conversation_id=session_id)
+                for item in primary_history:
+                    backup_store.add_message(session_id, item["role"], item["content"])
 
     def save_primary(current_session_id, items):
         for item in items:
@@ -189,7 +196,11 @@ def _session_registry(store: ArcStore, session_id: str | None = None):
 
         sessions.register(SessionConnector(
             "sqlite-independent-backup", 20,
-            load=lambda current_session_id: backup_store.get_messages(current_session_id),
+            load=lambda current_session_id: (
+                backup_store.get_messages(current_session_id)
+                if backup_store.conversation_exists(current_session_id)
+                else (_ for _ in ()).throw(RegistryError("Backup session has not been initialized"))
+            ),
             save=save_backup,
         ))
     return sessions
@@ -311,8 +322,8 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
     else:
         target_agent_id, delegation_reason = select_agent(agent_id, incoming[-1]["content"])
         automatic_delegation = target_agent_id != agent_id
-    sessions = _session_registry(store, session_id)
     try:
+        sessions = _session_registry(store, session_id)
         history = sessions.load(session_id)["result"]
         sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"],
                                     "event_id": uuid.uuid4().hex}])
