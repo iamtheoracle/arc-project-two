@@ -14,6 +14,7 @@ from core.agent import ArcAgent, SYSTEM_PROMPT
 from core.plugins import PluginRegistry
 from core.store import ArcStore
 from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_context, normalize_profile
+from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, default_agent_registry)
 
 app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
@@ -47,6 +48,12 @@ class ChatRequest(BaseModel):
     max_steps: int = Field(default=4, ge=1, le=8)
 
 
+class AgentChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=100)
+    session_id: str | None = Field(default=None, min_length=1, max_length=64)
+    max_steps: int = Field(default=4, ge=1, le=8)
+
+
 class MemoryCreate(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
     tags: list[str] = Field(default_factory=list, max_length=20)
@@ -76,6 +83,68 @@ def _model_name(requested: str | None) -> str:
 
 def _agent(model: str, approved_tools: set[str]) -> ArcAgent:
     return ArcAgent(model=model, approved_tools=approved_tools)
+
+
+
+
+
+def _build_agent_registry(store: ArcStore):
+    registry = default_agent_registry()
+    primary_host = os.environ.get("OLLAMA_HOST", "").strip() or None
+    fallback_hosts = [value.strip() for value in
+                      os.environ.get("ORACLE_ARC_OLLAMA_FALLBACK_HOSTS", "").split(",")
+                      if value.strip()]
+    hosts = [primary_host] + [host for host in fallback_hosts if host != primary_host]
+    prompts = {
+        "bud": (
+            "You are BUD, Oracle Arc's everyday companion and coordinator. Be natural, "
+            "helpful and patient. Understand what the user wants before suggesting specialist work. "
+            "Do not pretend to be human. Do not claim another agent completed work unless its result "
+            "is actually available. You may explain when a task belongs with ORACLE."
+        ),
+        "oracle": (
+            "You are ORACLE, Oracle Arc's reasoning and problem-solving specialist. "
+            "Analyze carefully, explain uncertainty, and never invent research, tool results or actions."
+        ),
+    }
+    for agent_id in ("bud", "oracle"):
+        for index, host in enumerate(hosts):
+            connector_id = "ollama-" + agent_id + ("-primary" if index == 0 else "-backup-" + str(index))
+            provider = "ollama-local" if index == 0 else "ollama-fallback"
+
+            def run(payload, selected_host=host, selected_agent=agent_id):
+                runtime = ArcAgent(model=payload["model"], approved_tools=store.approved_tools(),
+                                   host=selected_host)
+                runtime.tool_audit = lambda name, outcome: store.audit_tool(name, outcome)
+                runtime.messages = [
+                    {"role": "system", "content": _system_prompt(store) + "\n\n" + prompts[selected_agent]}
+                ] + payload["history"]
+                return runtime.chat(payload["latest_user"], max_steps=payload["max_steps"])
+
+            registry.register_connector(agent_id, Connector(
+                connector_id, provider, index * 10, run,
+                failure_threshold=1, cooldown_seconds=30.0))
+    return registry
+
+
+def _session_registry(store: ArcStore):
+    sessions = SessionConnectorRegistry()
+    sessions.register(SessionConnector(
+        "sqlite-primary", 10,
+        load=lambda session_id: store.get_messages(session_id),
+        save=lambda session_id, items: [
+            store.add_message(session_id, item["role"], item["content"]) for item in items
+        ],
+    ))
+    return sessions
+
+
+def _plugin_catalog():
+    catalog = PluginCatalog()
+    catalog.register(PluginManifest("calculator", "1.0.0", "Mathematical calculations", (), False))
+    catalog.register(PluginManifest("files", "1.0.0", "Read local text files", ("filesystem.read",), False))
+    catalog.register(PluginManifest("system", "1.0.0", "Local system information", ("system.read",), False))
+    return catalog
 
 
 def _system_prompt(store: ArcStore) -> str:
@@ -152,6 +221,49 @@ def healthz():
     # Liveness only: this does not claim that Ollama or the configured model is ready.
     # Keep this unauthenticated endpoint free of model names and configuration details.
     return {"service": "oracle-arc", "status": "alive", "authentication_required": True}
+
+
+@app.get("/v1/agents", dependencies=[Depends(require_owner)])
+def list_agents(store: ArcStore = Depends(get_store)):
+    return {"data": _build_agent_registry(store).list_agents()}
+
+
+@app.get("/v1/plugins", dependencies=[Depends(require_owner)])
+def list_plugins():
+    # Metadata only: this endpoint never imports or executes plugin files.
+    return {"data": _plugin_catalog().list_plugins()}
+
+
+@app.post("/v1/agents/{agent_id}/chat", dependencies=[Depends(require_owner)])
+def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depends(get_store)):
+    incoming = [{"role": item.role, "content": item.content} for item in request.messages]
+    if incoming[-1]["role"] != "user":
+        raise HTTPException(status_code=400, detail="The last message must be a user message.")
+    if request.session_id:
+        if not store.conversation_exists(request.session_id):
+            raise HTTPException(status_code=404, detail="Session not found.")
+        session_id = request.session_id
+    else:
+        session_id = store.create_conversation(incoming[-1]["content"][:120])
+
+    sessions = _session_registry(store)
+    try:
+        history = sessions.load(session_id)["result"]
+        sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"]}])
+        payload = {"model": _model_name(None), "history": history[-79:],
+                   "latest_user": incoming[-1]["content"], "max_steps": request.max_steps}
+        result = _build_agent_registry(store).dispatch(agent_id, payload)
+        answer = result["result"]
+        if not isinstance(answer, str) or not answer.strip():
+            raise RegistryError("Agent returned an empty response")
+        sessions.save(session_id, [{"role": "assistant", "content": answer}])
+    except RegistryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
+    return {"agent_id": agent_id, "connector_id": result["connector_id"],
+            "provider": result["provider"], "fallback_used": result["fallback_used"],
+            "session_id": session_id, "message": {"role": "assistant", "content": answer}}
 
 
 @app.get("/v1/models", dependencies=[Depends(require_owner)])
