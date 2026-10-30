@@ -71,6 +71,15 @@ class ArcStore:
                     profile_json TEXT NOT NULL DEFAULT '{}',
                     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
+                CREATE TABLE IF NOT EXISTS user_boundaries (
+                    id TEXT PRIMARY KEY,
+                    boundary TEXT NOT NULL,
+                    context TEXT NOT NULL DEFAULT '',
+                    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_boundaries_active ON user_boundaries(active, created_at);
                 CREATE TABLE IF NOT EXISTS tool_permissions (
                     name TEXT PRIMARY KEY,
                     approved INTEGER NOT NULL CHECK(approved IN (0,1)),
@@ -179,6 +188,41 @@ class ArcStore:
                 "SELECT profile_json,updated_at FROM user_profile WHERE id=1"
             ).fetchone()
         return {"profile": json.loads(row["profile_json"]), "updated_at": row["updated_at"]}
+
+    def add_boundary(self, boundary: str, context: str = "") -> dict[str, Any]:
+        boundary_id = str(uuid.uuid4())
+        with self._session() as conn:
+            conn.execute(
+                "INSERT INTO user_boundaries(id,boundary,context) VALUES(?,?,?)",
+                (boundary_id, boundary.strip(), context.strip()),
+            )
+            row = conn.execute(
+                "SELECT id,boundary,context,active,created_at,updated_at "
+                "FROM user_boundaries WHERE id=?", (boundary_id,)
+            ).fetchone()
+        return dict(row)
+
+    def list_boundaries(self, active_only: bool = True) -> list[dict[str, Any]]:
+        query = (
+            "SELECT id,boundary,context,active,created_at,updated_at "
+            "FROM user_boundaries"
+        )
+        if active_only:
+            query += " WHERE active=1"
+        query += " ORDER BY created_at ASC"
+        with self._session() as conn:
+            rows = conn.execute(query).fetchall()
+        return [dict(row) for row in rows]
+
+    def deactivate_boundary(self, boundary_id: str) -> bool:
+        with self._session() as conn:
+            result = conn.execute(
+                "UPDATE user_boundaries SET active=0,"
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE id=? AND active=1",
+                (boundary_id,),
+            )
+        return result.rowcount > 0
 
     def approved_tools(self) -> set[str]:
         with self._session() as conn:
