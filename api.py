@@ -133,9 +133,9 @@ def _build_agent_registry(store: ArcStore):
                 connector_id, provider, index * 10, run,
                 failure_threshold=1, cooldown_seconds=30.0))
         for provider_index, config in enumerate(PROVIDERS):
-            adapter = OpenAICompatibleProvider(config)
-            if not adapter.configured:
+            if not os.environ.get(config.api_key_env, "").strip():
                 continue
+            adapter = OpenAICompatibleProvider(config)
 
             def run_remote(payload, selected_adapter=adapter, selected_agent=agent_id):
                 messages = [
