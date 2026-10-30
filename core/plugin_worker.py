@@ -5,6 +5,16 @@ import math
 import operator
 import sys
 
+try:
+    import resource
+    resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (1048576, 1048576))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
+    if hasattr(resource, "RLIMIT_AS"):
+        resource.setrlimit(resource.RLIMIT_AS, (268435456, 268435456))
+except (ImportError, AttributeError, OSError, ValueError):
+    pass
+
 OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
        ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod,
        ast.USub: operator.neg, ast.UAdd: operator.pos}
