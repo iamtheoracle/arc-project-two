@@ -53,6 +53,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
+    except Exception as exc:
+        # Report only the exception class for operational diagnostics; never the
+        # expression, arguments, traceback, or host details.
+        print("worker_failure=" + type(exc).__name__, file=sys.stderr)
         print(json.dumps({"error": "Calculation failed"}))
         sys.exit(1)
