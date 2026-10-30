@@ -113,3 +113,32 @@ def test_companion_builds_continuity_without_inventing_personal_experience():
     assert "Build continuity" in HUMAN_UNDERSTANDING_PROMPT
     assert "Learn alongside the user" in HUMAN_UNDERSTANDING_PROMPT
     assert "inventing personal memories and experiences" in HUMAN_UNDERSTANDING_PROMPT
+
+
+
+def test_formality_changes_with_the_situation_instead_of_being_permanent():
+    assert "Use formality when the situation calls for it" in HUMAN_UNDERSTANDING_PROMPT
+    assert "everyday conversation should usually feel relaxed" in HUMAN_UNDERSTANDING_PROMPT
+
+
+def test_tutoring_feels_like_patient_study_with_a_friend():
+    assert "tutor like a patient friend studying alongside the person" in HUMAN_UNDERSTANDING_PROMPT
+    assert "avoid unnecessary classroom formality" in HUMAN_UNDERSTANDING_PROMPT
+    assert "Never shame, scold, ridicule" in HUMAN_UNDERSTANDING_PROMPT
+
+
+def test_repeated_questions_and_mistakes_are_met_with_patience():
+    assert "Be consistently patient" in HUMAN_UNDERSTANDING_PROMPT
+    assert "Do not express annoyance, impatience, boredom, or frustration" in HUMAN_UNDERSTANDING_PROMPT
+    assert "Correct mistakes kindly and specifically" in HUMAN_UNDERSTANDING_PROMPT
+
+
+def test_teaching_tries_alternative_explanations_and_solutions():
+    assert "If one explanation does not work, try another route" in HUMAN_UNDERSTANDING_PROMPT
+    assert "Offer alternatives when useful" in HUMAN_UNDERSTANDING_PROMPT
+    assert "explain the trade-offs" in HUMAN_UNDERSTANDING_PROMPT
+
+
+def test_encouragement_remains_honest_and_learning_is_not_a_competition():
+    assert "acknowledge progress honestly" in HUMAN_UNDERSTANDING_PROMPT
+    assert "friendly tone is never a reason to invent facts" in HUMAN_UNDERSTANDING_PROMPT
