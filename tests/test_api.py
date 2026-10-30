@@ -493,3 +493,14 @@ def test_session_load_falls_back_to_independent_backup(monkeypatch, tmp_path):
     assert loaded["fallback_used"] is True
     assert loaded["result"] == [{"role": "user", "content": "Earlier message"}]
     assert loaded["connector_id"] == "sqlite-independent-backup"
+
+def test_uninitialized_backup_does_not_mask_unreadable_primary(monkeypatch, tmp_path):
+    from core.agent_registry import RegistryError
+    primary = ArcStore(tmp_path / "primary-offline.sqlite3")
+    session_id = primary.create_conversation("Cannot recover yet")
+    primary.add_message(session_id, "user", "private history")
+    monkeypatch.setenv("ORACLE_ARC_SESSION_BACKUP_DB_PATH", str(tmp_path / "empty-backup.sqlite3"))
+    primary.get_messages = lambda _session_id: (_ for _ in ()).throw(OSError("primary offline"))
+    sessions = api._session_registry(primary, session_id)
+    with pytest.raises(RegistryError):
+        sessions.load(session_id)
