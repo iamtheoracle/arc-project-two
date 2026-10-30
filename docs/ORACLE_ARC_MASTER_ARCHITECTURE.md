@@ -156,3 +156,12 @@ This is an initial single-process registry and connector layer, not yet a distri
 ## Current truth and non-claims
 
 The repository is currently a single-owner FastAPI/Ollama/SQLite foundation with optional remote model adapters, a first BUD/ORACLE registry, optional mirrored session backup, and a rootless Podman calculator worker. It is not yet a production multi-tenant platform, fully provider-independent gateway, semantic memory engine, complete multimodal system or autonomous distributed multi-agent system. These are target capabilities, not claims about shipped code.
+
+
+## Agent control plane and execution verification
+
+The current control-plane foundation now assigns every agent chat a durable task ID and records queued, running, succeeded or failed state in SQLite. Task records retain source agent, target agent, declared required capabilities, connector/provider selection and a sanitized failure code; they do not store prompt or response text. Owners can inspect a task through the authenticated `GET /v1/agent-tasks/{task_id}` endpoint. Dispatch checks that the target agent declares every requested capability before invoking a connector, and connector status exposes failure count, last exception type and cooldown remaining.
+
+This remains a single-service control plane: task state and connector health are not yet shared across replicas, there is no lease/claim protocol or durable distributed queue, and task cancellation/replay/reconciliation are not implemented. Do not deploy multiple API replicas expecting coordinated task ownership until those pieces exist.
+
+CI now installs rootless Podman, builds the worker image, and runs the actual calculator container before the Python test suite. The worker receives request input through an explicitly interactive stdin pipe. A successful image build alone is not considered proof of worker execution; the real runtime smoke test must pass.
