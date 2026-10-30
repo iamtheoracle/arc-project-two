@@ -360,3 +360,30 @@ def test_plugin_catalog_is_visible_but_disabled_by_default(client):
     assert plugins["calculator"]["enabled"] is False
     assert plugins["files"]["enabled"] is False
 
+
+
+def test_agent_chat_fails_over_to_second_ollama_host(client, monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "http://primary.invalid:11434")
+    monkeypatch.setenv("ORACLE_ARC_OLLAMA_FALLBACK_HOSTS", "http://backup.invalid:11434")
+
+    class HostAwareAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.host = host
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            if self.host == "http://primary.invalid:11434":
+                raise ConnectionError("primary unavailable")
+            return "Answered by backup"
+
+    monkeypatch.setattr(api, "ArcAgent", HostAwareAgent)
+    response = client.post(
+        "/v1/agents/oracle/chat",
+        headers=auth(),
+        json={"messages": [{"role": "user", "content": "Solve this"}]},
+    )
+    assert response.status_code == 200
+    assert response.json()["fallback_used"] is True
+    assert response.json()["provider"] == "ollama-fallback"
+    assert response.json()["message"]["content"] == "Answered by backup"
+
