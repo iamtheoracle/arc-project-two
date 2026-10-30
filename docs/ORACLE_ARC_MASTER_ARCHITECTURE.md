@@ -93,6 +93,34 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 
 **Release gate:** Every release produces a versioned report. Critical security tests are pass/fail gates, not averages. Quality gains cannot conceal privacy, factuality or reliability regressions.
 
+
+## Specialist agent architecture: BUD, SPARK, ORACLE and ORBITS
+
+The intended user-facing experience has four coordinated specialist roles. These are logical agent identities and responsibilities, not a claim that four independently running agents are already implemented.
+
+- **BUD — Companion and coordinator:** the everyday conversational entry point. BUD listens, responds naturally, helps users think things through, explains things in accessible language, and routes work to the appropriate specialist. BUD should not force every conversation into a task or pretend to be human.
+- **SPARK — Memory and continuity:** manages permitted personal context, preferences, goals and experiences. Spark owns memory lifecycle, provenance, correction, expiry and deletion. Other agents receive only the minimum memory scope explicitly granted for a task; Spark's private store is not globally shared.
+- **ORACLE — Reasoning and problem-solving:** handles research, analysis, planning, factual questions, decisions and complex problem-solving through the shared model gateway.
+- **ORBITS — Visual intelligence:** handles image understanding, visual analysis, design and supported creative workflows. It receives only the inputs and permissions needed for the requested visual task.
+
+### Coordination and trust rules
+
+1. Every agent has a stable agent ID, version, declared capabilities and least-privilege permissions.
+2. Agents call the shared Oracle Arc service interface; they do not each hold provider credentials or the owner's master API key.
+3. The model may propose delegation, but policy outside the model authorizes it. Agent role or conversational trust never grants security authority.
+4. Delegation carries a scoped task envelope: requesting agent, target agent, purpose, allowed data references, permitted actions, deadline and correlation ID.
+5. Spark memory access is explicit and auditable. BUD, Oracle and Orbits do not receive blanket access to private memories.
+6. Tool execution remains subject to the secure execution boundary and exact-action approval rules. No agent can bypass tool policy.
+7. Agent outputs are untrusted inputs to the receiving agent and must be validated before consequential use.
+8. The user can understand which agent is handling a task, stop delegation and control saved personal context.
+9. If a specialist is unavailable, BUD should explain the limitation and offer a safe alternative rather than inventing a completed action.
+
+### Agent evaluation requirements
+
+The benchmark must test BUD's conversational fit and routing, Spark's memory isolation and lifecycle, Oracle's reasoning and calibration, Orbits' visual task handling, and cross-agent delegation. Critical cases include unauthorized memory access, privilege escalation through delegation, prompt injection in agent outputs, duplicate execution, cancellation and partial failure. A successful handoff must preserve task context without expanding permissions.
+
+**Implementation status:** roles and trust rules are architecture requirements. Agent registry, service identities, delegation runtime, Orbits visual adapters and end-to-end agent orchestration remain to be implemented and tested.
+
 ## Cross-cutting architecture
 
 - **Identity:** separate human, tenant, agent, service and tool identities.
