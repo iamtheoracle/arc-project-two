@@ -105,8 +105,8 @@ class ArcStore:
                 );
             """)
 
-    def create_conversation(self, title: str = "") -> str:
-        conversation_id = str(uuid.uuid4())
+    def create_conversation(self, title: str = "", conversation_id: str | None = None) -> str:
+        conversation_id = conversation_id or str(uuid.uuid4())
         with self._session() as conn:
             conn.execute("INSERT INTO conversations(id,title) VALUES(?,?)", (conversation_id, title[:160]))
         return conversation_id
