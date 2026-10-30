@@ -14,7 +14,10 @@ Oracle Arc is a standalone project. It is not Vantoris X Money, UNIBUD, The Arc 
 - Tool permissions default to denied. The owner must explicitly approve or revoke each installed tool.
 - Tool audit history records approvals, revocations, denials, and executions without storing tool arguments.
 - API model selection is pinned to the server-configured model; clients cannot trigger arbitrary model pulls.
-- Automated tests for authentication, persistence, memory deletion, permissions, and agent denial behavior.
+- Human-understanding policy: Oracle Arc always replies in polished, correct English while adapting vocabulary, sentence length, detail, and examples to the conversation. It never copies a user's grammar or spelling errors.
+- Owner-controlled communication profile for explanation detail, tone, and interests, persisted locally in SQLite.
+- Personalization uses authorized conversation context and explicitly saved preferences; interests are optional context, not assumptions or mandatory themes.
+- Automated tests for authentication, persistence, memory deletion, permissions, adaptive communication rules, and agent denial behavior.
 
 ## Run locally
 
@@ -58,6 +61,17 @@ curl http://127.0.0.1:8090/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"Hello, Oracle Arc."}]}'
 ```
 
+Set communication preferences (optional; defaults are simple and natural):
+
+\`\`\`bash
+curl -X PUT http://127.0.0.1:8090/v1/profile \
+  -H "Authorization: Bearer $ORACLE_ARC_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"detail_level":"simple","tone":"natural","interests":["football","anime"]}'
+\`\`\`
+
+Oracle Arc uses these interests only when they genuinely help the conversation. The model must always use correct English; it adapts the complexity of its explanation, not its grammar or spelling.
+
 Save a memory:
 
 ```bash
@@ -68,6 +82,9 @@ curl -X POST http://127.0.0.1:8090/v1/memories \
 ```
 
 Other owner-authenticated routes:
+
+- `GET /v1/profile` — view the communication profile.
+- `PUT /v1/profile` — update `detail_level` (`simple`, `balanced`, `detailed`), `tone` (`natural`, `warm`, `playful`, `professional`), and up to 30 interests.
 
 - `GET /v1/models`
 - `GET /v1/conversations`
