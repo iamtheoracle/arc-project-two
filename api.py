@@ -18,6 +18,8 @@ from core.agent_registry import (Connector, PluginCatalog, PluginManifest, Regis
 
 app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
+_agent_registry_cache = None
+_agent_registry_store = None
 
 
 def get_store() -> ArcStore:
@@ -89,6 +91,9 @@ def _agent(model: str, approved_tools: set[str]) -> ArcAgent:
 
 
 def _build_agent_registry(store: ArcStore):
+    global _agent_registry_cache, _agent_registry_store
+    if _agent_registry_cache is not None and _agent_registry_store is store:
+        return _agent_registry_cache
     registry = default_agent_registry()
     primary_host = os.environ.get("OLLAMA_HOST", "").strip() or None
     fallback_hosts = [value.strip() for value in
@@ -124,6 +129,8 @@ def _build_agent_registry(store: ArcStore):
             registry.register_connector(agent_id, Connector(
                 connector_id, provider, index * 10, run,
                 failure_threshold=1, cooldown_seconds=30.0))
+    _agent_registry_cache = registry
+    _agent_registry_store = store
     return registry
 
 
