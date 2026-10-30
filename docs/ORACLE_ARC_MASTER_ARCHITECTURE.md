@@ -119,20 +119,20 @@ The intended user-facing experience has four coordinated specialist roles. These
 
 The benchmark must test BUD's conversational fit and routing, Spark's memory isolation and lifecycle, Oracle's reasoning and calibration, Orbits' visual task handling, and cross-agent delegation. Critical cases include unauthorized memory access, privilege escalation through delegation, prompt injection in agent outputs, duplicate execution, cancellation and partial failure. A successful handoff must preserve task context without expanding permissions.
 
-**Implementation status:** roles and trust rules are architecture requirements. Agent registry, service identities, delegation runtime, Orbits visual adapters and end-to-end agent orchestration remain to be implemented and tested.
+**Implementation status:** a first registry and BUD-to-ORACLE routing policy exist. BUD currently delegates using deterministic intent matching for clear specialist requests; model-selected planning, service identities, SPARK and ORBITS runtimes, and end-to-end multi-agent orchestration remain incomplete.
 
 
 ## Agent registry and connector implementation baseline
 
 The first registry implementation provides:
 - Registered agent identities for BUD, ORACLE, SPARK and ORBITS. BUD and ORACLE are enabled; SPARK and ORBITS remain disabled until their specialist runtimes exist.
-- BUD and ORACLE chat routes through a shared registry, with an explicit BUD-to-ORACLE delegation field that preserves the same session.
+- BUD and ORACLE chat routes through a shared registry, with explicit and conservative automatic BUD-to-ORACLE delegation.
 - Ordered Ollama connectors with per-connector failure cooldown and fallback to separately configured hosts through \`ORACLE_ARC_OLLAMA_FALLBACK_HOSTS\`.
-- Session connector interface with ordered fallback. SQLite is currently the only wired session persistence adapter.
-- Metadata-only plugin catalogue and an explicit allowlist for the reviewed calculator built-in. Arbitrary plugin file discovery is removed; file and system plugins are not executable.
+- Session connector interface with ordered fallback. SQLite primary and optional independent SQLite backup are wired; mirrored writes use idempotency event IDs and reads/writes can fall back to the backup.
+- Metadata-only plugin catalogue and an explicit allowlist for the reviewed calculator built-in. Calculator execution requires a rootless Podman worker with no network, read-only root filesystem, dropped capabilities, non-root UID, resource limits and a hard timeout. Arbitrary plugin file discovery is removed; file and system plugins are not executable.
 - Authenticated registry, plugin catalogue and agent chat endpoints.
 
-This is an initial single-process registry and connector layer, not yet a distributed agent control plane. Connector health is learned from request failures, not an active readiness probe. A fallback Ollama URL is useful only if the operator provisions a separate healthy service with the selected model. The current calculator executes in-process and is not a sandbox. Third-party plugins, persistent cross-process circuit state, independent session-store failover, service identities, and automatic model-selected BUD-to-ORACLE delegation remains follow-up work.
+This is an initial single-process registry and connector layer, not yet a distributed agent control plane. Connector health is learned from request failures, not an active readiness probe. A fallback Ollama URL is useful only if the operator provisions a separate healthy service with the selected model. Session replication is synchronous application-level mirroring, not consensus or automatic recovery from loss of both stores; place the backup on independent infrastructure and test restore procedures. The calculator now runs in a rootless Podman container, but host runtime hardening, image provenance, deployment integration and adversarial testing remain release requirements. Third-party plugins, persistent cross-process circuit state, service identities, and model-selected planning remain follow-up work.
 
 ## Cross-cutting architecture
 
@@ -155,4 +155,4 @@ This is an initial single-process registry and connector layer, not yet a distri
 
 ## Current truth and non-claims
 
-The repository is currently a single-owner FastAPI/Ollama/SQLite foundation. It is not yet a production multi-tenant platform, isolated plugin runtime, provider-independent gateway, semantic memory engine, multimodal system or autonomous multi-agent society. These are target capabilities, not claims about shipped code.
+The repository is currently a single-owner FastAPI/Ollama/SQLite foundation with optional remote model adapters, a first BUD/ORACLE registry, optional mirrored session backup, and a rootless Podman calculator worker. It is not yet a production multi-tenant platform, fully provider-independent gateway, semantic memory engine, complete multimodal system or autonomous distributed multi-agent system. These are target capabilities, not claims about shipped code.
