@@ -124,7 +124,7 @@ Set \`ORACLE_ARC_OLLAMA_FALLBACK_HOSTS\` to a comma-separated list of independen
 ORACLE_ARC_OLLAMA_FALLBACK_HOSTS=http://ollama-backup:11434,http://ollama-secondary:11434
 \`\`\`
 
-The first configured host is attempted first; a failed connector is skipped for its cooldown period and the next configured host is tried. These backup services must already be running with the selected model available. No backup host is assumed or invented. If the variable is empty, there is no model-provider failover.
+BUD can explicitly delegate to ORACLE using the `delegate_to` field; the response identifies the specialist that handled the task. Automatic model-selected delegation is not enabled yet.\n\nThe first configured host is attempted first; a failed connector is skipped for its cooldown period and the next configured host is tried. These backup services must already be running with the selected model available. No backup host is assumed or invented. If the variable is empty, there is no model-provider failover.
 
 Only the reviewed calculator module is currently in the executable built-in allowlist. File and system plugins are not exposed for execution. Arbitrary plugin discovery has been removed. The calculator remains an in-process trusted built-in, not an isolated sandbox; external or third-party plugins must stay disabled until a separate restricted worker is implemented. Tool approval remains default-deny.
 
