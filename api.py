@@ -199,6 +199,7 @@ def _claim_agent_task(store: ArcStore, task_id: str, worker_id: str,
                       lease_seconds: int = 120) -> dict[str, Any]:
     for candidate in _task_store_candidates(store):
         try:
+            candidate.recover_expired_agent_tasks(max_attempts=5)
             task = candidate.claim_agent_task(
                 worker_id, lease_seconds=lease_seconds, task_id=task_id
             )
@@ -458,6 +459,20 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
             "automatic_delegation": automatic_delegation,
             "delegation_reason": delegation_reason,
             "session_id": session_id, "message": {"role": "assistant", "content": answer}}
+
+
+@app.post("/v1/agent-tasks/{task_id}/cancel", dependencies=[Depends(require_owner)])
+def cancel_agent_task(task_id: str, store: ArcStore = Depends(get_store)):
+    task = _get_agent_task(store, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Agent task not found.")
+    if task["status"] in {"succeeded", "failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="Task is already finished.")
+    try:
+        _update_agent_task(store, task_id, "cancelled", error_code="cancelled_by_owner")
+    except RegistryError:
+        raise HTTPException(status_code=503, detail="Task storage is unavailable.")
+    return {"task_id": task_id, "status": "cancelled"}
 
 
 @app.get("/v1/agent-tasks/{task_id}", dependencies=[Depends(require_owner)])
