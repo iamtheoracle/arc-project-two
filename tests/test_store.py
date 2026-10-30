@@ -61,3 +61,18 @@ def test_message_event_ids_make_replicated_writes_idempotent(tmp_path):
     assert first > 0
     assert second == 0
     assert store.get_messages(session_id) == [{"role": "user", "content": "same event"}]
+
+def test_agent_task_lifecycle_is_persisted_and_terminal_states_are_final(tmp_path):
+    store = ArcStore(tmp_path / "agent-tasks.sqlite3")
+    task = store.create_agent_task("task-abc", "bud", "oracle", ["reasoning"])
+    assert task["status"] == "queued"
+    assert task["required_capabilities"] == ["reasoning"]
+    running = store.update_agent_task("task-abc", "running")
+    assert running["status"] == "running"
+    succeeded = store.update_agent_task(
+        "task-abc", "succeeded", connector_id="ollama-oracle-primary", provider="ollama-local")
+    assert succeeded["status"] == "succeeded"
+    assert succeeded["connector_id"] == "ollama-oracle-primary"
+    assert store.get_agent_task("task-abc") == succeeded
+    with pytest.raises(ValueError, match="state transition"):
+        store.update_agent_task("task-abc", "failed")
