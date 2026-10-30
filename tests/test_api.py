@@ -316,3 +316,47 @@ def test_failed_turn_is_rolled_back_without_deleting_earlier_conversation_histor
     assert failed.status_code == 503
     assert api.get_store().get_messages(conversation_id) == before
     assert api.get_store().conversation_exists(conversation_id)
+
+
+def test_agent_registry_exposes_bud_and_oracle_with_spark_orbits_reserved(client):
+    response = client.get("/v1/agents", headers=auth())
+    assert response.status_code == 200
+    agents = {item["agent_id"]: item for item in response.json()["data"]}
+    assert agents["bud"]["enabled"] is True
+    assert agents["oracle"]["enabled"] is True
+    assert agents["spark"]["enabled"] is False
+    assert agents["orbits"]["enabled"] is False
+    assert agents["bud"]["connected"] is True
+
+
+def test_agent_chat_uses_registry_and_persists_session(client, monkeypatch):
+    class FakeAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            return "BUD received: " + latest_user
+
+    monkeypatch.setattr(api, "ArcAgent", FakeAgent)
+    response = client.post(
+        "/v1/agents/bud/chat",
+        headers=auth(),
+        json={"messages": [{"role": "user", "content": "Hello BUD"}]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_id"] == "bud"
+    assert body["message"]["content"] == "BUD received: Hello BUD"
+    session_id = body["session_id"]
+    assert client.get("/v1/conversations", headers=auth()).status_code == 200
+    saved = api.get_store().get_messages(session_id)
+    assert [item["role"] for item in saved] == ["user", "assistant"]
+
+
+def test_plugin_catalog_is_visible_but_disabled_by_default(client):
+    response = client.get("/v1/plugins", headers=auth())
+    assert response.status_code == 200
+    plugins = {item["plugin_id"]: item for item in response.json()["data"]}
+    assert plugins["calculator"]["enabled"] is False
+    assert plugins["files"]["enabled"] is False
+
