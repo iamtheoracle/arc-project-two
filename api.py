@@ -154,15 +154,43 @@ def _build_agent_registry(store: ArcStore):
     return registry
 
 
-def _session_registry(store: ArcStore):
+def _session_registry(store: ArcStore, session_id: str | None = None):
     sessions = SessionConnectorRegistry()
+    backup_path = os.environ.get("ORACLE_ARC_SESSION_BACKUP_DB_PATH", "").strip()
+    backup_store = None
+    if backup_path:
+        if os.path.realpath(backup_path) == os.path.realpath(store.path):
+            raise RegistryError("Session backup must use a separate database file")
+        backup_store = ArcStore(backup_path)
+        if session_id and not backup_store.conversation_exists(session_id):
+            backup_store.create_conversation(conversation_id=session_id)
+            for item in store.get_messages(session_id):
+                backup_store.add_message(session_id, item["role"], item["content"])
+
+    def save_primary(current_session_id, items):
+        for item in items:
+            store.add_message(current_session_id, item["role"], item["content"])
+        if backup_store is not None:
+            for item in items:
+                backup_store.add_message(current_session_id, item["role"], item["content"])
+
     sessions.register(SessionConnector(
         "sqlite-primary", 10,
-        load=lambda session_id: store.get_messages(session_id),
-        save=lambda session_id, items: [
-            store.add_message(session_id, item["role"], item["content"]) for item in items
-        ],
+        load=lambda current_session_id: store.get_messages(current_session_id),
+        save=save_primary,
     ))
+    if backup_store is not None:
+        def save_backup(current_session_id, items):
+            if not backup_store.conversation_exists(current_session_id):
+                backup_store.create_conversation(conversation_id=current_session_id)
+            for item in items:
+                backup_store.add_message(current_session_id, item["role"], item["content"])
+
+        sessions.register(SessionConnector(
+            "sqlite-independent-backup", 20,
+            load=lambda current_session_id: backup_store.get_messages(current_session_id),
+            save=save_backup,
+        ))
     return sessions
 
 
@@ -282,7 +310,7 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
     else:
         target_agent_id, delegation_reason = select_agent(agent_id, incoming[-1]["content"])
         automatic_delegation = target_agent_id != agent_id
-    sessions = _session_registry(store)
+    sessions = _session_registry(store, session_id)
     try:
         history = sessions.load(session_id)["result"]
         sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"]}])
