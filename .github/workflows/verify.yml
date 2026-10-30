@@ -40,5 +40,8 @@ jobs:
           assert rejected.startswith("Error:")
           print("Rootless Podman worker execution and rejection checks passed.")
           PY
+      - name: Verify sandbox restrictions inside the actual container
+        run: |
+          podman run --rm --pull=never --network=none --ipc=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=16 --memory=128m --memory-swap=128m --cpus=0.5 --user=65534:65534 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m --ulimit=nofile=32:32 oracle-arc-plugin-worker:ci python -I -c "import os,pathlib; assert os.geteuid()==65534; status=pathlib.Path('/proc/self/status').read_text(); assert next(x for x in status.splitlines() if x.startswith('CapEff:')).split()[1]=='0000000000000000'; assert next(x for x in status.splitlines() if x.startswith('NoNewPrivs:')).split()[1]=='1'; assert not any(line.split()[1]=='00000000' for line in pathlib.Path('/proc/net/route').read_text().splitlines()[1:]); p='/app/.write-probe'; exec('try:\\n open(p,\\'w\\').close()\\n raise AssertionError(\\'worker root filesystem is writable\\')\\nexcept OSError: pass'); print('UID, capabilities, no-new-privileges, network isolation and read-only filesystem verified')"
       - name: Run tests
         run: python -m pytest -q
