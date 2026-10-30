@@ -157,9 +157,9 @@ This is the first implementation pass of the personal core. Real Ollama inferenc
 
 Owner-authenticated task routes:
 - `GET /v1/agent-tasks/{task_id}` — inspect task status and routing metadata.
-- `POST /v1/agent-tasks/{task_id}/cancel` — cancel a queued or running task. Finished tasks cannot be cancelled again.
+- `POST /v1/agent-tasks/{task_id}/cancel` — mark a queued or running task as cancelled. A running model HTTP call cannot yet be forcibly interrupted; the API prevents its late result from being saved. Finished tasks cannot be cancelled again.
 
-Task claims use SQLite `BEGIN IMMEDIATE` transactions, worker ownership and expiring leases. Expired leases are recovered and requeued up to a bounded attempt count; tasks that exhaust the retry limit are marked failed. A worker can renew only its own unexpired lease, and only the lease owner can complete the task.
+Task claims use SQLite `BEGIN IMMEDIATE` transactions, worker ownership and expiring leases. Expired leases are recovered and requeued up to a bounded attempt count; tasks that exhaust the retry limit are marked failed. A worker can renew only its own unexpired lease, and only the lease owner can complete the task. The synchronous API path renews its lease while a long model call is active.
 
 Task creation and lifecycle changes write transactional outbox events in the same database transaction. Outbox consumers claim events with expiring leases and acknowledge delivery. Delivery is at-least-once, so consumers must deduplicate by event ID.
 
