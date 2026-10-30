@@ -4,4 +4,4 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY --chown=65534:65534 core/plugin_worker.py /app/plugin_worker.py
 USER 65534:65534
-ENTRYPOINT ["python", "-I", "/app/plugin_worker.py"]
+CMD ["python", "-I", "/app/plugin_worker.py"]
