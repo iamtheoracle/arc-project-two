@@ -458,3 +458,38 @@ def test_bud_keeps_ordinary_companion_chat(client, monkeypatch):
     assert response.status_code == 200
     assert response.json()["handled_by"] == "bud"
     assert response.json()["automatic_delegation"] is False
+
+def test_agent_session_is_mirrored_to_independent_backup_store(client, monkeypatch, tmp_path):
+    backup_path = tmp_path / "session-backup.sqlite3"
+    monkeypatch.setenv("ORACLE_ARC_SESSION_BACKUP_DB_PATH", str(backup_path))
+
+    class FakeAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            return "Saved with backup"
+
+    monkeypatch.setattr(api, "ArcAgent", FakeAgent)
+    response = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Keep this session"}]
+    })
+    assert response.status_code == 200
+    session_id = response.json()["session_id"]
+    from core.store import ArcStore
+    backup = ArcStore(backup_path)
+    assert backup.get_messages(session_id) == api.get_store().get_messages(session_id)
+
+
+def test_session_load_falls_back_to_independent_backup(monkeypatch, tmp_path):
+    from core.store import ArcStore
+    primary = ArcStore(tmp_path / "primary.sqlite3")
+    session_id = primary.create_conversation("continuity")
+    primary.add_message(session_id, "user", "Earlier message")
+    monkeypatch.setenv("ORACLE_ARC_SESSION_BACKUP_DB_PATH", str(tmp_path / "backup.sqlite3"))
+    sessions = api._session_registry(primary, session_id)
+    primary.get_messages = lambda _session_id: (_ for _ in ()).throw(OSError("primary offline"))
+    loaded = sessions.load(session_id)
+    assert loaded["fallback_used"] is True
+    assert loaded["result"] == [{"role": "user", "content": "Earlier message"}]
+    assert loaded["connector_id"] == "sqlite-independent-backup"
