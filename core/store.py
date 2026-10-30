@@ -75,6 +75,7 @@ class ArcStore:
                     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
                     role TEXT NOT NULL CHECK(role IN ('user','assistant')),
                     content TEXT NOT NULL,
+                    event_id TEXT,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
@@ -104,6 +105,10 @@ class ArcStore:
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
             """)
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+            if "event_id" not in columns:
+                conn.execute("ALTER TABLE messages ADD COLUMN event_id TEXT")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_event_id ON messages(event_id) WHERE event_id IS NOT NULL")
 
     def create_conversation(self, title: str = "", conversation_id: str | None = None) -> str:
         conversation_id = conversation_id or str(uuid.uuid4())
@@ -115,14 +120,21 @@ class ArcStore:
         with self._session() as conn:
             return conn.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone() is not None
 
-    def add_message(self, conversation_id: str, role: str, content: str) -> int:
+    def add_message(self, conversation_id: str, role: str, content: str,
+                    event_id: str | None = None) -> int:
         if role not in ("user", "assistant"):
             raise ValueError("Unsupported message role")
         with self._session() as conn:
-            cursor = conn.execute(
-                "INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)",
-                (conversation_id, role, content),
-            )
+            if event_id is None:
+                cursor = conn.execute(
+                    "INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)",
+                    (conversation_id, role, content),
+                )
+            else:
+                cursor = conn.execute(
+                    "INSERT OR IGNORE INTO messages(conversation_id,role,content,event_id) VALUES(?,?,?,?)",
+                    (conversation_id, role, content, event_id),
+                )
             conn.execute(
                 "UPDATE conversations SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
                 (conversation_id,),
