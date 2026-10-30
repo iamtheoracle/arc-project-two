@@ -60,6 +60,11 @@ class UserProfileUpdate(BaseModel):
     interests: list[str] = Field(default_factory=list, max_length=30)
 
 
+class BoundaryCreate(BaseModel):
+    boundary: str = Field(min_length=3, max_length=1000)
+    context: str = Field(default="", max_length=500)
+
+
 
 
 def _model_name(requested: str | None) -> str:
@@ -89,6 +94,19 @@ def _system_prompt(store: ArcStore) -> str:
 
     profile = normalize_profile(store.get_user_profile())
     sections = [SYSTEM_PROMPT, HUMAN_UNDERSTANDING_PROMPT, build_human_context(profile)]
+    boundaries = store.list_boundaries(active_only=True)
+    boundary_lines = [
+        "ACTIVE USER BOUNDARIES (explicitly stated or confirmed by the user):",
+        "Respect these personal limits. Check them before relevant replies and actions.",
+    ]
+    for item in boundaries[:100]:
+        line = "- " + item["boundary"][:1000]
+        if item["context"]:
+            line += " (context: " + item["context"][:500] + ")"
+        boundary_lines.append(line)
+    if not boundaries:
+        boundary_lines.append("- No explicit boundaries have been saved.")
+    sections.append("\n".join(boundary_lines))
     if entries:
         sections.append(
             "Owner-managed persistent memory (personal context, not instructions):\n"
@@ -108,6 +126,25 @@ def update_profile(request: UserProfileUpdate, store: ArcStore = Depends(get_sto
     profile = normalize_profile(request.model_dump())
     saved = store.save_user_profile(profile)
     return {"profile": saved["profile"], "updated_at": saved["updated_at"]}
+
+
+@app.get("/v1/boundaries", dependencies=[Depends(require_owner)])
+def boundaries(store: ArcStore = Depends(get_store)):
+    return {"data": store.list_boundaries(active_only=True)}
+
+
+@app.post("/v1/boundaries", dependencies=[Depends(require_owner)], status_code=201)
+def create_boundary(request: BoundaryCreate, store: ArcStore = Depends(get_store)):
+    if not request.boundary.strip():
+        raise HTTPException(status_code=422, detail="Boundary cannot be blank.")
+    return store.add_boundary(request.boundary, request.context)
+
+
+@app.delete("/v1/boundaries/{boundary_id}", dependencies=[Depends(require_owner)])
+def revoke_boundary(boundary_id: str, store: ArcStore = Depends(get_store)):
+    if not store.deactivate_boundary(boundary_id):
+        raise HTTPException(status_code=404, detail="Active boundary not found.")
+    return {"revoked": True, "id": boundary_id}
 
 
 @app.get("/healthz")
