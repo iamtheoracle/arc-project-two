@@ -632,3 +632,26 @@ def test_owner_can_cancel_queued_agent_task(client):
     assert status.json()["status"] == "cancelled"
     again = client.post(f"/v1/agent-tasks/{task_id}/cancel", headers=auth())
     assert again.status_code == 409
+
+
+def test_cancelled_running_task_cannot_persist_late_model_response(client, monkeypatch):
+    store = api.get_store()
+
+    class CancellingRegistry:
+        def dispatch(self, agent_id, payload, required_capabilities=()):
+            store.update_agent_task(
+                payload["task_id"], "cancelled", error_code="cancelled_by_owner"
+            )
+            return {
+                "result": "This late response must not be saved",
+                "connector_id": "fake-worker",
+                "provider": "fake",
+                "fallback_used": False,
+            }
+
+    monkeypatch.setattr(api, "_build_agent_registry", lambda _store: CancellingRegistry())
+    response = client.post("/v1/agents/bud/chat", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Run a cancellable task"}]
+    })
+    assert response.status_code == 409
+    assert "cancelled" in response.json()["detail"].lower()
