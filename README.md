@@ -116,7 +116,7 @@ The authenticated agent API currently registers BUD and ORACLE. SPARK and ORBITS
 - \`POST /v1/agents/oracle/chat\` — send a turn to ORACLE.
 - \`GET /v1/plugins\` — list plugin manifests and required permissions; this is a catalogue, not an execution endpoint.
 
-Agent chat accepts a messages array and an optional existing \`session_id\`. Session history is stored in the existing SQLite conversation store. The session connector interface supports ordered fallback adapters, but SQLite is still the only durable session adapter wired in this build. Independent mirrored backup storage and tested recovery are not yet implemented.
+Agent chat accepts a messages array and an optional existing \`session_id\`. Session history is stored in the existing SQLite conversation store. SQLite is the primary session store. Set `ORACLE_ARC_SESSION_BACKUP_DB_PATH` to a different durable database file to enable a second SQLite store. Session history is copied when a backup session is first created, then new turns are mirrored; reads fall back to the backup if the primary read fails, and writes fall back to the backup if the primary write fails. Keep the backup on an independent disk or host to protect against machine or volume loss. Two SQLite files on the same disk are not protection against disk failure. This is synchronous application-level replication, not a distributed consensus system; restore and failover still require operational testing.
 
 Set \`ORACLE_ARC_OLLAMA_FALLBACK_HOSTS\` to a comma-separated list of independent Ollama service URLs to enable model-connector failover, for example:
 
