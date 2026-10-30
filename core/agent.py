@@ -22,8 +22,9 @@ class ArcAgent:
         model: str = "qwen2.5:7b",
         approved_tools: Optional[set[str]] = None,
         tool_audit: Optional[Callable[[str, str], None]] = None,
+        host: Optional[str] = None,
     ):
-        self.llm = LocalLLM(model=model)
+        self.llm = LocalLLM(model=model, host=host)
         self.plugins = PluginRegistry()
         self.approved_tools = set(approved_tools or ())
         self.tool_audit = tool_audit
