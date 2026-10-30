@@ -6,6 +6,7 @@ import json
 import os
 import time
 import uuid
+import threading
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -216,6 +217,31 @@ def _claim_agent_task(store: ArcStore, task_id: str, worker_id: str,
         except Exception:
             continue
     raise RegistryError("No durable task store could claim this task")
+
+
+def _renew_agent_task_lease(store: ArcStore, task_id: str, worker_id: str,
+                               lease_seconds: int = 120) -> bool:
+    for candidate in _task_store_candidates(store):
+        try:
+            if candidate.renew_agent_task_lease(task_id, worker_id, lease_seconds):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _start_task_lease_heartbeat(store: ArcStore, task_id: str, worker_id: str,
+                                lease_seconds: int = 120):
+    stop = threading.Event()
+
+    def heartbeat():
+        while not stop.wait(30):
+            if not _renew_agent_task_lease(store, task_id, worker_id, lease_seconds):
+                return
+
+    thread = threading.Thread(target=heartbeat, name=f"oracle-task-lease-{task_id[:8]}", daemon=True)
+    thread.start()
+    return stop, thread
 
 
 def _update_agent_task(store: ArcStore, task_id: str, status: str,
@@ -429,6 +455,7 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
     try:
         _create_agent_task(store, task_id, agent_id, target_agent_id, required_capabilities)
         _claim_agent_task(store, task_id, worker_id, lease_seconds=120)
+        lease_stop, lease_thread = _start_task_lease_heartbeat(store, task_id, worker_id, 120)
         sessions = _session_registry(store, session_id)
         history = sessions.load(session_id)["result"]
         sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"],
@@ -445,19 +472,30 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
         _update_agent_task(store, task_id, "succeeded",
                                 connector_id=result["connector_id"], provider=result["provider"],
                                 worker_id=worker_id)
+        lease_stop.set()
+        lease_thread.join(timeout=2)
     except SessionNotFoundError:
+        if "lease_stop" in locals():
+            lease_stop.set()
+            lease_thread.join(timeout=2)
         try:
             _update_agent_task(store, task_id, "failed", error_code="session_not_found", worker_id=worker_id)
         except RegistryError:
             pass
         raise HTTPException(status_code=404, detail="Session not found.")
     except RegistryError as exc:
+        if "lease_stop" in locals():
+            lease_stop.set()
+            lease_thread.join(timeout=2)
         try:
             _update_agent_task(store, task_id, "failed", error_code="agent_registry_failure", worker_id=worker_id)
         except RegistryError:
             pass
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
+        if "lease_stop" in locals():
+            lease_stop.set()
+            lease_thread.join(timeout=2)
         try:
             _update_agent_task(store, task_id, "failed", error_code="agent_execution_failure", worker_id=worker_id)
         except RegistryError:
