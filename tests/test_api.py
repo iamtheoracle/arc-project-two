@@ -387,3 +387,39 @@ def test_agent_chat_fails_over_to_second_ollama_host(client, monkeypatch):
     assert response.json()["provider"] == "ollama-fallback"
     assert response.json()["message"]["content"] == "Answered by backup"
 
+
+
+def test_bud_can_explicitly_delegate_to_oracle(client, monkeypatch):
+    class FakeAgent:
+        def __init__(self, model, approved_tools, host=None):
+            self.messages = []
+            self.tool_audit = None
+        def chat(self, latest_user, max_steps=4):
+            return "Oracle handled: " + latest_user
+
+    monkeypatch.setattr(api, "ArcAgent", FakeAgent)
+    response = client.post(
+        "/v1/agents/bud/chat",
+        headers=auth(),
+        json={
+            "messages": [{"role": "user", "content": "Research this problem"}],
+            "delegate_to": "oracle",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["agent_id"] == "bud"
+    assert response.json()["handled_by"] == "oracle"
+    assert response.json()["message"]["content"] == "Oracle handled: Research this problem"
+
+
+def test_only_bud_can_delegate_to_oracle(client):
+    response = client.post(
+        "/v1/agents/oracle/chat",
+        headers=auth(),
+        json={
+            "messages": [{"role": "user", "content": "Do this"}],
+            "delegate_to": "oracle",
+        },
+    )
+    assert response.status_code == 400
+
