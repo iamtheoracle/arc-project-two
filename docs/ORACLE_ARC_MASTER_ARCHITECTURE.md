@@ -126,13 +126,13 @@ The benchmark must test BUD's conversational fit and routing, Spark's memory iso
 
 The first registry implementation provides:
 - Registered agent identities for BUD, ORACLE, SPARK and ORBITS. BUD and ORACLE are enabled; SPARK and ORBITS remain disabled until their specialist runtimes exist.
-- BUD and ORACLE chat routes through a shared registry.
+- BUD and ORACLE chat routes through a shared registry, with an explicit BUD-to-ORACLE delegation field that preserves the same session.
 - Ordered Ollama connectors with per-connector failure cooldown and fallback to separately configured hosts through \`ORACLE_ARC_OLLAMA_FALLBACK_HOSTS\`.
 - Session connector interface with ordered fallback. SQLite is currently the only wired session persistence adapter.
 - Metadata-only plugin catalogue and an explicit allowlist for the reviewed calculator built-in. Arbitrary plugin file discovery is removed; file and system plugins are not executable.
 - Authenticated registry, plugin catalogue and agent chat endpoints.
 
-This is an initial single-process registry and connector layer, not yet a distributed agent control plane. Connector health is learned from request failures, not an active readiness probe. A fallback Ollama URL is useful only if the operator provisions a separate healthy service with the selected model. The current calculator executes in-process and is not a sandbox. Third-party plugins, persistent cross-process circuit state, independent session-store failover, service identities, and real BUD-to-ORACLE delegation remain follow-up work.
+This is an initial single-process registry and connector layer, not yet a distributed agent control plane. Connector health is learned from request failures, not an active readiness probe. A fallback Ollama URL is useful only if the operator provisions a separate healthy service with the selected model. The current calculator executes in-process and is not a sandbox. Third-party plugins, persistent cross-process circuit state, independent session-store failover, service identities, and automatic model-selected BUD-to-ORACLE delegation remains follow-up work.
 
 ## Cross-cutting architecture
 
