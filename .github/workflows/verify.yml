@@ -30,6 +30,7 @@ jobs:
         env:
           ORACLE_ARC_PLUGIN_WORKER_IMAGE: oracle-arc-plugin-worker:ci
         run: |
+          printf '{"expression":"sqrt(81) + 3 * 2"}' | podman run --rm --pull=never --network=none --ipc=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=16 --memory=128m --memory-swap=128m --cpus=0.5 --user=65534:65534 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m --ulimit=nofile=32:32 oracle-arc-plugin-worker:ci
           python - <<'PY'
           from core.plugins import PluginRegistry, run_isolated_worker
           assert run_isolated_worker({"expression": "sqrt(81) + 3 * 2"}) == {"result": 15.0}
