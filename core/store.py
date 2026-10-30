@@ -446,8 +446,8 @@ class ArcStore:
         with self._session() as conn:
             cursor = conn.execute(
                 "UPDATE agent_task_outbox SET status='published',lease_owner=NULL,lease_expires_at=NULL "
-                "WHERE event_id=? AND status='leased' AND lease_owner=?",
-                (event_id, worker_id),
+                "WHERE event_id=? AND status='leased' AND lease_owner=? AND lease_expires_at>?",
+                (event_id, worker_id, int(time.time())),
             )
             return cursor.rowcount == 1
 
@@ -457,8 +457,9 @@ class ArcStore:
         with self._session() as conn:
             cursor = conn.execute(
                 "UPDATE agent_task_outbox SET status='pending',lease_owner=NULL,lease_expires_at=NULL,"
-                "available_at=?,attempts=attempts WHERE event_id=? AND status='leased' AND lease_owner=?",
-                (int(time.time()) + delay_seconds, event_id, worker_id),
+                "available_at=?,attempts=attempts WHERE event_id=? AND status='leased' "
+                "AND lease_owner=? AND lease_expires_at>?",
+                (int(time.time()) + delay_seconds, event_id, worker_id, int(time.time())),
             )
             return cursor.rowcount == 1
 
@@ -473,8 +474,11 @@ class ArcStore:
             current = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
             if current is None:
                 return None
-            if worker_id is not None and current["worker_id"] != worker_id:
-                raise ValueError("Worker does not own this task lease")
+            if worker_id is not None:
+                if current["worker_id"] != worker_id:
+                    raise ValueError("Worker does not own this task lease")
+                if current["lease_expires_at"] is None or current["lease_expires_at"] <= int(time.time()):
+                    raise ValueError("Worker task lease has expired")
             transitions = {
                 "queued": {"running", "failed", "cancelled"},
                 "running": {"succeeded", "failed", "cancelled", "queued"},
