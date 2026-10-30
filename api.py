@@ -155,6 +155,58 @@ def _build_agent_registry(store: ArcStore):
     return registry
 
 
+def _task_store_candidates(store: ArcStore) -> list[ArcStore]:
+    candidates = [store]
+    backup_path = os.environ.get("ORACLE_ARC_SESSION_BACKUP_DB_PATH", "").strip()
+    if backup_path and os.path.realpath(backup_path) != os.path.realpath(store.path):
+        try:
+            candidates.append(ArcStore(backup_path))
+        except Exception:
+            pass
+    return candidates
+
+
+def _create_agent_task(store: ArcStore, task_id: str, source_agent: str,
+                       target_agent: str, required_capabilities: list[str]) -> None:
+    created = 0
+    for candidate in _task_store_candidates(store):
+        try:
+            candidate.create_agent_task(task_id, source_agent, target_agent, required_capabilities)
+            created += 1
+        except Exception:
+            # Continue to the independent durable store if the primary is unavailable.
+            continue
+    if not created:
+        raise RegistryError("No durable task store is available")
+
+
+def _update_agent_task(store: ArcStore, task_id: str, status: str,
+                       connector_id: str | None = None, provider: str | None = None,
+                       error_code: str | None = None) -> None:
+    updated = 0
+    for candidate in _task_store_candidates(store):
+        try:
+            if candidate.get_agent_task(task_id) is None:
+                continue
+            candidate.update_agent_task(task_id, status, connector_id, provider, error_code)
+            updated += 1
+        except Exception:
+            continue
+    if not updated:
+        raise RegistryError("No durable task store is available")
+
+
+def _get_agent_task(store: ArcStore, task_id: str):
+    for candidate in _task_store_candidates(store):
+        try:
+            task = candidate.get_agent_task(task_id)
+            if task is not None:
+                return task
+        except Exception:
+            continue
+    return None
+
+
 def _session_registry(store: ArcStore, session_id: str | None = None):
     sessions = SessionConnectorRegistry()
     backup_path = os.environ.get("ORACLE_ARC_SESSION_BACKUP_DB_PATH", "").strip()
@@ -331,8 +383,8 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
 
     task_id = uuid.uuid4().hex
     required_capabilities = ["reasoning"] if target_agent_id == "oracle" else ["conversation"]
-    store.create_agent_task(task_id, agent_id, target_agent_id, required_capabilities)
-    store.update_agent_task(task_id, "running")
+    _create_agent_task(store, task_id, agent_id, target_agent_id, required_capabilities)
+    _update_agent_task(store, task_id, "running")
     try:
         sessions = _session_registry(store, session_id)
         history = sessions.load(session_id)["result"]
@@ -347,16 +399,16 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
             raise RegistryError("Agent returned an empty response")
         sessions.save(session_id, [{"role": "assistant", "content": answer,
                                     "event_id": uuid.uuid4().hex}])
-        store.update_agent_task(task_id, "succeeded",
+        _update_agent_task(store, task_id, "succeeded",
                                 connector_id=result["connector_id"], provider=result["provider"])
     except SessionNotFoundError:
-        store.update_agent_task(task_id, "failed", error_code="session_not_found")
+        _update_agent_task(store, task_id, "failed", error_code="session_not_found")
         raise HTTPException(status_code=404, detail="Session not found.")
     except RegistryError as exc:
-        store.update_agent_task(task_id, "failed", error_code="agent_registry_failure")
+        _update_agent_task(store, task_id, "failed", error_code="agent_registry_failure")
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
-        store.update_agent_task(task_id, "failed", error_code="agent_execution_failure")
+        _update_agent_task(store, task_id, "failed", error_code="agent_execution_failure")
         raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
     return {"task_id": task_id, "agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
             "provider": result["provider"], "fallback_used": result["fallback_used"],
@@ -367,7 +419,7 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
 
 @app.get("/v1/agent-tasks/{task_id}", dependencies=[Depends(require_owner)])
 def get_agent_task(task_id: str, store: ArcStore = Depends(get_store)):
-    task = store.get_agent_task(task_id)
+    task = _get_agent_task(store, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Agent task not found.")
     return task
