@@ -220,6 +220,7 @@ def test_model_failures_return_safe_503_without_leaking_internal_errors(client, 
     assert response.status_code == 503
     assert response.json()["detail"] == expected_detail
     assert "private internal model error" not in response.text
+    assert client.get("/v1/conversations", headers=auth()).json()["data"] == []
 
 
 def test_boundaries_are_persisted_loaded_into_prompt_and_revocable(client):
@@ -283,3 +284,35 @@ def test_malformed_profile_storage_does_not_break_system_prompt(client):
     prompt = api._system_prompt(api.get_store())
     assert "Explanation detail: simple" in prompt
     assert "Conversation tone: natural" in prompt
+
+
+
+def test_failed_turn_is_rolled_back_without_deleting_earlier_conversation_history(client, monkeypatch):
+    class SwitchingAgent:
+        fail = False
+
+        def __init__(self, model, approved_tools):
+            self.messages = []
+            self.tool_audit = None
+
+        def chat(self, user_input, max_steps=8):
+            if SwitchingAgent.fail:
+                raise RuntimeError("private model failure")
+            return "First response."
+
+    monkeypatch.setattr(api, "_agent", lambda model, approved_tools: SwitchingAgent(model, approved_tools))
+    first = client.post("/v1/chat/completions", headers=auth(), json={
+        "messages": [{"role": "user", "content": "Keep this successful turn."}]
+    })
+    assert first.status_code == 200
+    conversation_id = first.json()["conversation_id"]
+    before = api.get_store().get_messages(conversation_id)
+
+    SwitchingAgent.fail = True
+    failed = client.post("/v1/chat/completions", headers=auth(), json={
+        "conversation_id": conversation_id,
+        "messages": [{"role": "user", "content": "This turn will fail."}]
+    })
+    assert failed.status_code == 503
+    assert api.get_store().get_messages(conversation_id) == before
+    assert api.get_store().conversation_exists(conversation_id)
