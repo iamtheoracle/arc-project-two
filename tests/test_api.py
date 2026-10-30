@@ -326,7 +326,7 @@ def test_agent_registry_exposes_bud_and_oracle_with_spark_orbits_reserved(client
     assert agents["oracle"]["enabled"] is True
     assert agents["spark"]["enabled"] is False
     assert agents["orbits"]["enabled"] is False
-    assert agents["bud"]["connected"] is True
+    assert agents["bud"]["has_configured_connector"] is True
 
 
 def test_agent_chat_uses_registry_and_persists_session(client, monkeypatch):
