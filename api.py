@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from core.agent import ArcAgent, SYSTEM_PROMPT
 from core.delegation import select_agent
+from core.providers import OpenAICompatibleProvider, PROVIDERS
 from core.plugins import PluginRegistry
 from core.store import ArcStore
 from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_context, normalize_profile
@@ -131,6 +132,23 @@ def _build_agent_registry(store: ArcStore):
             registry.register_connector(agent_id, Connector(
                 connector_id, provider, index * 10, run,
                 failure_threshold=1, cooldown_seconds=30.0))
+        for provider_index, config in enumerate(PROVIDERS):
+            adapter = OpenAICompatibleProvider(config)
+            if not adapter.configured:
+                continue
+
+            def run_remote(payload, selected_adapter=adapter, selected_agent=agent_id):
+                messages = [
+                    {"role": "system", "content": _system_prompt(store) + "\\n\\n" + prompts[selected_agent]}
+                ] + payload["history"] + [
+                    {"role": "user", "content": payload["latest_user"]}
+                ]
+                return selected_adapter.chat({"messages": messages})
+
+            registry.register_connector(agent_id, Connector(
+                config.provider_id + "-" + agent_id, config.provider_id,
+                100 + provider_index * 10, run_remote,
+                failure_threshold=1, cooldown_seconds=60.0))
     _agent_registry_cache = registry
     _agent_registry_store = store
     return registry
