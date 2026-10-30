@@ -96,3 +96,15 @@ def test_agent_registry_reports_connector_failure_health_without_error_details()
     assert status["failure_count"] == 1
     assert status["last_error_type"] == "ConnectionError"
     assert "sensitive endpoint detail" not in str(status)
+
+def test_agent_registry_marks_backup_as_fallback_when_primary_is_in_cooldown():
+    registry = AgentRegistry()
+    registry.register_agent(AgentDefinition("oracle", "ORACLE", "Reasoning", ("reasoning",)))
+    primary = Connector("primary", "local", 10, lambda payload: "primary")
+    primary.unavailable_until = 10**20
+    registry.register_connector("oracle", primary)
+    registry.register_connector("oracle", Connector("backup", "remote", 20, lambda payload: "backup"))
+    result = registry.dispatch("oracle", {})
+    assert result["connector_id"] == "backup"
+    assert result["fallback_used"] is True
+    assert result["attempted_connectors"] == ["backup"]
