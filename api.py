@@ -195,15 +195,43 @@ def _create_agent_task(store: ArcStore, task_id: str, source_agent: str,
         raise RegistryError("No durable task store is available")
 
 
+def _claim_agent_task(store: ArcStore, task_id: str, worker_id: str,
+                      lease_seconds: int = 120) -> dict[str, Any]:
+    for candidate in _task_store_candidates(store):
+        try:
+            task = candidate.claim_agent_task(worker_id, lease_seconds=lease_seconds)
+            if task and task["task_id"] == task_id:
+                # Mirror lifecycle metadata to the independent store where possible.
+                for mirror in _task_store_candidates(store):
+                    if mirror is candidate:
+                        continue
+                    try:
+                        mirror.update_agent_task(task_id, "running")
+                    except Exception:
+                        continue
+                return task
+            if task:
+                # Do not strand a different task claimed by this request's worker.
+                candidate.update_agent_task(task["task_id"], "queued", error_code="claim_not_requested",
+                                             worker_id=worker_id)
+        except Exception:
+            continue
+    raise RegistryError("No durable task store could claim this task")
+
+
 def _update_agent_task(store: ArcStore, task_id: str, status: str,
                        connector_id: str | None = None, provider: str | None = None,
-                       error_code: str | None = None) -> None:
+                       error_code: str | None = None,
+                       worker_id: str | None = None) -> None:
     updated = 0
     for candidate in _task_store_candidates(store):
         try:
             if candidate.get_agent_task(task_id) is None:
                 continue
-            candidate.update_agent_task(task_id, status, connector_id, provider, error_code)
+            task = candidate.get_agent_task(task_id)
+            owner = worker_id if task and task.get("worker_id") == worker_id else None
+            candidate.update_agent_task(task_id, status, connector_id, provider, error_code,
+                                        worker_id=owner)
             updated += 1
         except Exception:
             continue
@@ -399,7 +427,8 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
     task_id = uuid.uuid4().hex
     required_capabilities = ["reasoning"] if target_agent_id == "oracle" else ["conversation"]
     _create_agent_task(store, task_id, agent_id, target_agent_id, required_capabilities)
-    _update_agent_task(store, task_id, "running")
+    worker_id = "api-sync-" + uuid.uuid4().hex
+    _claim_agent_task(store, task_id, worker_id, lease_seconds=120)
     try:
         sessions = _session_registry(store, session_id)
         history = sessions.load(session_id)["result"]
@@ -415,15 +444,16 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
         sessions.save(session_id, [{"role": "assistant", "content": answer,
                                     "event_id": uuid.uuid4().hex}])
         _update_agent_task(store, task_id, "succeeded",
-                                connector_id=result["connector_id"], provider=result["provider"])
+                                connector_id=result["connector_id"], provider=result["provider"],
+                                worker_id=worker_id)
     except SessionNotFoundError:
-        _update_agent_task(store, task_id, "failed", error_code="session_not_found")
+        _update_agent_task(store, task_id, "failed", error_code="session_not_found", worker_id=worker_id)
         raise HTTPException(status_code=404, detail="Session not found.")
     except RegistryError as exc:
-        _update_agent_task(store, task_id, "failed", error_code="agent_registry_failure")
+        _update_agent_task(store, task_id, "failed", error_code="agent_registry_failure", worker_id=worker_id)
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
-        _update_agent_task(store, task_id, "failed", error_code="agent_execution_failure")
+        _update_agent_task(store, task_id, "failed", error_code="agent_execution_failure", worker_id=worker_id)
         raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
     return {"task_id": task_id, "agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
             "provider": result["provider"], "fallback_used": result["fallback_used"],
