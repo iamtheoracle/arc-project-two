@@ -329,7 +329,7 @@ class ArcStore:
         return self._agent_task_row(row)
 
     def claim_agent_task(self, worker_id: str, lease_seconds: int = 60,
-                         max_attempts: int = 5) -> dict[str, Any] | None:
+                         max_attempts: int = 5, task_id: str | None = None) -> dict[str, Any] | None:
         if not worker_id or len(worker_id) > 128:
             raise ValueError("Invalid worker identity")
         if not 5 <= lease_seconds <= 3600 or not 1 <= max_attempts <= 20:
@@ -337,12 +337,16 @@ class ArcStore:
         now = int(time.time())
         with self._session() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
+            query = (
                 "SELECT * FROM agent_tasks WHERE attempts < ? AND "
-                "(status='queued' OR (status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at<=?)) "
-                "ORDER BY created_at,task_id LIMIT 1",
-                (max_attempts, now),
-            ).fetchone()
+                "(status='queued' OR (status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at<=?))"
+            )
+            params: tuple[Any, ...] = (max_attempts, now)
+            if task_id is not None:
+                query += " AND task_id=?"
+                params += (task_id,)
+            query += " ORDER BY created_at,task_id LIMIT 1"
+            row = conn.execute(query, params).fetchone()
             if row is None:
                 return None
             conn.execute(
