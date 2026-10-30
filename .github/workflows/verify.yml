@@ -1,9 +1,9 @@
 name: Oracle Arc Verification
 on:
   push:
-    branches: [main, 'feat/oracle-arc-personal-core']
+    branches: [main, 'feat/oracle-arc-personal-core', 'feat/human-understanding-adaptive-intelligence']
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/oracle-arc-personal-core']
 permissions:
   contents: read
 jobs:
