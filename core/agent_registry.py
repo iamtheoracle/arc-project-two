@@ -95,7 +95,7 @@ class AgentRegistry:
                      "healthy": c.available()}
                     for c in connectors
                 ],
-                "connected": any(c.available() for c in connectors),
+                "has_configured_connector": any(c.enabled for c in connectors),
             })
         return rows
 
