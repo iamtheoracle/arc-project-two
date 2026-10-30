@@ -423,7 +423,7 @@ class ArcStore:
         with self._session() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
-                "UPDATE agent_task_outbox SET dead_letter=1,lease_owner=NULL,lease_expires_at=NULL "
+                "UPDATE agent_task_outbox SET dead_letter=1,status='pending',lease_owner=NULL,lease_expires_at=NULL "
                 "WHERE status='leased' AND lease_expires_at<=? AND attempts>=?",
                 (now, max_attempts),
             )
