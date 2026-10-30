@@ -121,6 +121,19 @@ The benchmark must test BUD's conversational fit and routing, Spark's memory iso
 
 **Implementation status:** roles and trust rules are architecture requirements. Agent registry, service identities, delegation runtime, Orbits visual adapters and end-to-end agent orchestration remain to be implemented and tested.
 
+
+## Agent registry and connector implementation baseline
+
+The first registry implementation provides:
+- Registered agent identities for BUD, ORACLE, SPARK and ORBITS. BUD and ORACLE are enabled; SPARK and ORBITS remain disabled until their specialist runtimes exist.
+- BUD and ORACLE chat routes through a shared registry.
+- Ordered Ollama connectors with per-connector failure cooldown and fallback to separately configured hosts through \`ORACLE_ARC_OLLAMA_FALLBACK_HOSTS\`.
+- Session connector interface with ordered fallback. SQLite is currently the only wired session persistence adapter.
+- Metadata-only plugin catalogue and an explicit allowlist for the reviewed calculator built-in. Arbitrary plugin file discovery is removed; file and system plugins are not executable.
+- Authenticated registry, plugin catalogue and agent chat endpoints.
+
+This is an initial single-process registry and connector layer, not yet a distributed agent control plane. Connector health is learned from request failures, not an active readiness probe. A fallback Ollama URL is useful only if the operator provisions a separate healthy service with the selected model. The current calculator executes in-process and is not a sandbox. Third-party plugins, persistent cross-process circuit state, independent session-store failover, service identities, and real BUD-to-ORACLE delegation remain follow-up work.
+
 ## Cross-cutting architecture
 
 - **Identity:** separate human, tenant, agent, service and tool identities.
