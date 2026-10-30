@@ -327,9 +327,12 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
         history = sessions.load(session_id)["result"]
         sessions.save(session_id, [{"role": "user", "content": incoming[-1]["content"],
                                     "event_id": uuid.uuid4().hex}])
-        payload = {"model": _model_name(None), "history": history[-79:],
+        task_id = uuid.uuid4().hex
+        payload = {"task_id": task_id, "model": _model_name(None), "history": history[-79:],
                    "latest_user": incoming[-1]["content"], "max_steps": request.max_steps}
-        result = _build_agent_registry(store).dispatch(target_agent_id, payload)
+        required_capabilities = ("reasoning",) if target_agent_id == "oracle" else ("conversation",)
+        result = _build_agent_registry(store).dispatch(
+            target_agent_id, payload, required_capabilities=required_capabilities)
         answer = result["result"]
         if not isinstance(answer, str) or not answer.strip():
             raise RegistryError("Agent returned an empty response")
@@ -339,7 +342,7 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
         raise HTTPException(status_code=503, detail="Agent connectors are unavailable. Check configured model services.")
-    return {"agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
+    return {"task_id": task_id, "agent_id": agent_id, "handled_by": target_agent_id, "connector_id": result["connector_id"],
             "provider": result["provider"], "fallback_used": result["fallback_used"],
             "automatic_delegation": automatic_delegation,
             "delegation_reason": delegation_reason,
