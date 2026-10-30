@@ -150,3 +150,23 @@ def test_outbox_event_is_redelivered_after_worker_lease_expires(tmp_path):
     assert second[0]["attempts"] == 2
     assert store.acknowledge_task_outbox(first[0]["event_id"], "worker-lost") is False
     assert store.acknowledge_task_outbox(second[0]["event_id"], "worker-replacement") is True
+
+
+def test_outbox_dead_letters_events_after_delivery_attempt_limit(tmp_path):
+    store = ArcStore(tmp_path / "outbox-dead-letter.sqlite3")
+    store.create_agent_task("task-poison-event", "bud", "oracle", ["reasoning"])
+    first = store.claim_task_outbox("worker-one", max_attempts=2)
+    assert len(first) == 1
+    event_id = first[0]["event_id"]
+    with store._session() as conn:
+        conn.execute("UPDATE agent_task_outbox SET lease_expires_at=0 WHERE event_id=?", (event_id,))
+    second = store.claim_task_outbox("worker-two", max_attempts=2)
+    assert len(second) == 1
+    assert second[0]["attempts"] == 2
+    with store._session() as conn:
+        conn.execute("UPDATE agent_task_outbox SET lease_expires_at=0 WHERE event_id=?", (event_id,))
+    assert store.claim_task_outbox("worker-three", max_attempts=2) == []
+    with store._session() as conn:
+        row = conn.execute("SELECT dead_letter,status FROM agent_task_outbox WHERE event_id=?", (event_id,)).fetchone()
+    assert row["dead_letter"] == 1
+    assert row["status"] == "leased"
