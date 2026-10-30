@@ -28,7 +28,7 @@ def run_isolated_worker(arguments: dict[str, Any]) -> dict[str, Any]:
         "--cpus=0.5", "--user=65534:65534",
         "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m",
         "--ulimit=nofile=32:32", "--log-driver=none",
-        image, "python", "-I", "/app/plugin_worker.py",
+        image,
     ]
     completed = subprocess.run(
         command, input=json.dumps(arguments), text=True,
