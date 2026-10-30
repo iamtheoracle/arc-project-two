@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core.agent import ArcAgent, SYSTEM_PROMPT
+from core.delegation import select_agent
 from core.plugins import PluginRegistry
 from core.store import ArcStore
 from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_context, normalize_profile
@@ -75,22 +76,6 @@ class BoundaryCreate(BaseModel):
     context: str = Field(default="", max_length=500)
 
 
-
-
-def _automatic_delegate(agent_id: str, user_text: str) -> tuple[str, str | None]:
-    """Conservatively route clear specialist tasks from BUD to ORACLE."""
-    if agent_id != "bud":
-        return agent_id, None
-    import re
-    patterns = (
-        r"\b(research|investigate|analy[sz]e|debug|troubleshoot|audit|architect)\b",
-        r"\b(compare|evaluate|assess|design|calculate|solve|diagnose)\b",
-        r"\b(build|implement|write code|review code|plan)\b.{0,60}\b(system|api|application|architecture|strategy|solution|project)\b",
-        r"\b(step[- ]by[- ]step|technical deep dive|root cause)\b",
-    )
-    if any(re.search(pattern, user_text.casefold()) for pattern in patterns):
-        return "oracle", "Clear specialist intent detected; BUD routed the task to ORACLE."
-    return "bud", None
 
 
 def _model_name(requested: str | None) -> str:
@@ -277,7 +262,7 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
         delegation_reason = "The caller explicitly requested ORACLE."
         automatic_delegation = False
     else:
-        target_agent_id, delegation_reason = _automatic_delegate(agent_id, incoming[-1]["content"])
+        target_agent_id, delegation_reason = select_agent(agent_id, incoming[-1]["content"])
         automatic_delegation = target_agent_id != agent_id
     sessions = _session_registry(store)
     try:
