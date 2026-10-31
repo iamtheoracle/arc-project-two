@@ -238,7 +238,7 @@ Workers and API must share the same transactional database. Current SQLite queue
 
 ## Reasoning reliability implementation baseline
 
-A request-aware reliability policy is wired into all current chat entry points. It classifies the latest user request into general, time-sensitive, high-stakes, quantitative, technical or comparison work and adds task-specific requirements for evidence, uncertainty, arithmetic checks, code inspection, rollback and professional escalation. It instructs the model to provide concise explanations and evidence summaries rather than private chain-of-thought.
+A request-aware reliability policy is wired into all current chat entry points. It classifies the latest user request into general, time-sensitive, high-stakes, quantitative, technical or comparison work and independently flags source corroboration, sensitive-data handling and consequential-action confirmation. It adds task-specific requirements for evidence, uncertainty, arithmetic checks, code inspection, rollback and professional escalation. It instructs the model to provide concise explanations and evidence summaries rather than private chain-of-thought.
 
 This layer is intentionally not described as a fact checker: deterministic wording classification cannot prove that a model's answer is true. Current evidence still requires an actual trusted source or an honest disclosure that live verification is unavailable. Calculations need independent recomputation; code changes need executed tests; subjective behaviour needs blinded human ratings. The benchmark scoring runner enforces complete case coverage and prevents a critical regression from being hidden by a high average.
 
