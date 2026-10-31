@@ -10,6 +10,15 @@ from core.privacy_gateway import InferencePolicy, PrivacyAwareModelGateway
 
 router=APIRouter(prefix="/v1/tenants",tags=["tenant-platform"])
 
+_gateway_instance = None
+
+def _gateway():
+    global _gateway_instance
+    if _gateway_instance is None:
+        _gateway_instance = PrivacyAwareModelGateway()
+    return _gateway_instance
+
+
 
 def _database_path():
     return os.environ.get("ORACLE_ARC_DB_PATH","data/oracle_arc.sqlite3")
@@ -159,7 +168,7 @@ def tenant_inference(request:InferenceRequest,identity:RequestIdentity=Depends(_
                or not isinstance(item.get("content"),str) or not item["content"]
                for item in request.messages):
             raise HTTPException(422,"Inference messages require supported roles and non-empty text")
-        result=PrivacyAwareModelGateway().chat(policy,os.environ.get("ORACLE_ARC_MODEL","qwen2.5:7b"),
+        result=_gateway().chat(policy,os.environ.get("ORACLE_ARC_MODEL","qwen2.5:7b"),
             request.messages,temperature=request.temperature,provider_id=request.provider_id)
         return {"data":result,"tenant_id":identity.tenant_id,"application_id":identity.application_id,
                 "policy_version":identity.policy_version}
