@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse
 from core.agent import ArcAgent, SYSTEM_PROMPT
 from core.plugins import PluginRegistry
 from core.store import ArcStore
+from core.model_gateway import ModelGateway
 
 MAX_REQUEST_BYTES = int(os.environ.get("ORACLE_ARC_MAX_REQUEST_BYTES", "1048576"))
 RATE_LIMIT_REQUESTS = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_REQUESTS", "60"))
@@ -98,6 +99,14 @@ def _system_prompt(store: ArcStore) -> str:
 @app.get("/healthz")
 def healthz():
     return {"service": "oracle-arc", "status": "alive", "authentication_required": True}
+
+@app.get("/v1/capabilities", dependencies=[Depends(require_owner)])
+def capabilities():
+    """Return the configured provider capability manifest; never expose credentials."""
+    try:
+        return {"data": [ModelGateway().provider_manifest()]}
+    except Exception:
+        raise HTTPException(status_code=503, detail="The configured model provider is unavailable or misconfigured.")
 
 @app.get("/v1/models", dependencies=[Depends(require_owner)])
 def models():
