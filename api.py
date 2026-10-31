@@ -661,6 +661,26 @@ def decide_integration_activation_approval(
     }
 
 
+@app.delete("/v1/integrations/{integration_id}/activation-approval", dependencies=[Depends(require_owner)])
+def revoke_integration_activation_approval(
+    integration_id: str,
+    version: str = Query(..., min_length=5, max_length=40),
+    manifest_digest: str = Query(..., min_length=64, max_length=64),
+    reason: str = Query("Owner revoked activation permission", max_length=1000),
+    store: ArcStore = Depends(get_store),
+):
+    try:
+        revoked = store.revoke_integration_activation(
+            integration_id, version, manifest_digest, "owner", reason
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if revoked is None:
+        raise HTTPException(status_code=404, detail="Activation approval not found.")
+    return {"activation_approval": revoked, "activation_performed": False,
+            "runtime_permissions_granted": False}
+
+
 @app.post("/v1/integrations/{integration_id}/activate", dependencies=[Depends(require_owner)])
 def activate_integration(
     integration_id: str,
