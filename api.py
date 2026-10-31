@@ -1118,3 +1118,8 @@ def approve_tool(tool_name: str, request: ToolApproval, store: ArcStore = Depend
 @app.get("/v1/audit/tools", dependencies=[Depends(require_owner)])
 def tool_audit(limit: int = Query(default=100, ge=1, le=500), store: ArcStore = Depends(get_store)):
     return {"data": store.list_tool_audit(limit)}
+
+
+# Additive tenant API: legacy owner routes remain separate and private.
+from core.tenant_api import router as tenant_router
+app.include_router(tenant_router)
