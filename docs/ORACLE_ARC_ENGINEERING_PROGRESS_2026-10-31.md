@@ -58,6 +58,14 @@
 - Commits: `cc4d688725e335b4abba0ca717d82a50d637cffd` (gateway), `ff8845fd6f18f4964976b8f95fbd43685ae7f39f` (facade), `38dd5d95e15c4284de7928938e6e403ddd33802e` (tests).
 - Scope boundary: remote HTTP adapters in `core/providers.py` still use the agent-registry connector contract. Full adapter unification, normalized cancellation/usage semantics and per-request privacy routing remain pending.
 
+### 8. Fingerprint migration and persistence regression coverage repaired
+- A repository-wide test review found an older persistence test still using the pre-fingerprint approval API. That test would fail after the security migration.
+- Updated the persistence test to use the current registry fingerprint and verify approval survives reopening the database.
+- Added a legacy-schema fixture with a name-only approved row; migration adds the nullable fingerprint column while the legacy approval remains unusable (fail-closed).
+- Added a current fingerprint approval reopen test.
+- Commit: `50583c0ad6ca589a5381da5e86d73414390aaf57`.
+- These tests are committed but remain pending execution by GitHub Actions.
+
 ## Remaining high-priority work
 
 | Priority | Work | State |
@@ -66,7 +74,7 @@
 | P0 | Restore personal-core request-body, rate-limit and concurrency protections without trusting spoofable proxy headers | Implemented; CI pending; ingress multi-worker controls still required |
 | P0 | Reconcile `ArcAgent(host=...)` with a gateway-backed `LocalLLM` contract | Implemented; CI pending |
 | P0 | Consolidate `core/model_gateway.py` and `core/providers.py` behind one provider contract | Partial: local Ollama gateway restored; remote adapter unification pending |
-| P0 | Add migration tests from both existing database shapes, including legacy name-only tool approvals | Pending |
+| P0 | Add migration tests from both existing database shapes, including legacy name-only tool approvals | Legacy name-only tool approval migration covered; full cross-branch schema matrix and rollback/backup tests pending |
 | P0 | Preserve sandbox restrictions and fingerprint approvals through final reconciliation | In progress |
 | P0 | Design tenant/app identities, scoped credentials and per-record ownership before any consumer app exposure | Not started |
 | P1 | Add per-request privacy routing and provider allowlists, replacing the temporary global remote flag | Pending |
