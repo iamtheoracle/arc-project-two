@@ -25,6 +25,7 @@ from core.agent_registry import (Connector, PluginCatalog, PluginManifest, Regis
 from core.implementation_planner import plan_implementation
 from core.integrations import ManifestError, load_manifest_directory, load_trust_keys, select_safest
 from core.integration_lifecycle import ArtifactError, stage_approved_artifact, verify_staged_artifact
+from core.platform_routes import router as platform_router
 
 
 # Resource guards are deliberately process-local. Deployments with multiple workers
@@ -129,6 +130,7 @@ def require_chat_capacity():
 
 app = FastAPI(title="Oracle Arc", version="0.1.2", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(RequestGuardMiddleware)
+app.include_router(platform_router)
 _store: ArcStore | None = None
 _agent_registry_cache = None
 _agent_registry_store = None
