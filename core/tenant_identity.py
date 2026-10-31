@@ -140,6 +140,35 @@ class TenantIdentityStore:
                 row["policy_version"], now, row["expires_at"])
         raise PermissionError("Invalid, expired, revoked or disabled application credential")
 
+    def provision_application(self, tenant_id: str, application_name: str,
+                              principal_id: str, capabilities: Iterable[str],
+                              ttl_seconds: int = 86400) -> dict:
+        """Add a sibling application to an existing tenant."""
+        if not application_name.strip() or not principal_id.strip():
+            raise ValueError("Application and principal are required")
+        if not 60 <= ttl_seconds <= 31_536_000:
+            raise ValueError("Credential lifetime must be between one minute and one year")
+        caps = sorted(set(capabilities))
+        if not caps or any(not isinstance(c, str) or not c.strip() or len(c) > 100 for c in caps):
+            raise ValueError("At least one valid capability is required")
+        app_id, credential_id = "app_" + uuid.uuid4().hex, "cred_" + uuid.uuid4().hex
+        secret, salt = secrets.token_urlsafe(48), secrets.token_bytes(16)
+        verifier = salt.hex() + "$" + self._verifier(secret, salt)
+        now = int(time.time())
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            tenant = db.execute("SELECT 1 FROM arc_tenants WHERE tenant_id=? AND status='active'", (tenant_id,)).fetchone()
+            principal = db.execute("SELECT 1 FROM arc_principals WHERE tenant_id=? AND principal_id=? AND status='active'", (tenant_id, principal_id)).fetchone()
+            if not tenant or not principal:
+                raise LookupError("Active tenant and principal membership are required")
+            db.execute("INSERT INTO arc_applications VALUES(?,?,?,'active',1)", (app_id, tenant_id, application_name.strip()))
+            db.execute("INSERT INTO arc_app_memberships VALUES(?,?,?,'active')", (tenant_id, app_id, principal_id))
+            db.execute("INSERT INTO arc_credentials VALUES(?,?,?,?,?,?,?,NULL)",
+                       (credential_id, verifier, tenant_id, app_id, principal_id, __import__('json').dumps(caps), now + ttl_seconds))
+            db.commit()
+        return {"credential_id": credential_id, "secret": secret, "tenant_id": tenant_id,
+                "application_id": app_id, "principal_id": principal_id, "expires_at": now + ttl_seconds}
+
     def revoke(self, credential_id: str) -> bool:
         with self._connect() as db:
             cursor = db.execute("UPDATE arc_credentials SET revoked_at=? WHERE credential_id=? AND revoked_at IS NULL",
