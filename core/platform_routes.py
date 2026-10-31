@@ -9,9 +9,19 @@ import os
 from pathlib import Path
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
+from typing import Any, Callable
+from core.concierge_runtime import ConciergeWorkflowStore, ConciergeError
 from core.tenant_security import TenantSecurityStore, AuthorizationError
 
 router=APIRouter(prefix="/v1/platform",tags=["platform-identity"])
+_CONCIERGE_EXECUTORS: dict[str, Callable] = {}
+
+
+def register_concierge_executor(provider_id: str, executor: Callable):
+    """Register a reviewed server-side provider adapter; never exposed as an API."""
+    if not provider_id or not callable(executor) or provider_id in _CONCIERGE_EXECUTORS:
+        raise ValueError("Invalid or duplicate Concierge executor")
+    _CONCIERGE_EXECUTORS[provider_id]=executor
 
 
 def _store() -> TenantSecurityStore:
@@ -51,6 +61,18 @@ class CredentialCreate(BaseModel):
 class MemoryCreate(BaseModel):
     content:str=Field(min_length=1,max_length=20000)
     category:str="preference"
+
+class TaskCreate(BaseModel):
+    agent_id:str=Field(min_length=1,max_length=64)
+    required_capabilities:list[str]=Field(default_factory=list,max_length=20)
+    payload:dict=Field(default_factory=dict)
+
+class ConciergePlan(BaseModel):
+    action:dict
+    ttl_seconds:int=Field(default=900,ge=60,le=3600)
+
+class ConciergeConfirmation(BaseModel):
+    action_fingerprint:str=Field(min_length=64,max_length=64)
 
 class MemoryShareCreate(BaseModel):
     destination_application_id:str
@@ -136,3 +158,72 @@ def read_shared_memories(source_application_id:str,identity=Depends(require_appl
         return {"data":_store().shared_memories(identity,source_application_id)}
     except AuthorizationError as exc:
         raise HTTPException(403,str(exc))
+
+
+@router.post("/agent-tasks",status_code=202)
+def create_scoped_agent_task(body:TaskCreate,identity=Depends(require_application)):
+    try:
+        task_id=_store().create_scoped_task(identity,body.agent_id,body.required_capabilities,body.payload)
+        return {"task_id":task_id,"status":"queued","tenant_scoped":True}
+    except AuthorizationError as exc:
+        raise HTTPException(403,str(exc))
+    except ValueError as exc:
+        raise HTTPException(422,str(exc))
+
+@router.post("/agent-tasks/{task_id}/claim")
+def claim_scoped_agent_task(task_id:str,worker_id:str,identity=Depends(require_application)):
+    try:
+        return _store().claim_scoped_task(identity,task_id,worker_id)
+    except AuthorizationError as exc:
+        raise HTTPException(404,str(exc))
+
+@router.post("/agent-tasks/{task_id}/complete")
+def complete_scoped_agent_task(task_id:str,worker_id:str,status:str="succeeded",
+                               result:dict|None=None,identity=Depends(require_application)):
+    try:
+        if not _store().complete_scoped_task(identity,task_id,worker_id,result or {},status):
+            raise HTTPException(404,"Running task not found in this application scope")
+        return {"task_id":task_id,"status":status}
+    except ValueError as exc:
+        raise HTTPException(422,str(exc))
+
+@router.get("/agent-tasks/{task_id}")
+def get_scoped_agent_task(task_id:str,identity=Depends(require_application)):
+    task=_store().get_scoped_task(identity,task_id)
+    if not task:
+        raise HTTPException(404,"Task not found")
+    return task
+
+@router.post("/concierge/workflows",status_code=201)
+def plan_concierge_workflow(body:ConciergePlan,identity=Depends(require_application)):
+    if "concierge.workflow.plan" not in identity.capabilities:
+        raise HTTPException(403,"Concierge planning capability is not granted")
+    try:
+        result=ConciergeWorkflowStore(os.environ.get("ORACLE_ARC_DB_PATH","data/oracle_arc.sqlite3")).plan(
+            identity,body.action,body.ttl_seconds)
+        return result
+    except ConciergeError as exc:
+        raise HTTPException(422,str(exc))
+
+@router.post("/concierge/workflows/{workflow_id}/confirm")
+def confirm_concierge_workflow(workflow_id:str,body:ConciergeConfirmation,
+                               identity=Depends(require_application)):
+    if "concierge.action.execute" not in identity.capabilities:
+        raise HTTPException(403,"Consequential Concierge execution is not granted")
+    database=os.environ.get("ORACLE_ARC_DB_PATH","data/oracle_arc.sqlite3")
+    store=ConciergeWorkflowStore(database)
+    # Resolve the executor from a server-side allowlist, never from request input.
+    try:
+        import sqlite3, json
+        with sqlite3.connect(database) as db:
+            row=db.execute("SELECT action_json FROM concierge_workflows WHERE workflow_id=? AND tenant_id=? AND application_id=? AND principal_id=?",
+                           (workflow_id,identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()
+        if not row:
+            raise HTTPException(404,"Workflow not found")
+        action=json.loads(row[0])
+        executor=_CONCIERGE_EXECUTORS.get(action.get("provider"))
+        if executor is None:
+            raise HTTPException(503,"No reviewed Concierge provider adapter is configured; no action was performed")
+        return store.confirm_and_execute(identity,workflow_id,body.action_fingerprint,executor)
+    except ConciergeError as exc:
+        raise HTTPException(409,str(exc))
