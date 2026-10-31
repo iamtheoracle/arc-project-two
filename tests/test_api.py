@@ -767,6 +767,31 @@ def test_integration_approval_is_bound_to_signed_manifest_and_audited(client, tm
     assert any(event["action"] == "artifact_staged_inert"
                for event in client.get("/v1/integrations/audit", headers=auth()).json()["data"])
 
+    activation_request = client.post(
+        "/v1/integrations/calendar-sync/activation-approval",
+        headers=auth(),
+        params={"version": item["version"], "manifest_digest": item["manifest_digest"]},
+    )
+    assert activation_request.status_code == 201
+    assert activation_request.json()["activation_approval"]["status"] == "pending"
+    activation_decision = client.put(
+        "/v1/integrations/calendar-sync/activation-approval",
+        headers=auth(),
+        params={"version": item["version"], "manifest_digest": item["manifest_digest"]},
+        json={"approved": True, "reason": "Reviewed runtime scope separately"},
+    )
+    assert activation_decision.status_code == 200
+    assert activation_decision.json()["activation_approval"]["status"] == "approved"
+    blocked = client.post(
+        "/v1/integrations/calendar-sync/activate",
+        headers=auth(),
+        params={"version": item["version"], "manifest_digest": item["manifest_digest"]},
+    )
+    assert blocked.status_code == 409
+    assert "no reviewed" in blocked.json()["detail"]
+    audit = client.get("/v1/integrations/audit", headers=auth()).json()["data"]
+    assert any(event["action"] == "activation_blocked_no_runtime_adapter" for event in audit)
+
 
 def test_independent_agent_task_submission_requires_owner_auth(client):
     assert client.post("/v1/agent-tasks/submit", json={
