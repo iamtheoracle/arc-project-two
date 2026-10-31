@@ -154,24 +154,31 @@ def _build_agent_registry(store: ArcStore):
             registry.register_connector(agent_id, Connector(
                 connector_id, provider, index * 10, run,
                 failure_threshold=1, cooldown_seconds=30.0))
-        for provider_index, config in enumerate(PROVIDERS):
-            if not os.environ.get(config.api_key_env, "").strip():
-                continue
-            adapter = OpenAICompatibleProvider(config)
+        # Remote providers receive the complete prompt context, including eligible
+        # owner memories and conversation history. Credentials alone are not consent
+        # or a privacy-routing decision, so remote fallback is disabled by default.
+        remote_fallback_enabled = (
+            os.environ.get("ORACLE_ARC_ENABLE_REMOTE_PROVIDER_FALLBACK", "").strip().lower() == "true"
+        )
+        if remote_fallback_enabled:
+            for provider_index, config in enumerate(PROVIDERS):
+                if not os.environ.get(config.api_key_env, "").strip():
+                    continue
+                adapter = OpenAICompatibleProvider(config)
 
-            def run_remote(payload, selected_adapter=adapter, selected_agent=agent_id):
-                runtime_store = _available_context_store(store)
-                messages = [
-                    {"role": "system", "content": _system_prompt(runtime_store, payload["latest_user"]) + "\n\n" + prompts[selected_agent]}
-                ] + payload["history"] + [
-                    {"role": "user", "content": payload["latest_user"]}
-                ]
-                return selected_adapter.chat({"messages": messages})
+                def run_remote(payload, selected_adapter=adapter, selected_agent=agent_id):
+                    runtime_store = _available_context_store(store)
+                    messages = [
+                        {"role": "system", "content": _system_prompt(runtime_store, payload["latest_user"]) + "\n\n" + prompts[selected_agent]}
+                    ] + payload["history"] + [
+                        {"role": "user", "content": payload["latest_user"]}
+                    ]
+                    return selected_adapter.chat({"messages": messages})
 
-            registry.register_connector(agent_id, Connector(
-                config.provider_id + "-" + agent_id, config.provider_id,
-                100 + provider_index * 10, run_remote,
-                failure_threshold=1, cooldown_seconds=60.0))
+                registry.register_connector(agent_id, Connector(
+                    config.provider_id + "-" + agent_id, config.provider_id,
+                    100 + provider_index * 10, run_remote,
+                    failure_threshold=1, cooldown_seconds=60.0))
     _agent_registry_cache = registry
     _agent_registry_store = store
     return registry
