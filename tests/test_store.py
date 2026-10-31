@@ -10,12 +10,12 @@ def test_memory_and_conversations_survive_store_reopen(tmp_path):
     memory = store.save_memory("Oracle Arc belongs to me.", ["owner"])
     conversation_id = store.create_conversation("Persistent chat")
     store.add_message(conversation_id, "user", "Hello")
-    store.set_tool_approval("calculate", True)
+    from core.plugins import PluginRegistry\n    fingerprints = PluginRegistry().tool_fingerprints\n    store.set_tool_approval("calculate", fingerprints["calculate"], True)
 
     reopened = ArcStore(path)
     assert reopened.list_memories()[0]["id"] == memory["id"]
     assert reopened.get_messages(conversation_id) == [{"role": "user", "content": "Hello"}]
-    assert "calculate" in reopened.approved_tools()
+    assert "calculate" in reopened.approved_tools(fingerprints)
     updated = reopened.update_memory(memory["id"], "Updated personal memory.", ["edited"])
     assert updated is not None
     assert updated["content"] == "Updated personal memory."
@@ -231,3 +231,44 @@ def test_integration_activation_approval_can_be_revoked(tmp_path):
     assert store.list_integration_audit()[0]["action"] == "activation_revoked"
     with pytest.raises(ValueError, match="Only an approved"):
         store.revoke_integration_activation("calendar-sync", "1.2.0", "c" * 64, "owner")
+
+
+
+def test_legacy_name_only_tool_approval_migrates_but_fails_closed(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "legacy-tool-permissions.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute("""
+            CREATE TABLE tool_permissions (
+                name TEXT PRIMARY KEY,
+                approved INTEGER NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.execute(
+            "INSERT INTO tool_permissions(name, approved) VALUES(?, ?)",
+            ("calculate", 1),
+        )
+
+    store = ArcStore(path)
+    with sqlite3.connect(path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tool_permissions)")}
+        row = conn.execute(
+            "SELECT name, fingerprint, approved FROM tool_permissions WHERE name=?",
+            ("calculate",),
+        ).fetchone()
+
+    assert "fingerprint" in columns
+    assert row == ("calculate", None, 1)
+    assert store.approved_tools({"calculate": "a" * 64}) == set()
+
+
+def test_fingerprint_approval_survives_database_reopen(tmp_path):
+    from core.plugins import PluginRegistry
+
+    path = tmp_path / "fingerprinted-approval.sqlite3"
+    fingerprints = PluginRegistry().tool_fingerprints
+    ArcStore(path).set_tool_approval("calculate", fingerprints["calculate"], True)
+    reopened = ArcStore(path)
+    assert reopened.approved_tools(fingerprints) == {"calculate"}
