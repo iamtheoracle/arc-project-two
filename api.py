@@ -643,6 +643,8 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
 def submit_agent_task(request: AgentTaskSubmitRequest, store: ArcStore = Depends(get_store)):
     """Queue work for an independently running agent worker."""
     incoming = [{"role": item.role, "content": item.content} for item in request.messages]
+    if sum(len(item["content"]) for item in incoming) > 100_000:
+        raise HTTPException(status_code=413, detail="Queued task context is too large.")
     if incoming[-1]["role"] != "user":
         raise HTTPException(status_code=400, detail="The last message must be a user message.")
     target, reason = select_agent(request.agent_id, incoming[-1]["content"])
