@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 TOKEN = re.compile(r"^[a-z][a-z0-9-]{1,62}$")
-VERSION = re.compile(r"^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 
 
