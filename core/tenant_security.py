@@ -7,6 +7,7 @@ bound server-side to one tenant, application, principal, and capability set.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import hmac
 import secrets
 import sqlite3
@@ -42,15 +43,23 @@ class TenantSecurityStore:
         self.path = str(database_path)
         self.initialize()
 
-    def _connect(self):
+    @contextmanager
+    def _session(self):
         conn = sqlite3.connect(self.path, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=10000")
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def initialize(self):
-        with self._connect() as db:
+        with self._session() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS arc_tenants(
               tenant_id TEXT PRIMARY KEY, name TEXT NOT NULL,
