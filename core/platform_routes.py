@@ -389,3 +389,13 @@ def read_platform_usage(since: int = 0, identity=Depends(require_application)):
         raise HTTPException(403, str(exc))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+
+
+@router.post("/executions/{execution_id}/cancel")
+def cancel_platform_execution(execution_id: str, identity=Depends(require_application)):
+    try:
+        if not _control_plane().cancel_execution(identity, execution_id):
+            raise HTTPException(409, "Execution is not cancellable in its current state")
+        return {"execution_id": execution_id, "status": "cancelled"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
