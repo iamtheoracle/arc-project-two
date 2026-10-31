@@ -216,3 +216,18 @@ def test_integration_activation_approval_is_separate_and_audited(tmp_path):
         store.decide_integration_activation(
             "calendar-sync", "1.2.0", "b" * 64, False, "owner"
         )
+
+
+def test_integration_activation_approval_can_be_revoked(tmp_path):
+    store = ArcStore(tmp_path / "integration-activation-revoke.sqlite3")
+    store.request_integration_activation("calendar-sync", "1.2.0", "c" * 64, "owner")
+    store.decide_integration_activation(
+        "calendar-sync", "1.2.0", "c" * 64, True, "owner", "Approved after review"
+    )
+    revoked = store.revoke_integration_activation(
+        "calendar-sync", "1.2.0", "c" * 64, "owner", "Risk review changed"
+    )
+    assert revoked["status"] == "revoked"
+    assert store.list_integration_audit()[0]["action"] == "activation_revoked"
+    with pytest.raises(ValueError, match="Only an approved"):
+        store.revoke_integration_activation("calendar-sync", "1.2.0", "c" * 64, "owner")
