@@ -94,14 +94,15 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 **Release gate:** Every release produces a versioned report. Critical security tests are pass/fail gates, not averages. Quality gains cannot conceal privacy, factuality or reliability regressions.
 
 
-## Specialist agent architecture: BUD, SPARK, ORACLE and ORBITS
+## Specialist agent architecture: BUD, SPARK, ORACLE, ORBITS and CONCIERGE
 
-The intended user-facing experience has four coordinated specialist roles. These are logical agent identities and responsibilities, not a claim that four independently running agents are already implemented.
+The intended experience has five coordinated specialist roles. These are logical agent identities and responsibilities, not a claim that four independently running agents are already implemented.
 
 - **BUD — Companion and coordinator:** the everyday conversational entry point. BUD listens, responds naturally, helps users think things through, explains things in accessible language, and routes work to the appropriate specialist. BUD should not force every conversation into a task or pretend to be human.
 - **SPARK — Memory and continuity:** manages permitted personal context, preferences, goals and experiences. Spark owns memory lifecycle, provenance, correction, expiry and deletion. Other agents receive only the minimum memory scope explicitly granted for a task; Spark's private store is not globally shared.
 - **ORACLE — Reasoning and problem-solving:** handles research, analysis, planning, factual questions, decisions and complex problem-solving through the shared model gateway.
 - **ORBITS — Visual intelligence:** handles image understanding, visual analysis, design and supported creative workflows. It receives only the inputs and permissions needed for the requested visual task.
+- **CONCIERGE — Practical coordination:** helps users discover services, compare options, research booking and appointment availability, coordinate travel and organize multi-step real-world arrangements. It can prepare and track a workflow, but it cannot claim a reservation, purchase, payment, message or other external action is complete without a configured and authorized integration and a confirmed result. Consequential actions remain subject to the consuming app's policy and explicit user confirmation.
 
 ### Coordination and trust rules
 
@@ -117,7 +118,7 @@ The intended user-facing experience has four coordinated specialist roles. These
 
 ### Agent evaluation requirements
 
-The benchmark must test BUD's conversational fit and routing, Spark's memory isolation and lifecycle, Oracle's reasoning and calibration, Orbits' visual task handling, and cross-agent delegation. Critical cases include unauthorized memory access, privilege escalation through delegation, prompt injection in agent outputs, duplicate execution, cancellation and partial failure. A successful handoff must preserve task context without expanding permissions.
+The benchmark must test BUD's conversational fit and routing, Spark's memory isolation and lifecycle, Oracle's reasoning and calibration, Orbits' visual task handling, Concierge's service discovery and coordination accuracy, and cross-agent delegation. Critical cases include unauthorized memory access, privilege escalation through delegation, prompt injection in agent outputs, duplicate execution, cancellation and partial failure. A successful handoff must preserve task context without expanding permissions.
 
 **Implementation status:** a first registry and BUD-to-ORACLE routing policy exist. BUD currently delegates using deterministic intent matching for clear specialist requests; model-selected planning, service identities, SPARK and ORBITS runtimes, and end-to-end multi-agent orchestration remain incomplete.
 
@@ -125,7 +126,7 @@ The benchmark must test BUD's conversational fit and routing, Spark's memory iso
 ## Agent registry and connector implementation baseline
 
 The first registry implementation provides:
-- Registered agent identities for BUD, ORACLE, SPARK and ORBITS. BUD and ORACLE are enabled; SPARK and ORBITS remain disabled until their specialist runtimes exist.
+- Registered agent identities for BUD, ORACLE, SPARK, ORBITS and CONCIERGE. BUD and ORACLE are enabled; SPARK, ORBITS and CONCIERGE remain disabled until their specialist runtimes and authorization paths exist.
 - BUD and ORACLE chat routes through a shared registry, with explicit and conservative automatic BUD-to-ORACLE delegation.
 - Ordered Ollama connectors with per-connector failure cooldown and fallback to separately configured hosts through \`ORACLE_ARC_OLLAMA_FALLBACK_HOSTS\`.
 - Session connector interface with ordered fallback. SQLite primary and optional independent SQLite backup are wired; mirrored writes use idempotency event IDs and reads/writes can fall back to the backup.
@@ -201,7 +202,7 @@ The planner separately identifies required capabilities and candidate plugins, e
 - Recommendations do not import, install, enable, approve or execute anything.
 - A trusted manifest, provenance review, version pinning, permissions review, data-handling review, sandbox validation and health checks are required before activation.
 - External side effects remain behind owner approval and existing tool policy.
-- Disabled SPARK and ORBITS remain disabled until their runtimes and tests are ready.
+- Disabled SPARK, ORBITS and CONCIERGE remain disabled until their runtimes and tests are ready.
 - Keyword matching can miss context or over-match terms; the plan is advisory and must be reviewed for ambiguous or high-impact work.
 
 **Validation required:** unit tests cover technical/integration routing, visual and memory specialist selection, disabled-agent visibility, empty input, authentication and the no-side-effects contract. The endpoint must remain owner-authenticated.
