@@ -78,6 +78,9 @@ class ArcStore:
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
             """)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(tool_permissions)").fetchall()}
+            if "fingerprint" not in columns:
+                conn.execute("ALTER TABLE tool_permissions ADD COLUMN fingerprint TEXT")
 
     def create_conversation(self, title: str = "") -> str:
         conversation_id = str(uuid.uuid4())
@@ -156,17 +159,21 @@ class ArcStore:
         return {"id": row["id"], "content": row["content"], "tags": json.loads(row["tags_json"]),
                 "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
-    def approved_tools(self) -> set[str]:
+    def approved_tools(self, current_fingerprints: dict[str, str] | None = None) -> set[str]:
+        if not current_fingerprints:
+            return set()
         with self._session() as conn:
-            rows = conn.execute("SELECT name FROM tool_permissions WHERE approved=1").fetchall()
-        return {row["name"] for row in rows}
+            rows = conn.execute("SELECT name,fingerprint FROM tool_permissions WHERE approved=1").fetchall()
+        return {row["name"] for row in rows if current_fingerprints.get(row["name"]) == row["fingerprint"]}
 
-    def set_tool_approval(self, name: str, approved: bool) -> None:
+    def set_tool_approval(self, name: str, fingerprint: str, approved: bool) -> None:
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            raise ValueError("A valid current tool fingerprint is required.")
         with self._session() as conn:
             conn.execute(
-                "INSERT INTO tool_permissions(name,approved,updated_at) VALUES(?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
-                "ON CONFLICT(name) DO UPDATE SET approved=excluded.approved,updated_at=excluded.updated_at",
-                (name, int(approved)),
+                "INSERT INTO tool_permissions(name,fingerprint,approved,updated_at) VALUES(?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+                "ON CONFLICT(name) DO UPDATE SET fingerprint=excluded.fingerprint,approved=excluded.approved,updated_at=excluded.updated_at",
+                (name, fingerprint, int(approved)),
             )
             conn.execute("INSERT INTO tool_audit(tool_name,outcome) VALUES(?,?)",
                          (name, "owner_approved" if approved else "owner_revoked"))
