@@ -655,3 +655,20 @@ def test_cancelled_running_task_cannot_persist_late_model_response(client, monke
     })
     assert response.status_code == 409
     assert "cancelled" in response.json()["detail"].lower()
+
+
+def test_owner_can_list_agent_tasks_and_inspect_queue_status(client):
+    store = api.get_store()
+    api._create_agent_task(store, "visible-task", "bud", "oracle", ["reasoning"])
+    listing = client.get("/v1/agent-tasks?limit=10&status=queued", headers=auth())
+    assert listing.status_code == 200
+    assert any(item["task_id"] == "visible-task" for item in listing.json()["data"])
+    status = client.get("/v1/agent-queue/status", headers=auth())
+    assert status.status_code == 200
+    assert status.json()["tasks"]["queued"] >= 1
+    assert status.json()["outbox"]["pending"] >= 1
+
+
+def test_task_monitoring_routes_require_owner_auth(client):
+    assert client.get("/v1/agent-tasks").status_code == 401
+    assert client.get("/v1/agent-queue/status").status_code == 401
