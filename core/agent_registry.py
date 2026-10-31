@@ -117,8 +117,14 @@ class AgentRegistry:
             raise RegistryError("Application principal is not authorized to dispatch this agent")
         if not set(required_capabilities).issubset(capabilities):
             raise RegistryError("Application principal lacks required task capabilities")
-        connectors = self._connectors.get(agent_id, [])
-        if not connectors or not any(c.enabled and c.supports_scoped_context for c in connectors):
+        agent = self._agents.get(agent_id)
+        if agent is None or not agent.enabled:
+            raise RegistryError("Agent is unknown or disabled")
+        if not set(required_capabilities).issubset(set(agent.capabilities)):
+            raise RegistryError("Agent is not authorized for the requested task capabilities")
+        connectors = [c for c in self._connectors.get(agent_id, [])
+                      if c.enabled and c.supports_scoped_context]
+        if not connectors:
             raise RegistryError("No connector is approved for tenant-scoped execution")
         scoped_payload = dict(payload)
         scoped_payload["_oracle_request_context"] = {
@@ -128,7 +134,22 @@ class AgentRegistry:
             "policy_version": identity.policy_version,
             "capabilities": sorted(capabilities),
         }
-        return self.dispatch(agent_id, scoped_payload, required_capabilities)
+        attempted = []
+        for connector in connectors:
+            if not connector.available():
+                continue
+            attempted.append(connector.connector_id)
+            try:
+                result = connector.invoke(scoped_payload)
+                return {"agent_id":agent_id,"connector_id":connector.connector_id,
+                        "provider":connector.provider,"result":result,
+                        "task_id":payload.get("task_id"),
+                        "required_capabilities":list(required_capabilities),
+                        "attempted_connectors":attempted,
+                        "fallback_used":connector is not connectors[0]}
+            except Exception:
+                continue
+        raise RegistryError("No healthy tenant-scoped connector could complete this request")
 
     def dispatch(self, agent_id: str, payload: dict[str, Any],
                  required_capabilities: tuple[str, ...] = ()) -> dict[str, Any]:
