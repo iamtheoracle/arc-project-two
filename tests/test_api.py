@@ -11,9 +11,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("ORACLE_ARC_MODEL", "qwen2.5:7b")
     monkeypatch.setenv("ORACLE_ARC_DB_PATH", str(tmp_path / "oracle.sqlite3"))
     api._store = ArcStore(tmp_path / "oracle.sqlite3")
+    api._RATE_BUCKETS.clear()
     with TestClient(api.app) as test_client:
         yield test_client
     api._store = None
+    api._RATE_BUCKETS.clear()
 
 
 def auth():
@@ -899,3 +901,33 @@ def test_tool_approval_is_bound_to_current_source_and_schema_fingerprint(client)
 def test_tool_approval_rejects_invalid_fingerprint(client):
     with pytest.raises(ValueError):
         api.get_store().set_tool_approval("calculate", "not-a-sha256", True)
+
+
+
+def test_api_request_guard_rejects_oversized_streamed_body(client, monkeypatch):
+    monkeypatch.setattr(api, "MAX_REQUEST_BYTES", 1024)
+    response = client.post(
+        "/v1/memories",
+        headers=auth(),
+        content=b"x" * 1025,
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Request body too large."
+
+
+def test_api_request_guard_limits_source_without_trusting_forwarded_headers(client, monkeypatch):
+    monkeypatch.setattr(api, "RATE_LIMIT_REQUESTS", 1)
+    first = client.get("/v1/memories", headers={**auth(), "X-Forwarded-For": "198.51.100.10"})
+    second = client.get("/v1/memories", headers={**auth(), "X-Forwarded-For": "203.0.113.20"})
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == str(api.RATE_LIMIT_WINDOW)
+
+
+def test_chat_capacity_dependency_releases_slot_after_request():
+    dependency = api.require_chat_capacity()
+    next(dependency)
+    with pytest.raises(StopIteration):
+        next(dependency)
+    assert api._CHAT_SLOTS.acquire(blocking=False)
+    api._CHAT_SLOTS.release()
