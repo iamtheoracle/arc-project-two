@@ -515,6 +515,46 @@ class ArcStore:
         item["required_capabilities"] = json.loads(item.pop("required_capabilities_json"))
         return item
 
+    def list_agent_tasks(self, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("Task list limit must be between 1 and 100")
+        allowed = {"queued", "running", "succeeded", "failed", "cancelled"}
+        if status is not None and status not in allowed:
+            raise ValueError("Invalid task status filter")
+        with self._session() as conn:
+            if status is None:
+                rows = conn.execute(
+                    "SELECT * FROM agent_tasks ORDER BY created_at DESC,task_id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM agent_tasks WHERE status=? ORDER BY created_at DESC,task_id DESC LIMIT ?",
+                    (status, limit),
+                ).fetchall()
+        return [self._agent_task_row(row) for row in rows]
+
+    def agent_queue_status(self) -> dict[str, Any]:
+        with self._session() as conn:
+            task_rows = conn.execute(
+                "SELECT status,COUNT(*) AS count FROM agent_tasks GROUP BY status"
+            ).fetchall()
+            outbox_rows = conn.execute(
+                "SELECT status,COUNT(*) AS count FROM agent_task_outbox GROUP BY status"
+            ).fetchall()
+            dead_letters = conn.execute(
+                "SELECT COUNT(*) FROM agent_task_outbox WHERE dead_letter=1"
+            ).fetchone()[0]
+            oldest_pending = conn.execute(
+                "SELECT MIN(created_at) FROM agent_task_outbox WHERE status='pending' AND dead_letter=0"
+            ).fetchone()[0]
+        return {
+            "tasks": {row["status"]: row["count"] for row in task_rows},
+            "outbox": {row["status"]: row["count"] for row in outbox_rows},
+            "dead_letter_count": dead_letters,
+            "oldest_pending_event_at": oldest_pending,
+        }
+
     def get_agent_task(self, task_id: str) -> dict[str, Any] | None:
         with self._session() as conn:
             row = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
