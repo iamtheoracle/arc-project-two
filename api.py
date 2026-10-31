@@ -20,6 +20,7 @@ from core.store import ArcStore
 from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_context, normalize_profile
 from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, SessionNotFoundError, default_agent_registry)
 from core.implementation_planner import plan_implementation
+from core.integrations import ManifestError, load_manifest_directory, load_trust_keys
 
 app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
@@ -82,6 +83,11 @@ class BoundaryCreate(BaseModel):
 
 class ImplementationPlanRequest(BaseModel):
     description: str = Field(min_length=3, max_length=10_000)
+
+
+class IntegrationApprovalDecision(BaseModel):
+    approved: bool
+    reason: str = Field(default="", max_length=1000)
 
 
 
@@ -438,6 +444,86 @@ def implementation_plan(request: ImplementationPlanRequest, store: ArcStore = De
     enabled = {item["agent_id"]: item["enabled"] for item in _build_agent_registry(store).list_agents()}
     plan = plan_implementation(request.description, available_agents=enabled)
     return {"plan": plan, "available_plugins": _plugin_catalog().list_plugins()}
+
+
+def _integration_catalog(store: ArcStore) -> list[dict[str, Any]]:
+    directory = os.environ.get("ORACLE_ARC_INTEGRATION_MANIFEST_DIR", "data/integration-manifests")
+    allowed = {item.strip() for item in os.environ.get(
+        "ORACLE_ARC_ALLOWED_INTEGRATION_PERMISSIONS", ""
+    ).split(",") if item.strip()}
+    manifests = load_manifest_directory(directory, load_trust_keys(), allowed)
+    approvals = {
+        (item["integration_id"], item["version"], item["manifest_digest"]): item["status"]
+        for item in store.list_integration_approvals(limit=500)
+    }
+    for item in manifests:
+        if item.get("manifest_digest"):
+            item["approval_status"] = approvals.get(
+                (item["integration_id"], item["version"], item["manifest_digest"]), "not_requested"
+            )
+    return manifests
+
+
+@app.get("/v1/integrations/catalog", dependencies=[Depends(require_owner)])
+def integration_catalog(store: ArcStore = Depends(get_store)):
+    try:
+        return {"data": _integration_catalog(store)}
+    except ManifestError:
+        raise HTTPException(status_code=503, detail="Integration trust configuration is invalid.")
+
+
+@app.post("/v1/integrations/{integration_id}/approval", dependencies=[Depends(require_owner)], status_code=201)
+def request_integration_approval(integration_id: str, store: ArcStore = Depends(get_store)):
+    try:
+        matches = [item for item in _integration_catalog(store)
+                   if item.get("integration_id") == integration_id and item.get("eligible_for_review")]
+    except ManifestError:
+        raise HTTPException(status_code=503, detail="Integration trust configuration is invalid.")
+    if not matches:
+        raise HTTPException(status_code=404, detail="No trusted, compatible integration is eligible for review.")
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="Multiple versions exist; select a version explicitly.")
+    item = matches[0]
+    approval = store.request_integration_approval(
+        item["integration_id"], item["version"], item["manifest_digest"], "owner"
+    )
+    return {"approval": approval, "installation_performed": False, "activation_performed": False}
+
+
+@app.put("/v1/integrations/{integration_id}/approval", dependencies=[Depends(require_owner)])
+def decide_integration_approval(integration_id: str, request: IntegrationApprovalDecision,
+                                version: str = Query(..., min_length=5, max_length=40),
+                                manifest_digest: str = Query(..., min_length=64, max_length=64),
+                                store: ArcStore = Depends(get_store)):
+    try:
+        matches = [item for item in _integration_catalog(store)
+                   if item.get("integration_id") == integration_id
+                   and item.get("version") == version
+                   and item.get("manifest_digest") == manifest_digest
+                   and item.get("eligible_for_review")]
+    except ManifestError:
+        raise HTTPException(status_code=503, detail="Integration trust configuration is invalid.")
+    if not matches:
+        raise HTTPException(status_code=409, detail="Manifest is no longer trusted or compatible.")
+    try:
+        approval = store.decide_integration_approval(
+            integration_id, version, manifest_digest, request.approved, "owner", request.reason
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if approval is None:
+        raise HTTPException(status_code=404, detail="Approval request not found.")
+    return {"approval": approval, "installation_performed": False, "activation_performed": False}
+
+
+@app.get("/v1/integrations/approvals", dependencies=[Depends(require_owner)])
+def integration_approvals(store: ArcStore = Depends(get_store)):
+    return {"data": store.list_integration_approvals()}
+
+
+@app.get("/v1/integrations/audit", dependencies=[Depends(require_owner)])
+def integration_audit(store: ArcStore = Depends(get_store)):
+    return {"data": store.list_integration_audit()}
 
 
 @app.post("/v1/agents/{agent_id}/chat", dependencies=[Depends(require_owner)])
