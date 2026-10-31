@@ -231,7 +231,7 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
         except Exception:
             raise HTTPException(
                 status_code=503,
-                detail="The local model is unavailable or timed out. Check Ollama and the configured model.",
+                detail="The local model is unavailable. Check Ollama and the configured model.",
             )
         if not isinstance(answer, str) or not answer.strip():
             raise HTTPException(status_code=503, detail="The local model returned an empty response.")
