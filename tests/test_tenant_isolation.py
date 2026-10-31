@@ -63,3 +63,22 @@ def test_memory_sharing_is_scoped_category_limited_and_revocable(tmp_path):
     assert [item["content"] for item in visible]==["Can be shared"]
     assert store.revoke_memory_grant(src,grant)
     assert store.shared_memories(dst,src.application_id)==[]
+
+def test_spark_memory_read_update_delete_are_principal_and_app_scoped(tmp_path):
+    path=str(tmp_path/"tenant.sqlite3")
+    ids=TenantIdentityStore(path)
+    issued=ids.provision("Tenant A","UNIBUD","principal-a",
+        ["memory.write","memory.read","memory.delete"])
+    other=ids.provision("Tenant B","WAYWARD","principal-b",
+        ["memory.write","memory.read","memory.delete"])
+    identity=ids.authenticate(issued["secret"])
+    other_identity=ids.authenticate(other["secret"])
+    store=TenantStore(path)
+    memory_id=store.save_memory(identity,"First version","learning")
+    assert store.list_memories(identity)[0]["content"]=="First version"
+    assert store.update_memory(identity,memory_id,"Corrected version","projects")
+    assert store.list_memories(identity)[0]["content"]=="Corrected version"
+    assert store.list_memories(other_identity)==[]
+    assert store.delete_memory(identity,memory_id)
+    assert store.list_memories(identity)==[]
+
