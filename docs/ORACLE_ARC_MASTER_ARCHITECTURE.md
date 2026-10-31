@@ -177,3 +177,31 @@ The API's current chat path claims a short-lived lease, renews it during long mo
 
 
 Owner-only operational routes now expose recent task records and queue counters, including pending outbox age and dead-letter count. These endpoints deliberately expose task metadata and failure codes, not user prompts or model responses.
+
+
+## 8. Implementation ownership and integration selection
+
+**New implementation:** `core/implementation_planner.py` provides a transparent, deterministic first-pass capability planner. The authenticated `POST /v1/implementation/plan` endpoint accepts a bounded plain-language description and returns a structured recommendation.
+
+### Ownership model
+
+- BUD is the coordinator and user-facing point of contact.
+- ORACLE owns technical analysis, architecture, implementation planning and validation.
+- SPARK is the specialist for explicitly permitted memory and continuity changes.
+- ORBITS is the specialist for visual understanding and creative workflows.
+- A task may involve more than one specialist, but the primary owner is explicit.
+
+### Integration selection
+
+The planner separately identifies required capabilities and candidate plugins, extensions and connectors. It labels recommendations as uninstalled/unconfigured and reports whether a specialist is registered and enabled. It does not claim that a connector is healthy merely because its name appears in the plan.
+
+### Security and limits
+
+- The planner is deterministic keyword/capability matching, not autonomous model-selected planning.
+- Recommendations do not import, install, enable, approve or execute anything.
+- A trusted manifest, provenance review, version pinning, permissions review, data-handling review, sandbox validation and health checks are required before activation.
+- External side effects remain behind owner approval and existing tool policy.
+- Disabled SPARK and ORBITS remain disabled until their runtimes and tests are ready.
+- Keyword matching can miss context or over-match terms; the plan is advisory and must be reviewed for ambiguous or high-impact work.
+
+**Validation required:** unit tests cover technical/integration routing, visual and memory specialist selection, disabled-agent visibility, empty input, authentication and the no-side-effects contract. The endpoint must remain owner-authenticated.
