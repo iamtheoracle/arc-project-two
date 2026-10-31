@@ -96,3 +96,11 @@
 ## Important status boundary
 
 This branch contains architecture documentation and focused security hardening. It is not yet the unified core, not multi-tenant, not approved for application consumers, and not production-ready. No merge, production migration, deployment or activation of integrations has occurred.
+
+
+## 10. Tenant and application isolation contract
+- Added `docs/ORACLE_ARC_TENANT_ISOLATION_ENGINEERING_CONTRACT.md`.
+- Establishes trusted request identity, tenant/app/principal scoping, additive migration requirements, memory-sharing grants, provider egress policy, agent capability checks, async task re-authorization, and mandatory adversarial acceptance tests.
+- Explicitly records the current system as a private single-owner API/store; this document does not claim tenant isolation is implemented.
+- Multi-tenant/customer-facing access remains blocked until migration, enforcement, cross-scope tests, operational controls and controlled-pilot gates are complete.
+- Commit: `1f31d60140fc8c77271e07d39ed191792a552255`.
