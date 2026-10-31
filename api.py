@@ -30,7 +30,7 @@ from core.integration_lifecycle import ArtifactError, stage_approved_artifact, v
 # Resource guards are deliberately process-local. Deployments with multiple workers
 # must additionally enforce equivalent limits at the trusted ingress/API gateway.
 MAX_REQUEST_BYTES = int(os.environ.get("ORACLE_ARC_MAX_REQUEST_BYTES", "1048576"))
-RATE_LIMIT_REQUESTS = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_REQUESTS", "60"))
+RATE_LIMIT_REQUESTS = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_REQUESTS", "600"))
 RATE_LIMIT_WINDOW = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_WINDOW_SECONDS", "60"))
 CHAT_CONCURRENCY = int(os.environ.get("ORACLE_ARC_CHAT_CONCURRENCY", "1"))
 if not 1024 <= MAX_REQUEST_BYTES <= 16 * 1024 * 1024:
