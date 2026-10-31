@@ -97,3 +97,47 @@ def test_local_llm_uses_gateway_compatibility_facade(monkeypatch):
     assert result["message"]["content"] == "local answer"
     assert gateway.calls[0]["model"] == "qwen-local"
     assert gateway.calls[0]["temperature"] == 0.3
+
+def test_gateway_rejects_tool_calling_when_provider_does_not_support_it():
+    registry = ProviderRegistry()
+    provider = FakeProvider()
+    provider.manifest = ProviderManifest(
+        provider_id="text-only", display_name="Text only", execution_location="test",
+        capabilities=ModelCapabilities(text=True, tool_calling=False),
+    )
+    registry.register(provider)
+    gateway = ModelGateway(registry=registry, provider_id="text-only")
+    with pytest.raises(ValueError, match="does not support tool calling"):
+        gateway.chat("m", [{"role": "user", "content": "hi"}], tools=[{"type": "function"}])
+
+def test_gateway_rejects_streaming_when_provider_does_not_support_it():
+    registry = ProviderRegistry()
+    provider = FakeProvider()
+    provider.manifest = ProviderManifest(
+        provider_id="no-stream", display_name="No stream", execution_location="test",
+        capabilities=ModelCapabilities(streaming=False),
+    )
+    registry.register(provider)
+    gateway = ModelGateway(registry=registry, provider_id="no-stream")
+    with pytest.raises(ValueError, match="does not support streaming"):
+        gateway.chat("m", [{"role": "user", "content": "hi"}], stream=True)
+
+@pytest.mark.parametrize("temperature", [-0.1, 2.1, float("nan")])
+def test_gateway_rejects_invalid_temperature(temperature):
+    registry = ProviderRegistry()
+    registry.register(FakeProvider())
+    gateway = ModelGateway(registry=registry, provider_id="fake")
+    with pytest.raises(ValueError, match="Temperature must be between"):
+        gateway.chat("m", [{"role": "user", "content": "hi"}], temperature=temperature)
+
+def test_gateway_rejects_malformed_messages():
+    registry = ProviderRegistry()
+    registry.register(FakeProvider())
+    gateway = ModelGateway(registry=registry, provider_id="fake")
+    with pytest.raises(ValueError, match="supported role and string content"):
+        gateway.chat("m", [{"role": "developer", "content": "bad"}])
+
+def test_registry_rejects_provider_without_manifest_or_chat():
+    registry = ProviderRegistry()
+    with pytest.raises(ValueError, match="valid ProviderManifest"):
+        registry.register(object())
