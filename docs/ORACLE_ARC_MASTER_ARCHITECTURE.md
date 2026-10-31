@@ -63,7 +63,7 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 
 ## 4. Human understanding as a measurable capability
 
-**Current state (2026-10-31):** A detailed conversational policy, owner-controlled profile and boundaries, and a request-aware reasoning reliability standard are wired into BUD, ORACLE and the direct chat route. The request classifier adds different checks for time-sensitive, high-stakes, quantitative, technical and comparison requests. This is prompt guidance plus deterministic request classification, not an independent fact verifier or proof of reasoning quality. Most tests verify policy contracts and normalization; live model behaviour still needs blinded evaluation.
+**Current state (2026-10-31):** A detailed conversational policy, owner-controlled profile and boundaries, and a request-aware reasoning reliability standard are wired into BUD, ORACLE and the direct chat route. The request classifier applies independent dimensions for time-sensitive facts, high-stakes topics, quantitative and technical work, source corroboration, sensitive-data handling and consequential-action confirmation. It adds claim-level source checks and privacy/action safeguards. This is prompt guidance plus deterministic request classification, not an independent fact verifier or proof of reasoning quality. Most tests verify policy contracts and normalization; live model behaviour still needs blinded evaluation.
 
 **Target design**
 - Build a structured, turn-local interpretation of intent, task, conversational mode, tone cues, uncertainty, desired detail and support needs.
@@ -79,7 +79,7 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 
 ## 5. Oracle Arc platform benchmark
 
-**Current state (2026-10-31):** The scenario catalogue contains 18 cases across conversation, human understanding, memory, reasoning, secure execution, provider gateway, privacy and agent coordination. A human-rating evaluator now validates complete case coverage, run metadata and 0–4 scores; any declared critical failure or critical-case score below 3 fails the release gate regardless of average. The evaluator records supplied ratings; it does not automatically judge model quality. Full blinded runs, holdout management and baseline reports remain to be completed.
+**Current state (2026-10-31):** The scenario catalogue contains 21 cases across conversation, human understanding, memory, reasoning, secure execution, provider gateway, privacy and agent coordination. A human-rating evaluator now validates complete case coverage, run metadata and 0–4 scores; any declared critical failure or critical-case score below 3 fails the release gate regardless of average. The evaluator records supplied ratings; it does not automatically judge model quality. Full blinded runs, holdout management and baseline reports remain to be completed.
 
 **Target design**
 - Versioned, reproducible scenarios with fixed inputs, expected properties and scoring rubrics.
