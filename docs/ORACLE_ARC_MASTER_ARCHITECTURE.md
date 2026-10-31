@@ -174,3 +174,6 @@ The agent task store now supports atomic task claims using SQLite immediate tran
 Task creation and lifecycle changes append an outbox event in the same SQLite transaction. Outbox consumers claim events with expiring leases and acknowledge them after delivery. This is at-least-once delivery: consumers must deduplicate using the event ID and must not assume exactly-once external side effects. Expired deliveries are retried up to a bounded attempt count and then marked dead-letter for operator review. Stale workers cannot acknowledge after their lease expires.
 
 The API's current chat path claims a short-lived lease, renews it during long model calls, and performs the model call synchronously. The queue/outbox primitives are suitable for concurrent claimers sharing one transactional database, but no independent worker daemon, broker, distributed scheduler, or cross-host database is deployed yet. Separate SQLite files on different hosts do not coordinate claims. The configured backup database is a recovery mirror, not a distributed consensus system.
+
+
+Owner-only operational routes now expose recent task records and queue counters, including pending outbox age and dead-letter count. These endpoints deliberately expose task metadata and failure codes, not user prompts or model responses.
