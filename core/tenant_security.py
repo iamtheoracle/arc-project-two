@@ -41,7 +41,14 @@ class TenantSecurityStore:
 
     def __init__(self, database_path: str | Path):
         self.path = str(database_path)
+        if self.path == ":memory:":
+            raise ValueError("TenantSecurityStore requires a durable database path")
+        Path(self.path).parent.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.initialize()
+        try:
+            Path(self.path).chmod(0o600)
+        except OSError:
+            pass
 
     @contextmanager
     def _session(self):
@@ -60,6 +67,7 @@ class TenantSecurityStore:
 
     def initialize(self):
         with self._session() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS arc_schema_migrations(version INTEGER PRIMARY KEY,applied_at INTEGER NOT NULL)")
             db.executescript("""
             CREATE TABLE IF NOT EXISTS arc_tenants(
               tenant_id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -145,6 +153,7 @@ class TenantSecurityStore:
               WHERE a.application_id=NEW.destination_application_id AND a.tenant_id=NEW.tenant_id)
             BEGIN SELECT RAISE(ABORT,'memory grant tenant/application mismatch'); END;
             """)
+            db.execute("INSERT OR IGNORE INTO arc_schema_migrations(version,applied_at) VALUES(1,?)",(int(time.time()),))
             db.commit()
 
     def create_tenant(self, name: str) -> str:
