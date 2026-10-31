@@ -332,7 +332,7 @@ def configure_application_quota(body: ApplicationQuotaCreate,
             identity, window_seconds=body.window_seconds,
             max_executions=body.max_executions, max_concurrent=body.max_concurrent,
             max_input_bytes=body.max_input_bytes)
-        return {"application_id": identity.application_id, "quota": body.model_dump()}
+        return {"application_id": identity.application_id, "quota": body.dict()}
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
     except ValueError as exc:
