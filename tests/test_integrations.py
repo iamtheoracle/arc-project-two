@@ -66,6 +66,8 @@ def test_safest_selection_prefers_lower_risk_and_fewer_permissions():
     high_raw = manifest(integration_id="calendar-power", risk="high",
                         permissions=["calendar.read", "calendar.write"])
     high = inspect_manifest(high_raw, TRUST, allowed_permissions=ALLOWED)
+    low["health_status"] = "healthy"
+    high["health_status"] = "healthy"
     selected = select_safest([high, low], {"calendar-sync"}, ALLOWED)
     assert selected["integration_id"] == "calendar-sync"
 
@@ -74,3 +76,19 @@ def test_selection_requires_all_requested_capabilities_and_policy_permissions():
     candidate = inspect_manifest(manifest(), TRUST, allowed_permissions=ALLOWED)
     assert select_safest([candidate], {"calendar-sync", "calendar-delete"}, ALLOWED) is None
     assert select_safest([candidate], {"calendar-sync"}, {"storage.read"}) is None
+
+
+
+def test_unknown_or_unhealthy_integrations_are_never_selected():
+    candidate = inspect_manifest(manifest(), TRUST, allowed_permissions=ALLOWED)
+    assert candidate["health_status"] == "unknown"
+    assert select_safest([candidate], {"calendar-sync"}, ALLOWED) is None
+    candidate["health_status"] = "unhealthy"
+    assert select_safest([candidate], {"calendar-sync"}, ALLOWED) is None
+
+
+def test_malformed_manifest_types_fail_closed():
+    with pytest.raises(ManifestError):
+        inspect_manifest(manifest(kind=[]), TRUST)
+    with pytest.raises(ManifestError):
+        inspect_manifest(manifest(risk=[]), TRUST)
