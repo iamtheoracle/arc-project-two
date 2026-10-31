@@ -21,7 +21,7 @@ from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_con
 from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, SessionNotFoundError, default_agent_registry)
 from core.implementation_planner import plan_implementation
 from core.integrations import ManifestError, load_manifest_directory, load_trust_keys, select_safest
-from core.integration_lifecycle import ArtifactError, stage_approved_artifact
+from core.integration_lifecycle import ArtifactError, stage_approved_artifact, verify_staged_artifact
 
 app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
@@ -587,6 +587,108 @@ def install_approved_integration(
         "activation_performed": False, "runtime_permissions_granted": False,
         "next_requirement": "A reviewed integration-specific runtime adapter and separate owner activation approval are required.",
     }
+
+
+@app.post("/v1/integrations/{integration_id}/activation-approval", dependencies=[Depends(require_owner)], status_code=201)
+def request_integration_activation_approval(
+    integration_id: str,
+    version: str = Query(..., min_length=5, max_length=40),
+    manifest_digest: str = Query(..., min_length=64, max_length=64),
+    store: ArcStore = Depends(get_store),
+):
+    """Request a second, separate owner decision after inert artifact staging."""
+    try:
+        matches = [item for item in _integration_catalog(store)
+                   if item.get("integration_id") == integration_id
+                   and item.get("version") == version
+                   and item.get("manifest_digest") == manifest_digest
+                   and item.get("eligible_for_review") and item.get("signature_valid")]
+    except ManifestError:
+        raise HTTPException(status_code=503, detail="Integration trust configuration is invalid.")
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="The exact manifest is no longer trusted or compatible.")
+    prior = [item for item in store.list_integration_approvals(limit=500)
+             if item["integration_id"] == integration_id and item["version"] == version
+             and item["manifest_digest"] == manifest_digest and item["status"] == "approved"]
+    if not prior:
+        raise HTTPException(status_code=403, detail="Installation approval is required first.")
+    install_dir = os.environ.get("ORACLE_ARC_INTEGRATION_INSTALL_DIR", "data/integrations")
+    try:
+        present = verify_staged_artifact(integration_id, version, matches[0]["artifact_sha256"], install_dir)
+    except (ArtifactError, OSError):
+        present = False
+    if not present:
+        raise HTTPException(status_code=409, detail="The approved artifact is not staged or failed integrity verification.")
+    approval = store.request_integration_activation(integration_id, version, manifest_digest, "owner")
+    return {
+        "activation_approval": approval,
+        "installation_performed": False,
+        "activation_performed": False,
+        "runtime_permissions_granted": False,
+    }
+
+
+@app.put("/v1/integrations/{integration_id}/activation-approval", dependencies=[Depends(require_owner)])
+def decide_integration_activation_approval(
+    integration_id: str,
+    request: IntegrationApprovalDecision,
+    version: str = Query(..., min_length=5, max_length=40),
+    manifest_digest: str = Query(..., min_length=64, max_length=64),
+    store: ArcStore = Depends(get_store),
+):
+    try:
+        matches = [item for item in _integration_catalog(store)
+                   if item.get("integration_id") == integration_id
+                   and item.get("version") == version
+                   and item.get("manifest_digest") == manifest_digest
+                   and item.get("eligible_for_review") and item.get("signature_valid")]
+    except ManifestError:
+        raise HTTPException(status_code=503, detail="Integration trust configuration is invalid.")
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="The exact manifest is no longer trusted or compatible.")
+    try:
+        approval = store.decide_integration_activation(
+            integration_id, version, manifest_digest, request.approved, "owner", request.reason
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if approval is None:
+        raise HTTPException(status_code=404, detail="Activation approval request not found.")
+    return {
+        "activation_approval": approval,
+        "activation_performed": False,
+        "runtime_permissions_granted": False,
+    }
+
+
+@app.post("/v1/integrations/{integration_id}/activate", dependencies=[Depends(require_owner)])
+def activate_integration(
+    integration_id: str,
+    version: str = Query(..., min_length=5, max_length=40),
+    manifest_digest: str = Query(..., min_length=64, max_length=64),
+    store: ArcStore = Depends(get_store),
+):
+    """Fail closed until an audited integration-specific runtime adapter is installed."""
+    approvals = store.list_integration_activation_approvals(limit=500)
+    approved = any(item["integration_id"] == integration_id and item["version"] == version
+                   and item["manifest_digest"] == manifest_digest and item["status"] == "approved"
+                   for item in approvals)
+    if not approved:
+        raise HTTPException(status_code=403, detail="Separate owner activation approval is required.")
+    store.record_integration_event(
+        integration_id, version, "activation_blocked_no_runtime_adapter", "owner",
+        "Activation remains disabled until a reviewed isolated runtime adapter is configured.",
+        manifest_digest,
+    )
+    raise HTTPException(
+        status_code=409,
+        detail="Activation is safely blocked: no reviewed integration-specific isolated runtime adapter is configured.",
+    )
+
+
+@app.get("/v1/integrations/activation-approvals", dependencies=[Depends(require_owner)])
+def integration_activation_approvals(store: ArcStore = Depends(get_store)):
+    return {"data": store.list_integration_activation_approvals()}
 
 
 @app.get("/v1/integrations/approvals", dependencies=[Depends(require_owner)])
