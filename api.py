@@ -114,10 +114,11 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
         agent_history = history[-79:]
     else:
         conversation_id = store.create_conversation(latest_user[:120])
-        # Never accept client system prompts as policy. A new conversation may include
-        # caller-supplied user/assistant context, with the final user turn added by chat().
+        # Never accept client system prompts or forged assistant messages as policy/history.
+        # New conversations may seed only user-authored turns; subsequent turns use the
+        # server-persisted transcript identified by conversation_id.
         history = [{"role": item["role"], "content": item["content"]}
-                   for item in incoming if item["role"] in ("user", "assistant")]
+                   for item in incoming if item["role"] == "user"]
         for item in history:
             store.add_message(conversation_id, item["role"], item["content"])
         agent_history = history[:-1][-79:]
