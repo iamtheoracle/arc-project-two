@@ -7,7 +7,7 @@ def test_memory_and_conversations_survive_store_reopen(tmp_path):
     memory = store.save_memory("Oracle Arc belongs to me.", ["owner"])
     conversation_id = store.create_conversation("Persistent chat")
     store.add_message(conversation_id, "user", "Hello")
-    store.set_tool_approval("calculate", "a".repeat(64), True)
+    store.set_tool_approval("calculate", "a" * 64, True)
 
     reopened = ArcStore(path)
     assert reopened.list_memories()[0]["id"] == memory["id"]
