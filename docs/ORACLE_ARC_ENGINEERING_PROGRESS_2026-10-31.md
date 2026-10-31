@@ -65,6 +65,7 @@
 - Added a current fingerprint approval reopen test.
 - Commit: `50583c0ad6ca589a5381da5e86d73414390aaf57`.
 - These tests are committed but remain pending execution by GitHub Actions.
+- Follow-up test review added a true chunked-body case without `Content-Length`, and extended the gateway facade test to verify per-agent Ollama host forwarding. Commits: `648b9155580f8327a0720f4456a3f5ac0c2387d5` and `03e9c3c5f635d5afd876ea235ccaa1cbedec317b`.
 
 ### 9. Concierge added as a first-class specialist
 - Added stable registry identity `concierge` with explicit capabilities: `service_discovery`, `booking_research`, `appointment_planning`, `travel_coordination` and `workflow_follow_through`.
