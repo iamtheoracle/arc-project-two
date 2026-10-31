@@ -9,6 +9,7 @@ import json
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Any, Callable
 
 
@@ -24,7 +25,7 @@ def _fingerprint(action: dict[str, Any]) -> str:
 class ConciergeWorkflowStore:
     def __init__(self, database_path: str):
         self.path=database_path
-        with sqlite3.connect(self.path) as db:
+        with self._session() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS concierge_workflows(
               workflow_id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,application_id TEXT NOT NULL,
               principal_id TEXT NOT NULL,action_json TEXT NOT NULL,action_fingerprint TEXT NOT NULL,
@@ -32,6 +33,18 @@ class ConciergeWorkflowStore:
               expires_at INTEGER NOT NULL,provider_receipt_json TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)""")
             db.execute("CREATE INDEX IF NOT EXISTS idx_concierge_scope ON concierge_workflows(tenant_id,application_id,principal_id,status)")
             db.commit()
+
+    @contextmanager
+    def _session(self):
+        db=sqlite3.connect(self.path,timeout=10)
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def plan(self, identity, action: dict[str,Any], ttl_seconds: int=900) -> dict:
         required={"kind","provider","parameters","consequential"}
@@ -45,7 +58,7 @@ class ConciergeWorkflowStore:
         now=int(time.time())
         payload=json.dumps(action,sort_keys=True,separators=(",",":"),ensure_ascii=False)
         fp=_fingerprint(action)
-        with sqlite3.connect(self.path) as db:
+        with self._session() as db:
             db.execute("""INSERT INTO concierge_workflows VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
               (workflow_id,identity.tenant_id,identity.application_id,identity.principal_id,
                payload,fp,"awaiting_confirmation",now+max(60,min(ttl_seconds,3600)),None,now,now))
@@ -69,9 +82,9 @@ class ConciergeWorkflowStore:
             action=json.loads(row["action_json"])
             if _fingerprint(action) != row["action_fingerprint"]:
                 raise ConciergeError("Stored action integrity check failed")
-            db.execute("UPDATE concierge_workflows SET status='executing',updated_at=? WHERE workflow_id=? AND status='awaiting_confirmation'",
+            claimed=db.execute("UPDATE concierge_workflows SET status='executing',updated_at=? WHERE workflow_id=? AND status='awaiting_confirmation'",
                        (int(time.time()),workflow_id))
-            if db.total_changes != 1:
+            if claimed.rowcount != 1:
                 raise ConciergeError("Workflow was already claimed")
             db.commit()
         # Executor must return a provider-confirmed receipt; a bare success boolean is not enough.
