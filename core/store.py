@@ -156,6 +156,18 @@ class ArcStore:
                     manifest_digest TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
+                CREATE TABLE IF NOT EXISTS integration_activation_approvals (
+                    integration_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    manifest_digest TEXT NOT NULL,
+                    requested_by TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','revoked')),
+                    decision_by TEXT,
+                    decision_reason TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    decided_at TEXT,
+                    PRIMARY KEY(integration_id,version,manifest_digest)
+                );
             """)
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
             if "event_id" not in columns:
@@ -712,3 +724,73 @@ class ArcStore:
                 "INSERT INTO integration_audit(integration_id,version,action,actor,reason,manifest_digest) "
                 "VALUES(?,?,?,?,?,?)", values,
             )
+
+
+    def request_integration_activation(self, integration_id: str, version: str,
+                                       manifest_digest: str, actor: str) -> dict[str, Any]:
+        if not all(isinstance(v, str) and v.strip() for v in
+                   (integration_id, version, manifest_digest, actor)):
+            raise ValueError("Invalid integration activation request")
+        with self._session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR IGNORE INTO integration_activation_approvals "
+                "(integration_id,version,manifest_digest,requested_by,status) "
+                "VALUES(?,?,?,?,'pending')",
+                (integration_id, version, manifest_digest, actor),
+            )
+            row = conn.execute(
+                "SELECT * FROM integration_activation_approvals "
+                "WHERE integration_id=? AND version=? AND manifest_digest=?",
+                (integration_id, version, manifest_digest),
+            ).fetchone()
+            conn.execute(
+                "INSERT INTO integration_audit(integration_id,version,action,actor,reason,manifest_digest) "
+                "VALUES(?,?, 'activation_requested', ?, '', ?)",
+                (integration_id, version, actor, manifest_digest),
+            )
+        return dict(row)
+
+    def decide_integration_activation(self, integration_id: str, version: str,
+                                      manifest_digest: str, approved: bool,
+                                      actor: str, reason: str = "") -> dict[str, Any] | None:
+        if not isinstance(approved, bool) or not isinstance(actor, str) or not actor or len(reason) > 1000:
+            raise ValueError("Invalid integration activation decision")
+        with self._session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM integration_activation_approvals "
+                "WHERE integration_id=? AND version=? AND manifest_digest=?",
+                (integration_id, version, manifest_digest),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["status"] != "pending":
+                raise ValueError("Integration activation approval is already decided")
+            status = "approved" if approved else "rejected"
+            conn.execute(
+                "UPDATE integration_activation_approvals SET status=?,decision_by=?,decision_reason=?,"
+                "decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE integration_id=? AND version=? AND manifest_digest=? AND status='pending'",
+                (status, actor, reason, integration_id, version, manifest_digest),
+            )
+            conn.execute(
+                "INSERT INTO integration_audit(integration_id,version,action,actor,reason,manifest_digest) "
+                "VALUES(?,?,?,?,?,?)",
+                (integration_id, version, "activation_approved" if approved else "activation_rejected",
+                 actor, reason, manifest_digest),
+            )
+            updated = conn.execute(
+                "SELECT * FROM integration_activation_approvals "
+                "WHERE integration_id=? AND version=? AND manifest_digest=?",
+                (integration_id, version, manifest_digest),
+            ).fetchone()
+        return dict(updated)
+
+    def list_integration_activation_approvals(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._session() as conn:
+            rows = conn.execute(
+                "SELECT * FROM integration_activation_approvals ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
