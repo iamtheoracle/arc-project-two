@@ -4,6 +4,7 @@ Legacy owner routes remain owner-only. This router is the first application-cred
 surface; it never accepts caller-supplied tenant/app/principal scope.
 """
 from __future__ import annotations
+from dataclasses import asdict
 import hmac
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 from typing import Any, Callable
 from core.concierge_runtime import ConciergeWorkflowStore, ConciergeError
 from core.tenant_security import TenantSecurityStore, AuthorizationError
+from core.platform_control_plane import PlatformControlPlane
 
 router=APIRouter(prefix="/v1/platform",tags=["platform-identity"])
 _CONCIERGE_EXECUTORS: dict[str, Callable] = {}
@@ -233,3 +235,157 @@ def confirm_concierge_workflow(workflow_id:str,body:ConciergeConfirmation,
         return store.confirm_and_execute(identity,workflow_id,body.action_fingerprint,executor)
     except ConciergeError as exc:
         raise HTTPException(409,str(exc))
+
+
+# Shared metadata/execution control plane. This does not dynamically import or execute
+# application-supplied code; a separately trusted worker must host approved runtimes.
+def _control_plane() -> PlatformControlPlane:
+    return PlatformControlPlane(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+
+
+class AgentVersionCreate(BaseModel):
+    agent_id: str = Field(min_length=2, max_length=64)
+    version: str = Field(min_length=5, max_length=80)
+    manifest: dict[str, Any]
+
+
+class ModelRouteCreate(BaseModel):
+    route_id: str = Field(min_length=2, max_length=64)
+    provider_id: str = Field(min_length=2, max_length=64)
+    model_id: str = Field(min_length=1, max_length=256)
+    data_classifications: list[str] = Field(min_length=1, max_length=5)
+    regions: list[str] = Field(min_length=1, max_length=10)
+
+
+class ApplicationQuotaCreate(BaseModel):
+    window_seconds: int = Field(ge=1, le=86400)
+    max_executions: int = Field(ge=1, le=1000000)
+    max_concurrent: int = Field(ge=1, le=10000)
+    max_input_bytes: int = Field(ge=1, le=10000000)
+
+
+class ExecutionCreate(BaseModel):
+    agent_id: str = Field(min_length=2, max_length=64)
+    agent_version: str = Field(min_length=5, max_length=80)
+    route_id: str = Field(min_length=2, max_length=64)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    classification: str = "private"
+    region: str = "local"
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+@router.post("/agents/versions", status_code=201)
+def register_agent_version(body: AgentVersionCreate, identity=Depends(require_application)):
+    try:
+        result = _control_plane().register_agent(identity, body.agent_id, body.version, body.manifest)
+        return asdict(result)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except LookupError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.get("/agents/{agent_id}/versions/{version}")
+def read_agent_version(agent_id: str, version: str, identity=Depends(require_application)):
+    try:
+        return asdict(_control_plane().get_agent(identity, agent_id, version))
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.delete("/agents/{agent_id}/versions/{version}")
+def disable_agent_version(agent_id: str, version: str, identity=Depends(require_application)):
+    try:
+        if not _control_plane().disable_agent_version(identity, agent_id, version):
+            raise HTTPException(404, "Agent version not found")
+        return {"agent_id": agent_id, "version": version, "status": "disabled"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+
+
+@router.put("/model-routes/{route_id}")
+def configure_model_route(route_id: str, body: ModelRouteCreate,
+                           identity=Depends(require_application)):
+    if route_id != body.route_id:
+        raise HTTPException(422, "Route ID in path and body must match")
+    try:
+        _control_plane().configure_model_route(
+            identity, body.route_id, body.provider_id, body.model_id,
+            body.data_classifications, body.regions)
+        return {"route_id": route_id, "status": "enabled"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.put("/quotas")
+def configure_application_quota(body: ApplicationQuotaCreate,
+                                 identity=Depends(require_application)):
+    try:
+        _control_plane().set_quota(
+            identity, window_seconds=body.window_seconds,
+            max_executions=body.max_executions, max_concurrent=body.max_concurrent,
+            max_input_bytes=body.max_input_bytes)
+        return {"application_id": identity.application_id, "quota": body.model_dump()}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/executions", status_code=202)
+def submit_platform_execution(body: ExecutionCreate,
+                              identity=Depends(require_application)):
+    try:
+        execution_id = _control_plane().submit_execution(
+            identity, body.agent_id, body.agent_version, body.route_id,
+            body.payload, body.classification, body.region,
+            body.max_attempts, body.idempotency_key)
+        return {"execution_id": execution_id, "status": "queued"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except LookupError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.get("/executions/{execution_id}")
+def read_platform_execution(execution_id: str, identity=Depends(require_application)):
+    try:
+        return asdict(_control_plane().get_execution(identity, execution_id))
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.post("/executions/{execution_id}/usage", status_code=201)
+def record_platform_usage(execution_id: str, metric: str, quantity: int,
+                          identity=Depends(require_application)):
+    try:
+        _control_plane().record_usage(identity, execution_id, metric, quantity)
+        return {"execution_id": execution_id, "metric": metric, "quantity": quantity}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/usage")
+def read_platform_usage(since: int = 0, identity=Depends(require_application)):
+    try:
+        return {"application_id": identity.application_id,
+                "totals": _control_plane().usage_summary(identity, since)}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
