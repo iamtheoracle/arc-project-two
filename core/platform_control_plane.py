@@ -229,6 +229,8 @@ class PlatformControlPlane:
         self._require(identity, "model.route.manage")
         self._valid_id(route_id, "Route ID")
         self._valid_id(provider_id, "Provider ID")
+        if provider_id not in {"ollama", "openrouter", "groq", "gemini"}:
+            raise ValueError("Provider is not part of the registered Oracle Arc provider set")
         if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 256:
             raise ValueError("Model ID is required and must be at most 256 characters")
         allowed = {"public", "internal", "private", "sensitive", "restricted"}
@@ -326,6 +328,12 @@ class PlatformControlPlane:
                 raise PermissionError("Model route is not approved for this data classification")
             if region not in json.loads(route["regions_json"]):
                 raise PermissionError("Model route is not approved for this execution region")
+            if idempotency_key is not None:
+                existing = db.execute("""SELECT execution_id FROM arc_executions
+                    WHERE tenant_id=? AND application_id=? AND idempotency_key=?""",
+                    (identity.tenant_id, identity.application_id, idempotency_key)).fetchone()
+                if existing is not None:
+                    return existing["execution_id"]
             quota = db.execute("""SELECT * FROM arc_app_quotas
                 WHERE tenant_id=? AND application_id=?""",
                 (identity.tenant_id, identity.application_id)).fetchone()
@@ -446,6 +454,16 @@ class PlatformControlPlane:
         if row is None:
             raise LookupError("Execution not found")
         return self._execution(row)
+
+    def cancel_execution(self, identity: RequestIdentity, execution_id: str) -> bool:
+        self._require(identity, "agent.execution.cancel")
+        now = int(time.time())
+        with self._session() as db:
+            cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?
+                WHERE execution_id=? AND tenant_id=? AND application_id=? AND principal_id=?
+                AND status='queued'""",
+                (now, execution_id, identity.tenant_id, identity.application_id, identity.principal_id))
+            return cur.rowcount == 1
 
     def record_usage(self, identity: RequestIdentity, execution_id: str,
                      metric: str, quantity: int) -> None:
