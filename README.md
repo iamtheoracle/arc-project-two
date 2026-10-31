@@ -7,6 +7,8 @@ Oracle Arc is a standalone project. It is not Vantoris X Money, UNIBUD, The Arc 
 ## What is implemented
 
 - Local inference through Ollama; default model: `qwen2.5:7b`.
+- Provider-neutral model gateway with an explicit capability manifest and fail-closed provider registry. Ollama is the only enabled adapter in this milestone.
+- Owner-authenticated `GET /v1/capabilities` endpoint exposes the configured provider's supported capabilities without exposing credentials.
 - Owner-only HTTP API using a server-side bearer secret and constant-time token comparison.
 - OpenAI-compatible chat endpoint: `POST /v1/chat/completions`.
 - Persistent SQLite conversations and owner-managed memories.
@@ -68,6 +70,8 @@ curl -X POST http://127.0.0.1:8090/v1/memories \
 ```
 
 Other owner-authenticated routes:
+
+- `GET /v1/capabilities` — configured model provider capability manifest.
 
 - `GET /v1/models`
 - `GET /v1/conversations`
