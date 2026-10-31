@@ -11,7 +11,7 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 
 ## 1. Secure execution foundation
 
-**Current state:** Owner approval exists and tools are denied by default, but Python plugins are dynamically imported and execute in the API process. Approval is not isolation. This is a security blocker.
+**Current state (2026-10-31):** Arbitrary plugin discovery/import is removed. Only the reviewed calculator is executable, through a rootless Podman worker with no network, read-only root filesystem, dropped capabilities, non-root identity, resource limits and a hard timeout. Tool approval remains default-deny. Third-party integration artifacts can only be staged inertly after digest verification; activation remains blocked because no reviewed integration-specific runtime adapter is configured. Host hardening, image provenance, adversarial escape testing and production deployment review remain open.
 
 **Target design**
 - Separate the control plane (identity, policy, approvals, audit) from the execution plane (tool workers).
@@ -29,7 +29,7 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 
 ## 2. Provider-independent model gateway
 
-**Current state:** The model layer is a direct Ollama wrapper. The API selects one server-configured model. A provider registry, capability model and fallback policy are not implemented.
+**Current state (2026-10-31):** Ollama remains the default local adapter. Fixed-endpoint OpenAI-compatible adapters for OpenRouter, Groq and Gemini are registered only when server-side credentials exist. BUD and ORACLE connectors have ordered Ollama host fallback and provider fallback. Timeouts and failure cooldowns exist, but task-aware privacy routing, streaming normalization, usage budgets, cancellation, active readiness checks and live provider validation remain incomplete. Private context must not be sent to a remote provider without an explicit deployment policy.
 
 **Target design**
 - Define a stable provider contract for chat, streaming, tool calls, cancellation, usage, errors and health.
@@ -46,7 +46,7 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 
 ## 3. Spark memory engine
 
-**Current state:** SQLite stores owner-managed memory records; the API injects a bounded set of recent memories into the prompt. Semantic retrieval, lifecycle management and scoped multi-agent access are not implemented.
+**Current state (2026-10-31):** SQLite stores owner-managed memories, profile preferences and explicit boundaries; a bounded set of recent memories is added to prompts as untrusted context. Memory lifecycle endpoints exist, but semantic retrieval, structured provenance/confidence/expiry, derived-index deletion, encryption at rest and scoped multi-agent memory grants are not implemented. SPARK remains disabled.
 
 **Target design**
 - Memory classes: working/current-turn, episodic events, semantic facts, procedural preferences, goals/projects and explicit boundaries.
@@ -63,7 +63,7 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 
 ## 4. Human understanding as a measurable capability
 
-**Current state:** A detailed conversational policy and profile normalization exist. Most adaptation is prompt-based; tests largely verify prompt content and normalization rather than observed model behaviour.
+**Current state (2026-10-31):** A detailed conversational policy, owner-controlled profile and boundaries, and a request-aware reasoning reliability standard are wired into BUD, ORACLE and the direct chat route. The request classifier adds different checks for time-sensitive, high-stakes, quantitative, technical and comparison requests. This is prompt guidance plus deterministic request classification, not an independent fact verifier or proof of reasoning quality. Most tests verify policy contracts and normalization; live model behaviour still needs blinded evaluation.
 
 **Target design**
 - Build a structured, turn-local interpretation of intent, task, conversational mode, tone cues, uncertainty, desired detail and support needs.
@@ -79,7 +79,7 @@ The platform must not claim consciousness, human experience, guaranteed correctn
 
 ## 5. Oracle Arc platform benchmark
 
-**Current state:** Unit and API tests exist (52 passed on commit 5af99bbc96f1ed1f7f7e1729e97b2e5cd0df875a), but no end-to-end benchmark measures the five systems together.
+**Current state (2026-10-31):** The scenario catalogue contains 18 cases across conversation, human understanding, memory, reasoning, secure execution, provider gateway, privacy and agent coordination. A human-rating evaluator now validates complete case coverage, run metadata and 0–4 scores; any declared critical failure or critical-case score below 3 fails the release gate regardless of average. The evaluator records supplied ratings; it does not automatically judge model quality. Full blinded runs, holdout management and baseline reports remain to be completed.
 
 **Target design**
 - Versioned, reproducible scenarios with fixed inputs, expected properties and scoring rubrics.
@@ -234,3 +234,12 @@ Still required before real activation: a reviewed per-integration runtime adapte
 `core/agent_worker.py` is a separate process that claims durable tasks, renews expiring leases, dispatches through the configured agent registry and persists results only while it owns the lease. `POST /v1/agent-tasks/submit` queues work for this process. Existing synchronous chat remains unchanged.
 
 Workers and API must share the same transactional database. Current SQLite queue coordination is single-host/shared-volume only; multi-host deployment requires PostgreSQL or another shared transactional store. Worker credentials and network permissions must be scoped independently from owner API credentials. The task payload contains conversation context and must be protected as sensitive data at rest and in backups.
+
+
+## Reasoning reliability implementation baseline
+
+A request-aware reliability policy is wired into all current chat entry points. It classifies the latest user request into general, time-sensitive, high-stakes, quantitative, technical or comparison work and adds task-specific requirements for evidence, uncertainty, arithmetic checks, code inspection, rollback and professional escalation. It instructs the model to provide concise explanations and evidence summaries rather than private chain-of-thought.
+
+This layer is intentionally not described as a fact checker: deterministic wording classification cannot prove that a model's answer is true. Current evidence still requires an actual trusted source or an honest disclosure that live verification is unavailable. Calculations need independent recomputation; code changes need executed tests; subjective behaviour needs blinded human ratings. The benchmark scoring runner enforces complete case coverage and prevents a critical regression from being hidden by a high average.
+
+**Known limits:** the classifier is heuristic and may miss unusual phrasing or over-classify ambiguous requests. Model self-review is not independent verification. Live Ollama inference, external provider quality, production latency, user-facing behaviour and real-world generalization are not established by unit tests.
