@@ -1,7 +1,7 @@
 name: Oracle Arc Verification
 on:
   push:
-    branches: [main, 'feat/oracle-arc-personal-core', 'feat/human-understanding-adaptive-intelligence']
+    branches: [main, 'feat/oracle-arc-personal-core', 'feat/human-understanding-adaptive-intelligence', 'feat/oracle-arc-network-platform-architecture']
   pull_request:
     branches: [main, 'feat/oracle-arc-personal-core']
 permissions:
