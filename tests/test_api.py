@@ -791,6 +791,20 @@ def test_integration_approval_is_bound_to_signed_manifest_and_audited(client, tm
     assert "no reviewed" in blocked.json()["detail"]
     audit = client.get("/v1/integrations/audit", headers=auth()).json()["data"]
     assert any(event["action"] == "activation_blocked_no_runtime_adapter" for event in audit)
+    revoked = client.delete(
+        "/v1/integrations/calendar-sync/activation-approval",
+        headers=auth(),
+        params={"version": item["version"], "manifest_digest": item["manifest_digest"],
+                "reason": "Owner withdrew permission"},
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["activation_approval"]["status"] == "revoked"
+    after_revoke = client.post(
+        "/v1/integrations/calendar-sync/activate",
+        headers=auth(),
+        params={"version": item["version"], "manifest_digest": item["manifest_digest"]},
+    )
+    assert after_revoke.status_code == 403
 
 
 def test_independent_agent_task_submission_requires_owner_auth(client):
