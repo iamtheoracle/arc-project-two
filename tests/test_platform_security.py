@@ -151,3 +151,32 @@ def test_remote_provider_needs_request_level_policy_and_data_must_be_exportable(
     result=gateway.chat(allowed,"model",[{"role":"user","content":"public"}],
                         preferred_provider="remote-x")
     assert result.remote_egress is True
+
+
+def test_agent_task_queue_is_scoped_and_worker_reauthorizes_capabilities(tmp_path):
+    store=TenantSecurityStore(tmp_path/"arc.sqlite3")
+    tenant=store.create_tenant("Tenant")
+    app_a=store.create_application(tenant,"A")
+    app_b=store.create_application(tenant,"B")
+    caps=["agent.oracle.dispatch","reasoning"]
+    a=store.authenticate(store.issue_credential(tenant,app_a,"p1",caps))
+    b=store.authenticate(store.issue_credential(tenant,app_b,"p1",caps))
+    task_id=store.create_scoped_task(a,"oracle",["reasoning"],{"prompt":"analyze"})
+    assert store.get_scoped_task(b,task_id) is None
+    with pytest.raises(AuthorizationError):
+        store.claim_scoped_task(b,task_id,"worker-b")
+    claimed=store.claim_scoped_task(a,task_id,"worker-a")
+    assert claimed["status"]=="running"
+    assert claimed["payload"]["prompt"]=="analyze"
+    assert store.complete_scoped_task(a,task_id,"worker-a",{"answer":"done"})
+    assert store.get_scoped_task(a,task_id)["status"]=="succeeded"
+
+
+def test_agent_task_requires_dispatch_and_each_requested_capability(tmp_path):
+    store=TenantSecurityStore(tmp_path/"arc.sqlite3")
+    tenant=store.create_tenant("Tenant")
+    app=store.create_application(tenant,"App")
+    identity=store.authenticate(store.issue_credential(
+        tenant,app,"p1",["agent.oracle.dispatch"]))
+    with pytest.raises(AuthorizationError):
+        store.create_scoped_task(identity,"oracle",["reasoning"],{"prompt":"no grant"})
