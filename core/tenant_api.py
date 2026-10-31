@@ -143,9 +143,8 @@ def tenant_inference(request:InferenceRequest,identity:RequestIdentity=Depends(_
     if "inference.chat" not in identity.capabilities:
         raise HTTPException(403,"Inference capability is not granted")
     allowed=["ollama"] if "inference.provider.ollama" in identity.capabilities else []
-    remote_names={cap.split(".",2)[2] for cap in identity.capabilities
-                  if cap.startswith("inference.remote.") and cap.count(".")>=2
-                  and cap not in {"inference.remote.allow","inference.remote.private"}}
+    remote_names={name for name in ("openrouter","groq","gemini")
+                  if "inference.remote."+name in identity.capabilities}
     remote_ok=("inference.remote.allow" in identity.capabilities
                and "inference.remote.private" in identity.capabilities
                and "inference.remote.region.unspecified" in identity.capabilities)
@@ -156,6 +155,10 @@ def tenant_inference(request:InferenceRequest,identity:RequestIdentity=Depends(_
         allowed_regions=("local","unspecified") if remote_ok else ("local",),
         policy_version=identity.policy_version)
     try:
+        if any(not isinstance(item,dict) or item.get("role") not in {"system","user","assistant"}
+               or not isinstance(item.get("content"),str) or not item["content"]
+               for item in request.messages):
+            raise HTTPException(422,"Inference messages require supported roles and non-empty text")
         result=PrivacyAwareModelGateway().chat(policy,os.environ.get("ORACLE_ARC_MODEL","qwen2.5:7b"),
             request.messages,temperature=request.temperature,provider_id=request.provider_id)
         return {"data":result,"tenant_id":identity.tenant_id,"application_id":identity.application_id,
