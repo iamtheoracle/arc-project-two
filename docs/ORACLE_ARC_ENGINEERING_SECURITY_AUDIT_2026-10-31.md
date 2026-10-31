@@ -43,8 +43,8 @@ Audit of the current feature branch implementation, focused on the model gateway
 
 ## Verification
 
-- Latest previously confirmed CI run before this pass: 37 tests passed, 1 upstream Starlette/httpx deprecation warning.
-- This pass adds new tests; their CI result must be checked on the latest branch head before claiming they pass.
+- Latest CI verification on the current branch head: **50 tests passed, 1 upstream Starlette/httpx deprecation warning**. Both push and pull-request workflow runs completed successfully: [run 548](https://github.com/iamtheoracle/arc-project-two/actions/runs/41215308732) and [run 549](https://github.com/iamtheoracle/arc-project-two/actions/runs/41215313182).
+- Two earlier CI attempts failed because the new URL-validation test used an unescaped regular-expression pattern. The assertion was corrected and the current-head runs passed.
 - No live Ollama request, external provider request, penetration test, or production deployment is claimed.
 
 ## Decision
