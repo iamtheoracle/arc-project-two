@@ -198,3 +198,21 @@ def test_integration_approval_decision_is_persisted_and_audited(tmp_path):
     assert store.list_integration_audit()[0]["action"] == "approved"
     with pytest.raises(ValueError, match="already decided"):
         store.decide_integration_approval("calendar-sync", "1.2.0", "a" * 64, False, "owner")
+
+
+def test_integration_activation_approval_is_separate_and_audited(tmp_path):
+    store = ArcStore(tmp_path / "integration-activation.sqlite3")
+    requested = store.request_integration_activation("calendar-sync", "1.2.0", "b" * 64, "owner")
+    assert requested["status"] == "pending"
+    approved = store.decide_integration_activation(
+        "calendar-sync", "1.2.0", "b" * 64, True, "owner", "Reviewed runtime scope"
+    )
+    assert approved["status"] == "approved"
+    assert store.list_integration_activation_approvals()[0]["status"] == "approved"
+    actions = [event["action"] for event in store.list_integration_audit()]
+    assert "activation_requested" in actions
+    assert "activation_approved" in actions
+    with pytest.raises(ValueError, match="already decided"):
+        store.decide_integration_activation(
+            "calendar-sync", "1.2.0", "b" * 64, False, "owner"
+        )
