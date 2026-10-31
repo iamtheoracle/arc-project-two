@@ -125,6 +125,7 @@ class ArcStore:
                     ON agent_task_outbox(status, available_at, created_at);
                 CREATE TABLE IF NOT EXISTS tool_permissions (
                     name TEXT PRIMARY KEY,
+                    fingerprint TEXT,
                     approved INTEGER NOT NULL CHECK(approved IN (0,1)),
                     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
@@ -184,6 +185,9 @@ class ArcStore:
                 if name not in task_columns:
                     conn.execute(f"ALTER TABLE agent_tasks ADD COLUMN {name} {definition}")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_tasks_claim ON agent_tasks(status, lease_expires_at, created_at)")
+            permission_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tool_permissions)").fetchall()}
+            if "fingerprint" not in permission_columns:
+                conn.execute("ALTER TABLE tool_permissions ADD COLUMN fingerprint TEXT")
             outbox_columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_task_outbox)").fetchall()}
             if "dead_letter" not in outbox_columns:
                 conn.execute("ALTER TABLE agent_task_outbox ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0")
@@ -608,17 +612,35 @@ class ArcStore:
             row = conn.execute("SELECT * FROM agent_tasks WHERE task_id=?", (task_id,)).fetchone()
         return self._agent_task_row(row) if row else None
 
-    def approved_tools(self) -> set[str]:
+    def approved_tools(self, current_fingerprints: dict[str, str] | None = None) -> set[str]:
+        # Fail closed for legacy approvals and callers that cannot prove the current
+        # implementation digest. A name-only approval is never sufficient.
+        if not current_fingerprints:
+            return set()
         with self._session() as conn:
-            rows = conn.execute("SELECT name FROM tool_permissions WHERE approved=1").fetchall()
-        return {row["name"] for row in rows}
+            rows = conn.execute(
+                "SELECT name,fingerprint FROM tool_permissions WHERE approved=1"
+            ).fetchall()
+        return {
+            row["name"] for row in rows
+            if current_fingerprints.get(row["name"]) == row["fingerprint"]
+        }
 
-    def set_tool_approval(self, name: str, approved: bool) -> None:
+    def set_tool_approval(self, name: str, fingerprint: str, approved: bool) -> None:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("Tool name is required")
+        if (not isinstance(fingerprint, str) or len(fingerprint) != 64
+                or any(character not in "0123456789abcdef" for character in fingerprint.lower())):
+            raise ValueError("A valid SHA-256 tool fingerprint is required")
+        if not isinstance(approved, bool):
+            raise ValueError("Tool approval must be boolean")
         with self._session() as conn:
             conn.execute(
-                "INSERT INTO tool_permissions(name,approved,updated_at) VALUES(?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
-                "ON CONFLICT(name) DO UPDATE SET approved=excluded.approved,updated_at=excluded.updated_at",
-                (name, int(approved)),
+                "INSERT INTO tool_permissions(name,fingerprint,approved,updated_at) "
+                "VALUES(?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+                "ON CONFLICT(name) DO UPDATE SET fingerprint=excluded.fingerprint,"
+                "approved=excluded.approved,updated_at=excluded.updated_at",
+                (name, fingerprint.lower(), int(approved)),
             )
             conn.execute("INSERT INTO tool_audit(tool_name,outcome) VALUES(?,?)",
                          (name, "owner_approved" if approved else "owner_revoked"))
