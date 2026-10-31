@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from core.store import ArcStore
@@ -170,3 +171,15 @@ def test_outbox_dead_letters_events_after_delivery_attempt_limit(tmp_path):
         row = conn.execute("SELECT dead_letter,status FROM agent_task_outbox WHERE event_id=?", (event_id,)).fetchone()
     assert row["dead_letter"] == 1
     assert row["status"] == "pending"
+
+
+def test_concurrent_workers_cannot_claim_the_same_agent_task(tmp_path):
+    store = ArcStore(tmp_path / "concurrent-claims.sqlite3")
+    store.create_agent_task("one-winner", "bud", "oracle", ["reasoning"])
+    def claim(worker_number):
+        return store.claim_agent_task(f"worker-{worker_number}", task_id="one-winner")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(claim, range(8)))
+    winners = [item for item in results if item is not None]
+    assert len(winners) == 1
+    assert winners[0]["attempts"] == 1
