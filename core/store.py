@@ -794,3 +794,39 @@ class ArcStore:
                 (max(1, min(limit, 500)),),
             ).fetchall()
         return [dict(row) for row in rows]
+
+
+    def revoke_integration_activation(self, integration_id: str, version: str,
+                                      manifest_digest: str, actor: str,
+                                      reason: str = "") -> dict[str, Any] | None:
+        if not all(isinstance(v, str) and v.strip() for v in
+                   (integration_id, version, manifest_digest, actor)) or len(reason) > 1000:
+            raise ValueError("Invalid integration activation revocation")
+        with self._session() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM integration_activation_approvals "
+                "WHERE integration_id=? AND version=? AND manifest_digest=?",
+                (integration_id, version, manifest_digest),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["status"] != "approved":
+                raise ValueError("Only an approved activation can be revoked")
+            conn.execute(
+                "UPDATE integration_activation_approvals SET status='revoked',decision_by=?,"
+                "decision_reason=?,decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE integration_id=? AND version=? AND manifest_digest=? AND status='approved'",
+                (actor, reason, integration_id, version, manifest_digest),
+            )
+            conn.execute(
+                "INSERT INTO integration_audit(integration_id,version,action,actor,reason,manifest_digest) "
+                "VALUES(?,?,?,?,?,?)",
+                (integration_id, version, "activation_revoked", actor, reason, manifest_digest),
+            )
+            updated = conn.execute(
+                "SELECT * FROM integration_activation_approvals "
+                "WHERE integration_id=? AND version=? AND manifest_digest=?",
+                (integration_id, version, manifest_digest),
+            ).fetchone()
+        return dict(updated)
