@@ -66,6 +66,15 @@
 - Commit: `50583c0ad6ca589a5381da5e86d73414390aaf57`.
 - These tests are committed but remain pending execution by GitHub Actions.
 
+### 9. Concierge added as a first-class specialist
+- Added stable registry identity `concierge` with explicit capabilities: `service_discovery`, `booking_research`, `appointment_planning`, `travel_coordination` and `workflow_follow_through`.
+- Concierge is registered but disabled by default until its runtime, integration contracts and authorization paths are implemented and tested.
+- Its responsibility is practical coordination: discovering services, comparing options, researching booking/appointment choices, coordinating travel and tracking multi-step arrangements.
+- It cannot claim a booking, purchase, payment, message or external change is complete without a configured integration and a provider-confirmed result. Product policies and explicit confirmations remain authoritative.
+- Concierge receives only the minimum task-scoped location, schedule, contact or preference data. It does not get blanket SPARK memory access.
+- Updated the master architecture, network architecture and registry tests.
+- Commits: `f291d412a9577f59eaaaf3e0b15dcfb1801b1221` (registry), `ab88c8f51e350a0f1c026c8ad9a353ef3698c6e9` (tests), `0ea4d72b01f6660c102202278ce5b857ed2667d2` (master architecture), `b1f4cae38461b57f785f5870d299a425d7b2f7fe` (network architecture).
+
 ## Remaining high-priority work
 
 | Priority | Work | State |
@@ -80,6 +89,7 @@
 | P1 | Add per-request privacy routing and provider allowlists, replacing the temporary global remote flag | Pending |
 | P1 | Test queue/outbox recovery, backup semantics, idempotency and cancellation under failure | Pending |
 | P1 | Add app-scoped memory grants, provenance, retention and deletion propagation | Not started |
+| P1 | Implement Concierge runtime, approved service connectors, user-confirmed actions and provider-confirmed receipts | Registered and specified; runtime disabled/pending |
 | P2 | First non-production MY REALM consumer integration with explicit contract and tests | Not started |
 
 ## Important status boundary
