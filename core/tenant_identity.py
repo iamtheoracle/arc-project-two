@@ -168,7 +168,7 @@ class TenantIdentityStore:
         if not caps or any(not isinstance(c, str) or not c.strip() or len(c) > 100 for c in caps):
             raise ValueError("At least one valid capability is required")
         app_id, credential_id = "app_" + uuid.uuid4().hex, "cred_" + uuid.uuid4().hex
-        secret, salt = secrets.token_urlsafe(48), secrets.token_bytes(16)
+        secret, salt = "arc1." + credential_id + "." + secrets.token_urlsafe(48), secrets.token_bytes(16)
         verifier = salt.hex() + "$" + self._verifier(secret, salt)
         now = int(time.time())
         with self._session() as db:
