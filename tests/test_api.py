@@ -694,3 +694,59 @@ def test_implementation_planner_recommends_agents_and_integrations_without_side_
 def test_implementation_planner_rejects_blank_description(client):
     response = client.post("/v1/implementation/plan", headers=auth(), json={"description": "  "})
     assert response.status_code == 422
+
+
+def test_integration_catalog_requires_owner_auth(client):
+    assert client.get("/v1/integrations/catalog").status_code == 401
+
+
+def test_integration_approval_is_bound_to_signed_manifest_and_audited(client, tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from core.integrations import sign_manifest
+
+    key = "integration-test-publisher-secret-long-enough-123"
+    manifest = {
+        "integration_id": "calendar-sync",
+        "kind": "connector",
+        "version": "1.2.0",
+        "publisher": "test-publisher",
+        "description": "Calendar synchronization connector",
+        "capabilities": ["calendar-sync"],
+        "permissions": ["calendar.read"],
+        "min_app_version": "0.1.0",
+        "max_app_version": "1.0.0",
+        "risk": "low",
+        "artifact_sha256": hashlib.sha256(b"test artifact").hexdigest(),
+        "health_url": None,
+    }
+    manifest["signature"] = sign_manifest(manifest, key)
+    directory = tmp_path / "manifests"
+    directory.mkdir()
+    (directory / "calendar.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setenv("ORACLE_ARC_MANIFEST_TRUST_KEYS", json.dumps({"test-publisher": key}))
+    monkeypatch.setenv("ORACLE_ARC_INTEGRATION_MANIFEST_DIR", str(directory))
+    monkeypatch.setenv("ORACLE_ARC_ALLOWED_INTEGRATION_PERMISSIONS", "calendar.read")
+
+    catalog = client.get("/v1/integrations/catalog", headers=auth())
+    assert catalog.status_code == 200
+    item = catalog.json()["data"][0]
+    assert item["signature_valid"] is True
+    assert item["eligible_for_review"] is True
+    assert item["installed"] is False
+
+    requested = client.post("/v1/integrations/calendar-sync/approval", headers=auth())
+    assert requested.status_code == 201
+    assert requested.json()["approval"]["status"] == "pending"
+    assert requested.json()["installation_performed"] is False
+
+    decided = client.put(
+        "/v1/integrations/calendar-sync/approval",
+        headers=auth(),
+        params={"version": item["version"], "manifest_digest": item["manifest_digest"]},
+        json={"approved": True, "reason": "Reviewed least-privilege permissions"},
+    )
+    assert decided.status_code == 200
+    assert decided.json()["approval"]["status"] == "approved"
+    assert decided.json()["activation_performed"] is False
+    assert client.get("/v1/integrations/audit", headers=auth()).json()["data"]
