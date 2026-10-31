@@ -11,7 +11,7 @@ Oracle Arc is a standalone project. It is not Vantoris X Money, UNIBUD, The Arc 
 - OpenAI-compatible chat endpoint: `POST /v1/chat/completions`.
 - Persistent SQLite conversations and owner-managed memories.
 - Memory list, save, and permanent-delete endpoints.
-- Tool permissions default to denied. The owner must explicitly approve or revoke each installed tool.
+- Tool permissions default to denied. Plugin modules are not imported unless their filename is explicitly allowlisted by the owner; each discovered tool then requires separate owner approval or revocation.
 - Tool audit history records approvals, revocations, denials, and executions without storing tool arguments.
 - API model selection is pinned to the server-configured model; clients cannot trigger arbitrary model pulls.
 - Automated tests for authentication, persistence, memory deletion, permissions, and agent denial behavior.
@@ -86,8 +86,8 @@ Conversation continuity: the first chat response returns `conversation_id`. Send
 - The API refuses protected requests if `ORACLE_ARC_API_KEY` is missing or incorrect.
 - Keep `ORACLE_ARC_API_KEY` and the SQLite database on a trusted server. Never use a `VITE_*` or other browser-exposed variable for secrets.
 - The API binds to `127.0.0.1` by default in the documented command. For a remote platform integration, use a private network or authenticated gateway with TLS; do not expose this port publicly without that layer.
-- No tools are approved initially. Review each plugin before enabling it.
-- Plugin code runs with the operating-system permissions of the Oracle Arc process. Tool approval is not a sandbox: run with least-privilege OS permissions and avoid granting access to sensitive files unnecessarily.
+- No plugin modules are trusted or tools approved initially. Set `ORACLE_ARC_TRUSTED_PLUGINS` to comma-separated, personally reviewed plugin filename stems (for example `calculator`) before the service imports them. Then approve individual tools through the authenticated API. Importing Python plugins executes their code with the service account's OS permissions.
+- Plugin code runs with the operating-system permissions of the Oracle Arc process. The allowlist is a trust gate, not a sandbox; tool approval is a separate execution gate. Run with least-privilege OS permissions and avoid granting access to sensitive files unnecessarily. Tool arguments are checked against each plugin's JSON Schema, and tool output is length-bounded.
 - SQLite is local persistent storage, not encrypted-at-rest storage. Protect the host disk and backups.
 - This repository's current GitHub visibility is public. Never put private conversations, memories, keys, or real personal data in source control. If source-code confidentiality is required, change repository visibility to private in GitHub settings.
 
