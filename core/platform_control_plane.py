@@ -171,10 +171,20 @@ class PlatformControlPlane:
             any(not isinstance(x, str) or not _ID.fullmatch(x) for x in routes) or
             len(set(routes)) != len(routes)):
             raise ValueError("Agent must reference one or more valid model route IDs")
+        if not set(caps).issubset(identity.capabilities):
+            raise PermissionError("Application identity lacks one or more agent-required capabilities")
+        if not set(tools).issubset(identity.capabilities):
+            raise PermissionError("Application identity lacks one or more agent tool grants")
         canonical = self._json(manifest)
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
+            for route_id in routes:
+                route = db.execute("""SELECT 1 FROM arc_model_routes
+                    WHERE tenant_id=? AND application_id=? AND route_id=? AND enabled=1""",
+                    (identity.tenant_id, identity.application_id, route_id)).fetchone()
+                if route is None:
+                    raise LookupError("Every agent model route must already exist and be enabled")
             db.execute("""INSERT INTO arc_agent_versions
                 VALUES(?,?,?,?,?,?,'active',?)""",
                 (identity.tenant_id, identity.application_id, agent_id, version,
@@ -319,6 +329,8 @@ class PlatformControlPlane:
             quota = db.execute("""SELECT * FROM arc_app_quotas
                 WHERE tenant_id=? AND application_id=?""",
                 (identity.tenant_id, identity.application_id)).fetchone()
+            if quota is None:
+                raise PermissionError("Application execution quota must be configured before workloads are queued")
             if quota:
                 if len(input_json.encode("utf-8")) > quota["max_input_bytes"]:
                     raise PermissionError("Application input-size quota exceeded")
