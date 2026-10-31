@@ -6,6 +6,7 @@ predicates; caller-supplied IDs never select a tenant or application.
 from __future__ import annotations
 import json
 import sqlite3
+from contextlib import contextmanager
 import uuid
 from typing import Any
 from .tenant_identity import RequestIdentity
@@ -14,7 +15,7 @@ from .tenant_identity import RequestIdentity
 class TenantStore:
     def __init__(self, database_path: str):
         self.database_path = database_path
-        with self._connect() as db:
+        with self._session() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS arc_scoped_conversations(
               tenant_id TEXT NOT NULL, application_id TEXT NOT NULL, principal_id TEXT NOT NULL,
@@ -53,6 +54,18 @@ class TenantStore:
         db.execute("PRAGMA busy_timeout=10000")
         return db
 
+    @contextmanager
+    def _session(self):
+        db = self._connect()
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     @staticmethod
     def _require(identity: RequestIdentity, capability: str):
         if capability not in identity.capabilities:
@@ -61,7 +74,7 @@ class TenantStore:
     def create_conversation(self, identity: RequestIdentity, title: str = "") -> str:
         self._require(identity, "memory.write")
         cid=uuid.uuid4().hex
-        with self._connect() as db:
+        with self._session() as db:
             db.execute("INSERT INTO arc_scoped_conversations VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)",
                 (identity.tenant_id,identity.application_id,identity.principal_id,cid,title[:160]))
             db.commit()
@@ -71,7 +84,7 @@ class TenantStore:
         self._require(identity, "conversation.write")
         if role not in {"user","assistant"}: raise ValueError("Unsupported message role")
         mid=uuid.uuid4().hex
-        with self._connect() as db:
+        with self._session() as db:
             parent=db.execute("SELECT 1 FROM arc_scoped_conversations WHERE tenant_id=? AND application_id=? AND principal_id=? AND conversation_id=?",
                 (identity.tenant_id,identity.application_id,identity.principal_id,conversation_id)).fetchone()
             if parent is None: raise LookupError("Conversation not found")
@@ -82,7 +95,7 @@ class TenantStore:
 
     def get_messages(self, identity: RequestIdentity, conversation_id: str) -> list[dict[str,Any]]:
         self._require(identity, "conversation.read")
-        with self._connect() as db:
+        with self._session() as db:
             parent=db.execute("SELECT 1 FROM arc_scoped_conversations WHERE tenant_id=? AND application_id=? AND principal_id=? AND conversation_id=?",
                 (identity.tenant_id,identity.application_id,identity.principal_id,conversation_id)).fetchone()
             if parent is None: raise LookupError("Conversation not found")
@@ -97,7 +110,7 @@ class TenantStore:
         if category == "sensitive" and "memory.sensitive.write" not in identity.capabilities:
             raise PermissionError("Sensitive memory requires a separate capability")
         mid=uuid.uuid4().hex
-        with self._connect() as db:
+        with self._session() as db:
             db.execute("INSERT INTO arc_scoped_memories VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
                 (identity.tenant_id,identity.application_id,identity.principal_id,mid,category,content,
                  json.dumps(tags or [],ensure_ascii=False)))
@@ -110,7 +123,7 @@ class TenantStore:
         if not categories or not purpose.strip() or expires_at <= identity.issued_at:
             raise ValueError("A purpose, categories and future expiry are required")
         grant="grant_"+uuid.uuid4().hex
-        with self._connect() as db:
+        with self._session() as db:
             dest=db.execute("SELECT 1 FROM arc_applications WHERE tenant_id=? AND application_id=? AND status='active'",
                 (identity.tenant_id,destination_application_id)).fetchone()
             if not dest: raise LookupError("Destination application not found")
@@ -122,7 +135,7 @@ class TenantStore:
 
     def revoke_memory_grant(self, identity: RequestIdentity, grant_id: str) -> bool:
         self._require(identity, "memory.share")
-        with self._connect() as db:
+        with self._session() as db:
             cursor=db.execute("UPDATE arc_memory_grants SET revoked_at=unixepoch() WHERE grant_id=? AND tenant_id=? AND source_application_id=? AND principal_id=? AND revoked_at IS NULL",
                 (grant_id,identity.tenant_id,identity.application_id,identity.principal_id))
             db.commit()
@@ -130,7 +143,7 @@ class TenantStore:
 
     def shared_memories(self, identity: RequestIdentity, source_application_id: str) -> list[dict[str,Any]]:
         self._require(identity, "memory.shared.read")
-        with self._connect() as db:
+        with self._session() as db:
             grants=db.execute("SELECT categories_json FROM arc_memory_grants WHERE tenant_id=? AND source_application_id=? AND destination_application_id=? AND principal_id=? AND revoked_at IS NULL AND expires_at>unixepoch()",
                 (identity.tenant_id,source_application_id,identity.application_id,identity.principal_id)).fetchall()
             allowed=set()
