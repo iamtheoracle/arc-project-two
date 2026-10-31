@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from core.tenant_identity import TenantIdentityStore, RequestIdentity
 from core.tenant_store import TenantStore
+from core.privacy_gateway import InferencePolicy, PrivacyAwareModelGateway
 
 router=APIRouter(prefix="/v1/tenants",tags=["tenant-platform"])
 
@@ -72,6 +73,12 @@ class MemoryCreate(BaseModel):
     tags:list[str]=Field(default_factory=list,max_length=20)
 
 
+class InferenceRequest(BaseModel):
+    messages:list[dict]=Field(min_length=1,max_length=100)
+    provider_id:str=Field(default="ollama",max_length=40)
+    temperature:float=Field(default=0.7,ge=0,le=2)
+
+
 @router.post("/provision",dependencies=[Depends(_owner)],status_code=201)
 def provision_tenant(request:TenantProvision):
     try:
@@ -123,3 +130,31 @@ def save_memory(request:MemoryCreate,identity:RequestIdentity=Depends(_applicati
     try:return {"memory_id":_tenant_store().save_memory(identity,request.content,request.category,request.tags)}
     except PermissionError as exc:raise HTTPException(403,str(exc))
     except ValueError as exc:raise HTTPException(422,str(exc))
+
+
+@router.post("/inference")
+def tenant_inference(request:InferenceRequest,identity:RequestIdentity=Depends(_application_identity)):
+    if "inference.chat" not in identity.capabilities:
+        raise HTTPException(403,"Inference capability is not granted")
+    allowed=["ollama"] if "inference.provider.ollama" in identity.capabilities else []
+    remote_names={cap.split(".",2)[2] for cap in identity.capabilities
+                  if cap.startswith("inference.remote.") and cap.count(".")>=2
+                  and cap not in {"inference.remote.allow","inference.remote.private"}}
+    remote_ok=("inference.remote.allow" in identity.capabilities
+               and "inference.remote.private" in identity.capabilities
+               and "inference.remote.region.unspecified" in identity.capabilities)
+    if remote_ok:
+        allowed.extend(sorted(remote_names))
+    policy=InferencePolicy(identity.tenant_id,identity.application_id,tuple(allowed),
+        data_classification="private",allow_remote=remote_ok,
+        allowed_regions=("local","unspecified") if remote_ok else ("local",),
+        policy_version=identity.policy_version)
+    try:
+        result=PrivacyAwareModelGateway().chat(policy,os.environ.get("ORACLE_ARC_MODEL","qwen2.5:7b"),
+            request.messages,temperature=request.temperature,provider_id=request.provider_id)
+        return {"data":result,"tenant_id":identity.tenant_id,"application_id":identity.application_id,
+                "policy_version":identity.policy_version}
+    except PermissionError as exc:
+        raise HTTPException(403,str(exc))
+    except Exception:
+        raise HTTPException(503,"The authorized inference provider is unavailable")
