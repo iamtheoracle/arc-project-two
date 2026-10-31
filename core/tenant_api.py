@@ -73,6 +73,12 @@ class MemoryCreate(BaseModel):
     tags:list[str]=Field(default_factory=list,max_length=20)
 
 
+class MemoryUpdate(BaseModel):
+    content:str=Field(min_length=1,max_length=20000)
+    category:str=Field(default="general",max_length=40)
+    tags:list[str]=Field(default_factory=list,max_length=20)
+
+
 class InferenceRequest(BaseModel):
     messages:list[dict]=Field(min_length=1,max_length=100)
     provider_id:str=Field(default="ollama",max_length=40)
@@ -158,3 +164,27 @@ def tenant_inference(request:InferenceRequest,identity:RequestIdentity=Depends(_
         raise HTTPException(403,str(exc))
     except Exception:
         raise HTTPException(503,"The authorized inference provider is unavailable")
+
+@router.get("/memories")
+def list_memories(identity:RequestIdentity=Depends(_application_identity)):
+    try:return {"data":_tenant_store().list_memories(identity)}
+    except PermissionError as exc:raise HTTPException(403,str(exc))
+
+
+@router.put("/memories/{memory_id}")
+def update_memory(memory_id:str,request:MemoryUpdate,identity:RequestIdentity=Depends(_application_identity)):
+    try:
+        if not _tenant_store().update_memory(identity,memory_id,request.content,request.category,request.tags):
+            raise HTTPException(404,"Memory not found")
+        return {"memory_id":memory_id,"updated":True}
+    except PermissionError as exc:raise HTTPException(403,str(exc))
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+
+@router.delete("/memories/{memory_id}")
+def delete_memory(memory_id:str,identity:RequestIdentity=Depends(_application_identity)):
+    try:
+        if not _tenant_store().delete_memory(identity,memory_id):
+            raise HTTPException(404,"Memory not found")
+        return {"memory_id":memory_id,"deleted":True}
+    except PermissionError as exc:raise HTTPException(403,str(exc))
