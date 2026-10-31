@@ -129,7 +129,7 @@ class TenantSecurityStore:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Tenant name is required")
         tenant_id = "ten_" + uuid.uuid4().hex
-        with self._connect() as db:
+        with self._session() as db:
             db.execute("INSERT INTO arc_tenants VALUES(?,?,?,?)",
                        (tenant_id, name.strip()[:160], "active", int(time.time())))
             db.commit()
@@ -139,7 +139,7 @@ class TenantSecurityStore:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Application name is required")
         app_id = "app_" + uuid.uuid4().hex
-        with self._connect() as db:
+        with self._session() as db:
             tenant = db.execute("SELECT status FROM arc_tenants WHERE tenant_id=?", (tenant_id,)).fetchone()
             if not tenant or tenant["status"] != "active":
                 raise AuthorizationError("Active tenant required")
@@ -160,7 +160,7 @@ class TenantSecurityStore:
         token = credential_id + "." + secret
         digest = hashlib.sha256(secret.encode()).hexdigest()
         now = int(time.time())
-        with self._connect() as db:
+        with self._session() as db:
             tenant = db.execute("SELECT status FROM arc_tenants WHERE tenant_id=?", (tenant_id,)).fetchone()
             app = db.execute("SELECT tenant_id,status FROM arc_applications WHERE application_id=?",
                              (application_id,)).fetchone()
@@ -189,7 +189,7 @@ class TenantSecurityStore:
             raise AuthorizationError("Invalid application credential")
         digest = hashlib.sha256(secret.encode()).hexdigest()
         now = int(time.time())
-        with self._connect() as db:
+        with self._session() as db:
             row = db.execute("""SELECT c.*,t.status tenant_status,a.status app_status,
               a.policy_version,p.status principal_status
               FROM arc_credentials c
@@ -293,7 +293,7 @@ class TenantSecurityStore:
                 "result":json.loads(row["result_json"]) if row["result_json"] else None}
 
     def revoke_credential(self, credential_id: str) -> bool:
-        with self._connect() as db:
+        with self._session() as db:
             cur=db.execute("UPDATE arc_credentials SET revoked_at=? WHERE credential_id=? AND revoked_at IS NULL",
                            (int(time.time()),credential_id))
             db.commit()
@@ -314,7 +314,7 @@ class TenantSecurityStore:
             raise ValueError("Memory content is invalid")
         memory_id="mem_"+uuid.uuid4().hex
         now=int(time.time())
-        with self._connect() as db:
+        with self._session() as db:
             db.execute("""INSERT INTO arc_scoped_memories
               VALUES(?,?,?,?,?,?,?,?)""",
               (memory_id,identity.tenant_id,identity.application_id,identity.principal_id,
@@ -324,7 +324,7 @@ class TenantSecurityStore:
 
     def list_memories(self, identity: RequestIdentity, limit: int = 100) -> list[dict]:
         self.require(identity, "spark.memory.read")
-        with self._connect() as db:
+        with self._session() as db:
             rows=db.execute("""SELECT memory_id,category,content,created_at,updated_at
               FROM arc_scoped_memories WHERE tenant_id=? AND application_id=? AND principal_id=?
               ORDER BY created_at DESC LIMIT ?""",
@@ -340,7 +340,7 @@ class TenantSecurityStore:
             raise ValueError("Memory sharing requires allowed categories and a purpose")
         grant_id="mgrant_"+uuid.uuid4().hex
         now=int(time.time())
-        with self._connect() as db:
+        with self._session() as db:
             dest=db.execute("SELECT tenant_id,status FROM arc_applications WHERE application_id=?",
                             (destination_application_id,)).fetchone()
             if not dest or dest["tenant_id"] != identity.tenant_id or dest["status"] != "active":
@@ -357,7 +357,7 @@ class TenantSecurityStore:
 
     def revoke_memory_share(self, identity: RequestIdentity, grant_id: str) -> bool:
         self.require(identity, "spark.memory.share")
-        with self._connect() as db:
+        with self._session() as db:
             cur=db.execute("""UPDATE arc_memory_grants SET revoked_at=?,grant_version=grant_version+1
               WHERE grant_id=? AND tenant_id=? AND source_application_id=? AND principal_id=? AND revoked_at IS NULL""",
               (int(time.time()),grant_id,identity.tenant_id,identity.application_id,identity.principal_id))
@@ -368,7 +368,7 @@ class TenantSecurityStore:
         self.require(identity, "spark.memory.read_shared")
         import json
         now=int(time.time())
-        with self._connect() as db:
+        with self._session() as db:
             grants=db.execute("""SELECT * FROM arc_memory_grants WHERE tenant_id=?
               AND source_application_id=? AND destination_application_id=? AND principal_id=?
               AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)""",
