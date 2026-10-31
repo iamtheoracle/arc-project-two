@@ -71,10 +71,12 @@ def test_tool_permissions_default_to_denied_and_can_be_revoked(client):
     assert api.get_store().approved_tools() == set()
     response = client.put("/v1/tools/calculate/approval", headers=auth(), json={"approved": True})
     assert response.status_code == 200
-    assert "calculate" in api.get_store().approved_tools()
+    from core.plugins import PluginRegistry
+    fingerprints = PluginRegistry().tool_fingerprints
+    assert "calculate" in api.get_store().approved_tools(fingerprints)
     response = client.put("/v1/tools/calculate/approval", headers=auth(), json={"approved": False})
     assert response.status_code == 200
-    assert "calculate" not in api.get_store().approved_tools()
+    assert "calculate" not in api.get_store().approved_tools(fingerprints)
 
 
 def test_unknown_tool_cannot_be_approved(client):
@@ -879,3 +881,21 @@ def test_remote_model_fallback_requires_explicit_server_opt_in(client, monkeypat
     assert "openrouter" in providers
     assert "groq" not in providers
     assert "gemini" not in providers
+
+
+def test_tool_approval_is_bound_to_current_source_and_schema_fingerprint(client):
+    from core.plugins import PluginRegistry
+
+    store = api.get_store()
+    fingerprints = PluginRegistry().tool_fingerprints
+    current = fingerprints["calculate"]
+    store.set_tool_approval("calculate", current, True)
+
+    assert "calculate" in store.approved_tools(fingerprints)
+    assert store.approved_tools({"calculate": "0" * 64}) == set()
+    assert store.approved_tools() == set()
+
+
+def test_tool_approval_rejects_invalid_fingerprint(client):
+    with pytest.raises(ValueError):
+        api.get_store().set_tool_approval("calculate", "not-a-sha256", True)
