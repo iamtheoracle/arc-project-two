@@ -267,11 +267,12 @@ class TenantSecurityStore:
             raise ValueError("Invalid worker identity")
         with self._session() as db:
             row=db.execute("""SELECT * FROM arc_scoped_tasks WHERE task_id=? AND tenant_id=?
-              AND application_id=? AND principal_id=? AND status='queued'""",
-              (task_id,identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()
+              AND application_id=? AND status='queued'""",
+              (task_id,identity.tenant_id,identity.application_id)).fetchone()
             if not row:
                 raise AuthorizationError("Queued task not found in this application scope")
             required=json.loads(row["required_capabilities_json"])
+            self.require(identity,"agent.tasks.claim")
             self.require(identity,"agent."+row["agent_id"]+".dispatch")
             if any(cap not in identity.capabilities for cap in required):
                 raise AuthorizationError("Worker no longer has required task capabilities")
@@ -281,7 +282,7 @@ class TenantSecurityStore:
                 raise AuthorizationError("Task was claimed concurrently")
             return {"task_id":task_id,"agent_id":row["agent_id"],"required_capabilities":required,
                     "payload":json.loads(row["payload_json"]),"tenant_id":identity.tenant_id,
-                    "application_id":identity.application_id,"principal_id":identity.principal_id,
+                    "application_id":identity.application_id,"principal_id":row["principal_id"],
                     "worker_id":worker_id,"status":"running"}
 
     def complete_scoped_task(self, identity: RequestIdentity, task_id: str,
@@ -304,10 +305,10 @@ class TenantSecurityStore:
                 raise AuthorizationError("Worker no longer has required task capabilities")
             cur=db.execute(
                 "UPDATE arc_scoped_tasks SET status=?,result_json=?,updated_at=? "
-                "WHERE task_id=? AND tenant_id=? AND application_id=? AND principal_id=? "
+                "WHERE task_id=? AND tenant_id=? AND application_id=? "
                 "AND worker_id=? AND status='running'",
                 (status,json.dumps(result,ensure_ascii=False),int(time.time()),task_id,
-                 identity.tenant_id,identity.application_id,identity.principal_id,worker_id)
+                 identity.tenant_id,identity.application_id,worker_id)
             )
             return cur.rowcount==1
 
