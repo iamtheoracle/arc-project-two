@@ -40,6 +40,7 @@ class Connector:
     failures: int = 0
     unavailable_until: float = 0.0
     last_error: str | None = None
+    supports_scoped_context: bool = False
 
     def available(self, now: float | None = None) -> bool:
         return self.enabled and (now if now is not None else time.monotonic()) >= self.unavailable_until
@@ -105,6 +106,29 @@ class AgentRegistry:
                 "has_configured_connector": any(c.enabled for c in connectors),
             })
         return rows
+
+    def dispatch_scoped(self, identity: Any, agent_id: str, payload: dict[str, Any],
+                        required_capabilities: tuple[str, ...] = ()) -> dict[str, Any]:
+        """Dispatch only through connectors explicitly built for trusted app scope."""
+        if not isinstance(payload, dict):
+            raise RegistryError("Agent task payload must be an object")
+        capabilities = set(getattr(identity, "capabilities", ()))
+        if "agent." + agent_id + ".dispatch" not in capabilities:
+            raise RegistryError("Application principal is not authorized to dispatch this agent")
+        if not set(required_capabilities).issubset(capabilities):
+            raise RegistryError("Application principal lacks required task capabilities")
+        connectors = self._connectors.get(agent_id, [])
+        if not connectors or not any(c.enabled and c.supports_scoped_context for c in connectors):
+            raise RegistryError("No connector is approved for tenant-scoped execution")
+        scoped_payload = dict(payload)
+        scoped_payload["_oracle_request_context"] = {
+            "tenant_id": identity.tenant_id,
+            "application_id": identity.application_id,
+            "principal_id": identity.principal_id,
+            "policy_version": identity.policy_version,
+            "capabilities": sorted(capabilities),
+        }
+        return self.dispatch(agent_id, scoped_payload, required_capabilities)
 
     def dispatch(self, agent_id: str, payload: dict[str, Any],
                  required_capabilities: tuple[str, ...] = ()) -> dict[str, Any]:
