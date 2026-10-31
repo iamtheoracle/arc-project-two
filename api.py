@@ -50,6 +50,10 @@ class RequestGuardMiddleware:
         host = scope.get("client", ("unknown", 0))[0]
         now = time.monotonic()
         with RATE_LOCK:
+            # Bound attacker-controlled client keys so spoofed source addresses cannot
+            # grow this single-process limiter's memory without limit.
+            if host not in RATE_BUCKETS and len(RATE_BUCKETS) >= 10000:
+                RATE_BUCKETS.pop(next(iter(RATE_BUCKETS)))
             bucket = RATE_BUCKETS[host]
             while bucket and now - bucket[0] >= RATE_LIMIT_WINDOW:
                 bucket.popleft()
