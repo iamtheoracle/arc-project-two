@@ -7,9 +7,11 @@ import os
 import time
 import uuid
 import threading
+from collections import defaultdict, deque
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from starlette.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core.agent import ArcAgent, SYSTEM_PROMPT
@@ -24,7 +26,109 @@ from core.implementation_planner import plan_implementation
 from core.integrations import ManifestError, load_manifest_directory, load_trust_keys, select_safest
 from core.integration_lifecycle import ArtifactError, stage_approved_artifact, verify_staged_artifact
 
-app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
+
+# Resource guards are deliberately process-local. Deployments with multiple workers
+# must additionally enforce equivalent limits at the trusted ingress/API gateway.
+MAX_REQUEST_BYTES = int(os.environ.get("ORACLE_ARC_MAX_REQUEST_BYTES", "1048576"))
+RATE_LIMIT_REQUESTS = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_REQUESTS", "60"))
+RATE_LIMIT_WINDOW = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_WINDOW_SECONDS", "60"))
+CHAT_CONCURRENCY = int(os.environ.get("ORACLE_ARC_CHAT_CONCURRENCY", "1"))
+if not 1024 <= MAX_REQUEST_BYTES <= 16 * 1024 * 1024:
+    raise RuntimeError("ORACLE_ARC_MAX_REQUEST_BYTES must be between 1 KiB and 16 MiB.")
+if not 1 <= RATE_LIMIT_REQUESTS <= 10000 or not 1 <= RATE_LIMIT_WINDOW <= 3600:
+    raise RuntimeError("Oracle Arc rate-limit configuration is outside safe bounds.")
+if not 1 <= CHAT_CONCURRENCY <= 64:
+    raise RuntimeError("ORACLE_ARC_CHAT_CONCURRENCY must be between 1 and 64.")
+
+_RATE_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
+_RATE_LOCK = threading.Lock()
+_CHAT_SLOTS = threading.BoundedSemaphore(CHAT_CONCURRENCY)
+
+
+class RequestGuardMiddleware:
+    """Bound request bodies and per-source rates without trusting forwarded headers."""
+    def __init__(self, downstream):
+        self.downstream = downstream
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or not scope.get("path", "").startswith("/v1/"):
+            return await self.downstream(scope, receive, send)
+
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                if not declared.isdigit() or int(declared) > MAX_REQUEST_BYTES:
+                    status = 413 if declared.isdigit() else 400
+                    detail = "Request body too large." if status == 413 else "Invalid Content-Length."
+                    response = JSONResponse({"detail": detail}, status_code=status)
+                    return await response(scope, receive, send)
+            except (ValueError, OverflowError):
+                response = JSONResponse({"detail": "Invalid Content-Length."}, status_code=400)
+                return await response(scope, receive, send)
+
+        # Use the transport peer address only. X-Forwarded-For is attacker-controlled
+        # unless a separately configured trusted-proxy layer has authenticated it.
+        client = scope.get("client") or ("unknown", 0)
+        source = str(client[0])[:128]
+        now = time.monotonic()
+        with _RATE_LOCK:
+            if source not in _RATE_BUCKETS and len(_RATE_BUCKETS) >= 10000:
+                _RATE_BUCKETS.pop(next(iter(_RATE_BUCKETS)))
+            bucket = _RATE_BUCKETS[source]
+            while bucket and now - bucket[0] >= RATE_LIMIT_WINDOW:
+                bucket.popleft()
+            if len(bucket) >= RATE_LIMIT_REQUESTS:
+                response = JSONResponse(
+                    {"detail": "Request rate limit exceeded."}, status_code=429,
+                    headers={"Retry-After": str(RATE_LIMIT_WINDOW)},
+                )
+                return await response(scope, receive, send)
+            bucket.append(now)
+
+        chunks = []
+        size = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            chunk = message.get("body", b"")
+            size += len(chunk)
+            if size > MAX_REQUEST_BYTES:
+                response = JSONResponse({"detail": "Request body too large."}, status_code=413)
+                return await response(scope, receive, send)
+            chunks.append(chunk)
+            if not message.get("more_body", False):
+                break
+
+        body = b"".join(chunks)
+        delivered = False
+
+        async def replay_body():
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        await self.downstream(scope, replay_body, send)
+
+
+def require_chat_capacity():
+    if not _CHAT_SLOTS.acquire(blocking=False):
+        raise HTTPException(
+            status_code=503,
+            detail="Oracle Arc is at its configured inference capacity. Retry shortly.",
+            headers={"Retry-After": "2"},
+        )
+    try:
+        yield
+    finally:
+        _CHAT_SLOTS.release()
+
+
+app = FastAPI(title="Oracle Arc", version="0.1.2", docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(RequestGuardMiddleware)
 _store: ArcStore | None = None
 _agent_registry_cache = None
 _agent_registry_store = None
@@ -920,7 +1024,7 @@ def models():
 
 
 @app.post("/v1/chat/completions", dependencies=[Depends(require_owner)])
-def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
+def chat(request: ChatRequest, store: ArcStore = Depends(get_store), _capacity: None = Depends(require_chat_capacity)):
     model = _model_name(request.model)
     incoming = [{"role": item.role, "content": item.content} for item in request.messages]
     if incoming[-1]["role"] != "user":
