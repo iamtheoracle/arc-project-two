@@ -1,10 +1,12 @@
 """Allowlisted plugin registry with a fail-closed container execution boundary."""
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
 import subprocess
+from pathlib import Path
 from typing import Any, Callable
 
 BUILTIN_PLUGIN_MODULES = ("plugins.calculator",)
@@ -56,6 +58,7 @@ class PluginRegistry:
         self.plugins = {}
         self.tools = []
         self.handlers: dict[str, Callable[..., Any]] = {}
+        self.tool_fingerprints: dict[str, str] = {}
         self.worker_runner = worker_runner or run_isolated_worker
         self.load_all()
 
@@ -69,6 +72,10 @@ class PluginRegistry:
             if not isinstance(plugin_name, str) or not plugin_name:
                 continue
             self.plugins[plugin_name] = plugin
+            source_path = getattr(module, "__file__", None)
+            if not source_path:
+                raise RuntimeError("Built-in plugin source path is unavailable")
+            source_digest = hashlib.sha256(Path(source_path).read_bytes()).hexdigest()
             for tool in plugin.get("tools", []):
                 if not isinstance(tool, dict):
                     continue
@@ -81,6 +88,17 @@ class PluginRegistry:
                 if callable(handler):
                     self.tools.append(tool)
                     self.handlers[tool_name] = handler
+                    canonical_schema = json.dumps(
+                        {
+                            "name": tool_name,
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+                        },
+                        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                    )
+                    self.tool_fingerprints[tool_name] = hashlib.sha256(
+                        (source_digest + "\\n" + canonical_schema).encode("utf-8")
+                    ).hexdigest()
 
     def get_tools_schema(self):
         return [{"type": "function", "function": {
