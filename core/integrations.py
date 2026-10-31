@@ -12,7 +12,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}$")
 PERMISSION_RE = re.compile(r"^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){0,3}$")
@@ -76,7 +76,8 @@ def sign_manifest(raw: dict[str, Any], publisher_key: str) -> str:
 
 def inspect_manifest(raw: dict[str, Any], trusted_publishers: dict[str, str],
                      app_version: str = APP_VERSION,
-                     allowed_permissions: set[str] | None = None) -> dict[str, Any]:
+                     allowed_permissions: set[str] | None = None,
+                     health_check: Callable[[], bool] | None = None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ManifestError("Manifest must be an object")
     required = {"integration_id", "kind", "version", "publisher", "description",
@@ -133,6 +134,12 @@ def inspect_manifest(raw: dict[str, Any], trusted_publishers: dict[str, str],
         permission_status = "denied"
     else:
         permission_status = "within_policy"
+    health_status = "unknown"
+    if health_check is not None:
+        try:
+            health_status = "healthy" if health_check() is True else "unhealthy"
+        except Exception:
+            health_status = "unhealthy"
     return {
         "integration_id": integration_id, "kind": kind, "version": raw["version"],
         "publisher": publisher, "description": description,
@@ -142,7 +149,7 @@ def inspect_manifest(raw: dict[str, Any], trusted_publishers: dict[str, str],
         "signature_valid": True,
         "compatible": compatible, "permission_status": permission_status,
         "eligible_for_review": compatible and permission_status == "within_policy",
-        "health_status": "unknown", "health_url_configured": bool(health_url),
+        "health_status": health_status, "health_url_configured": bool(health_url),
         "installed": False, "active": False,
     }
 
@@ -161,7 +168,8 @@ def load_trust_keys() -> dict[str, str]:
 
 
 def load_manifest_directory(directory: str | Path, trusted_publishers: dict[str, str],
-                            allowed_permissions: set[str] | None = None) -> list[dict[str, Any]]:
+                            allowed_permissions: set[str] | None = None,
+                            health_checks: Mapping[str, Callable[[], bool]] | None = None) -> list[dict[str, Any]]:
     root = Path(directory).resolve()
     if not root.exists():
         return []
@@ -175,8 +183,10 @@ def load_manifest_directory(directory: str | Path, trusted_publishers: dict[str,
             continue
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
+            checker = (health_checks or {}).get(raw.get("integration_id"))
             results.append(inspect_manifest(raw, trusted_publishers,
-                                            allowed_permissions=allowed_permissions))
+                                            allowed_permissions=allowed_permissions,
+                                            health_check=checker))
         except (OSError, json.JSONDecodeError, ManifestError):
             results.append({"manifest_file": path.name, "eligible_for_review": False,
                             "inspection_error": "invalid_or_untrusted_manifest"})
