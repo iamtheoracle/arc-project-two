@@ -53,5 +53,5 @@ def test_remote_ollama_manifest_discloses_remote_execution(monkeypatch):
 @pytest.mark.parametrize("host", ["file:///tmp/ollama", "http://user:pass@localhost:11434", "not-a-url"])
 def test_ollama_host_rejects_unsafe_url_forms(monkeypatch, host):
     monkeypatch.setenv("OLLAMA_HOST", host)
-    with pytest.raises(ValueError, match="valid HTTP(S) URL"):
+    with pytest.raises(ValueError, match="valid HTTP"):
         LocalLLM()
