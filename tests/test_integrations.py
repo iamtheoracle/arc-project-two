@@ -92,3 +92,18 @@ def test_malformed_manifest_types_fail_closed():
         inspect_manifest(manifest(kind=[]), TRUST)
     with pytest.raises(ManifestError):
         inspect_manifest(manifest(risk=[]), TRUST)
+
+
+
+def test_only_application_wired_health_adapters_can_mark_integration_healthy():
+    healthy = inspect_manifest(manifest(), TRUST, allowed_permissions=ALLOWED,
+                               health_check=lambda: True)
+    unhealthy = inspect_manifest(manifest(), TRUST, allowed_permissions=ALLOWED,
+                                 health_check=lambda: False)
+    broken = inspect_manifest(manifest(), TRUST, allowed_permissions=ALLOWED,
+                              health_check=lambda: (_ for _ in ()).throw(TimeoutError()))
+    assert healthy["health_status"] == "healthy"
+    assert unhealthy["health_status"] == "unhealthy"
+    assert broken["health_status"] == "unhealthy"
+    assert select_safest([healthy], {"calendar-sync"}, ALLOWED) is not None
+    assert select_safest([unhealthy, broken], {"calendar-sync"}, ALLOWED) is None
