@@ -161,14 +161,17 @@ def test_agent_task_queue_is_scoped_and_worker_reauthorizes_capabilities(tmp_pat
     caps=["agent.oracle.dispatch","reasoning"]
     a=store.authenticate(store.issue_credential(tenant,app_a,"p1",caps))
     b=store.authenticate(store.issue_credential(tenant,app_b,"p1",caps))
+    worker=store.authenticate(store.issue_credential(
+        tenant,app_a,"service-worker",["agent.tasks.claim","agent.oracle.dispatch","reasoning"]))
     task_id=store.create_scoped_task(a,"oracle",["reasoning"],{"prompt":"analyze"})
     assert store.get_scoped_task(b,task_id) is None
     with pytest.raises(AuthorizationError):
         store.claim_scoped_task(b,task_id,"worker-b")
-    claimed=store.claim_scoped_task(a,task_id,"worker-a")
+    claimed=store.claim_scoped_task(worker,task_id,"worker-a")
     assert claimed["status"]=="running"
+    assert claimed["principal_id"]=="p1"
     assert claimed["payload"]["prompt"]=="analyze"
-    assert store.complete_scoped_task(a,task_id,"worker-a",{"answer":"done"})
+    assert store.complete_scoped_task(worker,task_id,"worker-a",{"answer":"done"})
     assert store.get_scoped_task(a,task_id)["status"]=="succeeded"
 
 
