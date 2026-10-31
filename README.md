@@ -178,3 +178,31 @@ Before a new feature is implemented, call the authenticated `POST /v1/implementa
 - Whether each selected specialist is currently registered and enabled.
 
 The first planner uses transparent deterministic capability/keyword rules. It is not an autonomous model planner and does not prove that an integration exists. Recommendations must be reviewed against a trusted manifest, source provenance, version, permissions, data handling, sandbox requirements and health checks before installation or activation. External side effects require separate owner approval. Disabled agents remain disabled; the planner does not silently enable SPARK or ORBITS. Unsupported work must be reviewed rather than mapped to an invented integration.
+
+
+### Trusted integrations and independent workers
+
+#### Manifest trust
+
+Place JSON manifests in `ORACLE_ARC_INTEGRATION_MANIFEST_DIR` (default: `data/integration-manifests`). Configure publisher verification keys server-side in `ORACLE_ARC_MANIFEST_TRUST_KEYS` as a JSON object mapping publisher IDs to secrets of at least 32 characters. Never expose these keys to browsers, manifests or worker task payloads. Configure the least-privilege permission allowlist with `ORACLE_ARC_ALLOWED_INTEGRATION_PERMISSIONS` as comma-separated permission IDs.
+
+Manifests are data only. The manager verifies publisher HMAC signatures, semantic versions, app compatibility, capability and permission declarations, artifact SHA-256 digest, risk class and health-check URL shape. A trusted signature is not a security review of the artifact. The catalog reports health as `unknown` until a trusted integration-specific health adapter is wired. It does not download or execute artifacts.
+
+- `GET /v1/integrations/catalog` — inspect signed manifests and compatibility.
+- `POST /v1/integrations/{integration_id}/approval` — create an owner approval request for one eligible manifest version and digest.
+- `PUT /v1/integrations/{integration_id}/approval?version=...&manifest_digest=...` — approve or reject the exact manifest version and digest.
+- `GET /v1/integrations/approvals` and `GET /v1/integrations/audit` — review decisions and immutable-style append-only audit events.
+
+Approval authorizes review for a future installation step only. It does not install, activate, grant runtime permissions or execute code. Reapproval is required if the manifest digest changes. Installation/activation remains disabled until a separate isolated installer, artifact provenance verification, health adapter and rollback process are implemented.
+
+#### Independent agent workers
+
+Start a worker process with:
+
+```bash
+python -m core.agent_worker
+```
+
+The API can enqueue work through authenticated `POST /v1/agent-tasks/submit` and returns a task ID. Workers use the same configured durable database, atomic claims, expiring leases, heartbeat renewal and bounded recovery. Configure `ORACLE_ARC_DB_PATH` to the shared database path accessible to both API and worker. SQLite is suitable for a single-host shared-volume deployment; it is not a cross-host coordination database. Multi-host workers require PostgreSQL or another shared transactional queue before production scaling.
+
+Workers need the same server-side model/provider configuration as the API. They do not receive the owner API key from task payloads. Use a separate OS/service identity and restrict database, model and network access. The existing synchronous chat route remains synchronous; the submit endpoint is the independent-worker path.
