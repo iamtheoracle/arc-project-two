@@ -63,6 +63,12 @@ class AgentChatRequest(BaseModel):
     max_steps: int = Field(default=4, ge=1, le=8)
 
 
+class AgentTaskSubmitRequest(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=100)
+    agent_id: Literal["bud", "oracle"] = "bud"
+    max_steps: int = Field(default=4, ge=1, le=8)
+
+
 class MemoryCreate(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
     tags: list[str] = Field(default_factory=list, max_length=20)
@@ -613,6 +619,30 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
             "automatic_delegation": automatic_delegation,
             "delegation_reason": delegation_reason,
             "session_id": session_id, "message": {"role": "assistant", "content": answer}}
+
+
+@app.post("/v1/agent-tasks/submit", dependencies=[Depends(require_owner)], status_code=202)
+def submit_agent_task(request: AgentTaskSubmitRequest, store: ArcStore = Depends(get_store)):
+    """Queue work for an independently running agent worker."""
+    incoming = [{"role": item.role, "content": item.content} for item in request.messages]
+    if incoming[-1]["role"] != "user":
+        raise HTTPException(status_code=400, detail="The last message must be a user message.")
+    target, reason = select_agent(request.agent_id, incoming[-1]["content"])
+    capabilities = ["reasoning"] if target == "oracle" else ["conversation"]
+    task_id = uuid.uuid4().hex
+    history = [{"role": item["role"], "content": item["content"]}
+               for item in incoming[:-1] if item["role"] in ("user", "assistant")][-79:]
+    payload = {
+        "model": _model_name(None), "history": history,
+        "latest_user": incoming[-1]["content"], "max_steps": request.max_steps,
+        "delegation_reason": reason,
+    }
+    try:
+        task = store.create_agent_task(task_id, request.agent_id, target, capabilities, payload)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Durable task queue is unavailable.")
+    return {"task_id": task_id, "status": task["status"], "source_agent": request.agent_id,
+            "target_agent": target, "worker_execution": "independent", "delegation_reason": reason}
 
 
 @app.get("/v1/agent-tasks", dependencies=[Depends(require_owner)])
