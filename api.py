@@ -516,6 +516,31 @@ def agent_chat(agent_id: str, request: AgentChatRequest, store: ArcStore = Depen
             "session_id": session_id, "message": {"role": "assistant", "content": answer}}
 
 
+@app.get("/v1/agent-tasks", dependencies=[Depends(require_owner)])
+def list_agent_tasks(limit: int = 50, status: str | None = None,
+                     store: ArcStore = Depends(get_store)):
+    if not 1 <= limit <= 100:
+        raise HTTPException(status_code=422, detail="Limit must be between 1 and 100.")
+    for candidate in _task_store_candidates(store):
+        try:
+            return {"data": candidate.list_agent_tasks(limit=limit, status=status)}
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception:
+            continue
+    raise HTTPException(status_code=503, detail="Task storage is unavailable.")
+
+
+@app.get("/v1/agent-queue/status", dependencies=[Depends(require_owner)])
+def agent_queue_status(store: ArcStore = Depends(get_store)):
+    for candidate in _task_store_candidates(store):
+        try:
+            return candidate.agent_queue_status()
+        except Exception:
+            continue
+    raise HTTPException(status_code=503, detail="Task queue storage is unavailable.")
+
+
 @app.post("/v1/agent-tasks/{task_id}/cancel", dependencies=[Depends(require_owner)])
 def cancel_agent_task(task_id: str, store: ArcStore = Depends(get_store)):
     task = _get_agent_task(store, task_id)
