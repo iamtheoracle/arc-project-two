@@ -183,7 +183,7 @@ def load_manifest_directory(directory: str | Path, trusted_publishers: dict[str,
             continue
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-            checker = (health_checks or {}).get(raw.get("integration_id"))
+            checker = (health_checks or {}).get(raw.get("integration_id")) if isinstance(raw, dict) else None
             results.append(inspect_manifest(raw, trusted_publishers,
                                             allowed_permissions=allowed_permissions,
                                             health_check=checker))
