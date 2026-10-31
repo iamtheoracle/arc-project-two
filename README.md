@@ -115,6 +115,7 @@ The authenticated agent API currently registers BUD and ORACLE. SPARK and ORBITS
 - \`POST /v1/agents/bud/chat\` — send a turn to BUD.
 - \`POST /v1/agents/oracle/chat\` — send a turn to ORACLE.
 - \`GET /v1/plugins\` — list plugin manifests and required permissions; this is a catalogue, not an execution endpoint.
+- \\`POST /v1/implementation/plan\\` — submit a proposed implementation and receive transparent recommendations for agents, capabilities, plugins, extensions and connectors. Planning never installs, enables or executes an integration.
 
 Agent chat accepts a messages array and an optional existing \`session_id\`. Session history is stored in the existing SQLite conversation store. SQLite is the primary session store. Set `ORACLE_ARC_SESSION_BACKUP_DB_PATH` to a different durable database file to enable a second SQLite store. Session history is copied when a backup session is first created, then new turns are mirrored; reads fall back to the backup if the primary read fails, and writes fall back to the backup if the primary write fails. Keep the backup on an independent disk or host to protect against machine or volume loss. Two SQLite files on the same disk are not protection against disk failure. This is synchronous application-level replication, not a distributed consensus system; restore and failover still require operational testing.
 
@@ -166,3 +167,14 @@ Task claims use SQLite `BEGIN IMMEDIATE` transactions, worker ownership and expi
 Task creation and lifecycle changes write transactional outbox events in the same database transaction. Outbox consumers claim events with expiring leases and acknowledge delivery. Delivery is at-least-once, so consumers must deduplicate by event ID. Events that exceed the bounded delivery-attempt limit are marked dead-letter and excluded from automatic claims for operator review.
 
 **Current boundary:** the durable queue, leases and outbox primitives are implemented, but the HTTP chat route still runs agent work synchronously in the API process. A separately deployed worker service, broker-backed fan-out and cross-host database are not yet implemented. Multiple API instances must share the same transactional database; independent SQLite files on separate hosts do not coordinate claims.
+
+
+### Implementation ownership and integration selection
+
+Before a new feature is implemented, call the authenticated `POST /v1/implementation/plan` endpoint with a plain-language `description`. The planner returns:
+- BUD as the coordination layer and a primary specialist (ORACLE for technical/reasoning work, SPARK for memory work, ORBITS for visual work).
+- Required capabilities and the reason each capability matched.
+- Candidate plugins, extensions and connectors, clearly marked as recommendations rather than installed or healthy services.
+- Whether each selected specialist is currently registered and enabled.
+
+The first planner uses transparent deterministic capability/keyword rules. It is not an autonomous model planner and does not prove that an integration exists. Recommendations must be reviewed against a trusted manifest, source provenance, version, permissions, data handling, sandbox requirements and health checks before installation or activation. External side effects require separate owner approval. Disabled agents remain disabled; the planner does not silently enable SPARK or ORBITS. Unsupported work must be reviewed rather than mapped to an invented integration.
