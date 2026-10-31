@@ -10,6 +10,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("ORACLE_ARC_API_KEY", "owner-test-secret-0123456789-abcdef")
     monkeypatch.setenv("ORACLE_ARC_MODEL", "qwen2.5:7b")
     monkeypatch.setenv("ORACLE_ARC_TRUSTED_PLUGINS", "calculator")
+    monkeypatch.setenv("ORACLE_ARC_ENABLE_INPROCESS_PLUGINS", "true")
+    api.RATE_BUCKETS.clear()
     monkeypatch.setenv("ORACLE_ARC_DB_PATH", str(tmp_path / "oracle.sqlite3"))
     api._store = ArcStore(tmp_path / "oracle.sqlite3")
     with TestClient(api.app) as test_client:
@@ -181,3 +183,28 @@ def test_model_failures_return_safe_503_without_leaking_internal_errors(client, 
     assert response.status_code == 503
     assert response.json()["detail"] == expected_detail
     assert "private internal model error" not in response.text
+
+
+
+def test_request_body_limit_rejects_oversized_payload(client, monkeypatch):
+    monkeypatch.setattr(api, "MAX_REQUEST_BYTES", 32)
+    response = client.post("/v1/memories", headers=auth(), json={"content": "x" * 200})
+    assert response.status_code == 413
+
+
+def test_api_rate_limit_returns_retryable_429(client, monkeypatch):
+    monkeypatch.setattr(api, "RATE_LIMIT_REQUESTS", 1)
+    api.RATE_BUCKETS.clear()
+    first = client.get("/v1/models", headers=auth())
+    second = client.get("/v1/models", headers=auth())
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.headers["retry-after"]
+
+
+def test_unsandboxed_plugins_are_disabled_by_default(tmp_path, monkeypatch):
+    from core.plugins import PluginRegistry
+    monkeypatch.setenv("ORACLE_ARC_TRUSTED_PLUGINS", "calculator")
+    monkeypatch.delenv("ORACLE_ARC_ENABLE_INPROCESS_PLUGINS", raising=False)
+    registry = PluginRegistry()
+    assert registry.tools == []
