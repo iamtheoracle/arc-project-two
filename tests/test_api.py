@@ -842,3 +842,40 @@ def test_independent_agent_task_submission_persists_payload_and_routes_to_oracle
     assert task["payload"]["history"] == [
         {"role": "user", "content": "Please inspect the architecture"}
     ]
+
+
+def test_remote_model_fallback_is_disabled_even_when_credentials_exist_by_default(client, monkeypatch):
+    monkeypatch.delenv("ORACLE_ARC_ENABLE_REMOTE_PROVIDER_FALLBACK", raising=False)
+    monkeypatch.setenv("ORACLE_ARC_OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("ORACLE_ARC_GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("ORACLE_ARC_GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(api, "_agent_registry_cache", None)
+    monkeypatch.setattr(api, "_agent_registry_store", None)
+
+    registry = api._build_agent_registry(api.get_store())
+    providers = {
+        connector["provider"]
+        for agent in registry.list_agents()
+        for connector in agent["connectors"]
+    }
+    assert not {"openrouter", "groq", "gemini"} & providers
+    assert any(provider.startswith("ollama") for provider in providers)
+
+
+def test_remote_model_fallback_requires_explicit_server_opt_in(client, monkeypatch):
+    monkeypatch.setenv("ORACLE_ARC_ENABLE_REMOTE_PROVIDER_FALLBACK", "true")
+    monkeypatch.setenv("ORACLE_ARC_OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.delenv("ORACLE_ARC_GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("ORACLE_ARC_GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(api, "_agent_registry_cache", None)
+    monkeypatch.setattr(api, "_agent_registry_store", None)
+
+    registry = api._build_agent_registry(api.get_store())
+    providers = {
+        connector["provider"]
+        for agent in registry.list_agents()
+        for connector in agent["connectors"]
+    }
+    assert "openrouter" in providers
+    assert "groq" not in providers
+    assert "gemini" not in providers
