@@ -465,6 +465,16 @@ class PlatformControlPlane:
                 (now, execution_id, identity.tenant_id, identity.application_id, identity.principal_id))
             return cur.rowcount == 1
 
+    def cancel_execution(self, identity: RequestIdentity, execution_id: str) -> bool:
+        self._require(identity, "agent.execution.cancel")
+        now = int(time.time())
+        with self._session() as db:
+            cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?
+                WHERE execution_id=? AND tenant_id=? AND application_id=? AND principal_id=?
+                AND status='queued'""",
+                (now, execution_id, identity.tenant_id, identity.application_id, identity.principal_id))
+            return cur.rowcount == 1
+
     def record_usage(self, identity: RequestIdentity, execution_id: str,
                      metric: str, quantity: int) -> None:
         self._require(identity, "usage.write")
