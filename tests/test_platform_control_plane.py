@@ -43,6 +43,7 @@ def configure(cp, identity):
 def test_agent_versions_are_immutable_and_application_scoped(tmp_path):
     path, ids, a, cp = setup(tmp_path)
     _, _, b, _ = setup(tmp_path, "Tenant B", "APP")
+    configure(cp, a)
     cp.register_agent(a, "research", "1.0.0", manifest())
     cp.register_agent(a, "research", "1.1.0", manifest(["tool.search", "tool.calendar"]))
     assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["tool.search"]
