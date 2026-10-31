@@ -110,3 +110,41 @@ def stage_approved_artifact(
 
     return {"artifact_path": str(destination), "sha256": actual, "size_bytes": copied_size,
             "status": "staged_inert"}
+
+
+def verify_staged_artifact(
+    integration_id: str,
+    version: str,
+    expected_sha256: str,
+    install_dir: str | Path,
+) -> bool:
+    """Verify an inert staged artifact without importing or executing it."""
+    if not isinstance(integration_id, str) or not TOKEN.fullmatch(integration_id):
+        raise ArtifactError("Invalid integration identifier")
+    if not isinstance(version, str) or not VERSION.fullmatch(version):
+        raise ArtifactError("Invalid integration version")
+    if not isinstance(expected_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_sha256):
+        raise ArtifactError("Invalid expected artifact digest")
+    root_input = Path(install_dir)
+    if root_input.is_symlink():
+        raise ArtifactError("Install directory cannot be a symlink")
+    root = root_input.resolve()
+    path = root / f"{integration_id}-{version}.artifact"
+    if path.is_symlink() or not path.is_file() or path.resolve().parent != root:
+        return False
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0 or metadata.st_size > MAX_ARTIFACT_BYTES:
+            return False
+        digest = hashlib.sha256()
+        size = 0
+        with os.fdopen(os.dup(fd), "rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_ARTIFACT_BYTES:
+                    return False
+                digest.update(chunk)
+        return size == metadata.st_size and digest.hexdigest() == expected_sha256
+    finally:
+        os.close(fd)
