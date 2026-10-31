@@ -1,9 +1,9 @@
 name: Oracle Arc Verification
 on:
   push:
-    branches: [main, 'feat/oracle-arc-personal-core']
+    branches: [main, 'feat/oracle-arc-personal-core', 'feat/human-understanding-adaptive-intelligence']
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/oracle-arc-personal-core']
 permissions:
   contents: read
 jobs:
@@ -11,13 +11,37 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-core.txt
       - name: Install API and test dependencies
         run: python -m pip install -r requirements-core.txt
+      - name: Install rootless Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          podman info --format '{{.Host.Security.Rootless}}' | grep -qx true
+      - name: Build isolated plugin worker image
+        run: podman build --pull=always -f Dockerfile.plugin-worker -t oracle-arc-plugin-worker:ci .
+      - name: Execute real isolated worker
+        env:
+          ORACLE_ARC_PLUGIN_WORKER_IMAGE: oracle-arc-plugin-worker:ci
+        run: |
+          printf '{"expression":"sqrt(81) + 3 * 2"}' | podman run --rm --interactive --pull=never --network=none --ipc=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=16 --memory=128m --memory-swap=128m --cpus=0.5 --user=65534:65534 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m --ulimit=nofile=32:32 oracle-arc-plugin-worker:ci
+          python - <<'PY'
+          from core.plugins import PluginRegistry, run_isolated_worker
+          assert run_isolated_worker({"expression": "sqrt(81) + 3 * 2"}) == {"result": 15.0}
+          registry = PluginRegistry()
+          assert registry.execute("calculate", {"expression": "6 * 7"}) == "Result: 42"
+          rejected = registry.execute("calculate", {"expression": "__import__('os').getcwd()"})
+          assert rejected.startswith("Error:")
+          print("Rootless Podman worker execution and rejection checks passed.")
+          PY
+      - name: Verify sandbox restrictions inside the actual container
+        run: |
+          podman run --rm --pull=never --network=none --ipc=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=16 --memory=128m --memory-swap=128m --cpus=0.5 --user=65534:65534 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m --ulimit=nofile=32:32 oracle-arc-plugin-worker:ci python -I -c "import os,pathlib; assert os.geteuid()==65534; s=pathlib.Path('/proc/self/status').read_text(); assert 'CapEff:\\t0000000000000000' in s; assert 'NoNewPrivs:\\t1' in s; assert not any(r.split()[1]=='00000000' for r in pathlib.Path('/proc/net/route').read_text().splitlines()[1:]); m=next(x for x in pathlib.Path('/proc/self/mountinfo').read_text().splitlines() if x.split()[4]=='/'); assert 'ro' in m.split()[5].split(','); print('UID, zero capabilities, no-new-privileges, no default network route and read-only root verified')"
       - name: Run tests
         run: python -m pytest -q

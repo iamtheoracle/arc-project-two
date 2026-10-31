@@ -1,0 +1,7 @@
+# Build with: docker build -f Dockerfile.plugin-worker -t oracle-arc-plugin-worker:local .
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY --chown=65534:65534 core/plugin_worker.py /app/plugin_worker.py
+USER 65534:65534
+CMD ["python", "-I", "/app/plugin_worker.py"]

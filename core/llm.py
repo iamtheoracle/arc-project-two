@@ -3,10 +3,11 @@ import ollama
 from typing import List, Dict, Any, Optional
 
 class LocalLLM:
-    def __init__(self, model: str = "llama3.1:8b", temperature: float = 0.7):
+    def __init__(self, model: str = "llama3.1:8b", temperature: float = 0.7, host: Optional[str] = None):
         self.model = model
         self.temperature = temperature
-        self._client = ollama.Client()
+        self.host = host
+        self._client = ollama.Client(host=host) if host else ollama.Client()
 
     def chat(
         self,
