@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 from fastapi.testclient import TestClient
 
 import api
@@ -931,3 +932,35 @@ def test_chat_capacity_dependency_releases_slot_after_request():
         next(dependency)
     assert api._CHAT_SLOTS.acquire(blocking=False)
     api._CHAT_SLOTS.release()
+
+
+
+def test_api_request_guard_rejects_chunked_body_without_content_length(monkeypatch):
+    monkeypatch.setattr(api, "MAX_REQUEST_BYTES", 1024)
+    received = [
+        {"type": "http.request", "body": b"x" * 700, "more_body": True},
+        {"type": "http.request", "body": b"y" * 400, "more_body": False},
+    ]
+    sent = []
+
+    async def receive():
+        return received.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    async def downstream(scope, inner_receive, inner_send):
+        while True:
+            message = await inner_receive()
+            if not message.get("more_body", False):
+                break
+
+    scope = {
+        "type": "http",
+        "path": "/v1/chunked-test",
+        "method": "POST",
+        "headers": [(b"transfer-encoding", b"chunked")],
+        "client": ("198.51.100.88", 12345),
+    }
+    asyncio.run(api.RequestGuardMiddleware(downstream)(scope, receive, send))
+    assert sent[0]["status"] == 413
