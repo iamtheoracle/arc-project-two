@@ -111,6 +111,17 @@ class TenantSecurityStore:
             );
             CREATE INDEX IF NOT EXISTS idx_arc_memory_grants_scope
               ON arc_memory_grants(tenant_id,source_application_id,destination_application_id,principal_id);
+            CREATE TABLE IF NOT EXISTS arc_scoped_tasks(
+              task_id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,application_id TEXT NOT NULL,
+              principal_id TEXT NOT NULL,agent_id TEXT NOT NULL,required_capabilities_json TEXT NOT NULL,
+              status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed','cancelled')),
+              payload_json TEXT NOT NULL,result_json TEXT,worker_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,
+              FOREIGN KEY(tenant_id) REFERENCES arc_tenants(tenant_id),
+              FOREIGN KEY(application_id) REFERENCES arc_applications(application_id),
+              FOREIGN KEY(principal_id) REFERENCES arc_principals(principal_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_arc_scoped_tasks_claim
+              ON arc_scoped_tasks(tenant_id,application_id,status,created_at);
             """)
             db.commit()
 
@@ -197,6 +208,75 @@ class TenantSecurityStore:
             return RequestIdentity(credential_id,row["tenant_id"],row["application_id"],
                                    row["principal_id"],frozenset(json.loads(row["capabilities_json"])),
                                    int(row["policy_version"]))
+
+
+    def create_scoped_task(self, identity: RequestIdentity, agent_id: str,
+                           required_capabilities: Iterable[str], payload: dict) -> str:
+        import json
+        if not isinstance(agent_id,str) or not agent_id or not isinstance(payload,dict):
+            raise ValueError("Invalid scoped task")
+        required=sorted(set(required_capabilities))
+        self.require(identity,"agent."+agent_id+".dispatch")
+        if any(cap not in identity.capabilities for cap in required):
+            raise AuthorizationError("Task capability is not granted to this application principal")
+        task_id="task_"+uuid.uuid4().hex
+        now=int(time.time())
+        with self._session() as db:
+            db.execute("""INSERT INTO arc_scoped_tasks
+              (task_id,tenant_id,application_id,principal_id,agent_id,required_capabilities_json,
+               status,payload_json,created_at,updated_at)
+              VALUES(?,?,?,?,?,?, 'queued',?,?,?)""",
+              (task_id,identity.tenant_id,identity.application_id,identity.principal_id,
+               agent_id,json.dumps(required),json.dumps(payload,ensure_ascii=False),now,now))
+        return task_id
+
+    def claim_scoped_task(self, identity: RequestIdentity, task_id: str, worker_id: str) -> dict:
+        import json
+        if not worker_id or len(worker_id)>128:
+            raise ValueError("Invalid worker identity")
+        with self._session() as db:
+            row=db.execute("""SELECT * FROM arc_scoped_tasks WHERE task_id=? AND tenant_id=?
+              AND application_id=? AND principal_id=? AND status='queued'""",
+              (task_id,identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()
+            if not row:
+                raise AuthorizationError("Queued task not found in this application scope")
+            required=json.loads(row["required_capabilities_json"])
+            self.require(identity,"agent."+row["agent_id"]+".dispatch")
+            if any(cap not in identity.capabilities for cap in required):
+                raise AuthorizationError("Worker no longer has required task capabilities")
+            changed=db.execute("""UPDATE arc_scoped_tasks SET status='running',worker_id=?,updated_at=?
+              WHERE task_id=? AND status='queued'""",(worker_id,int(time.time()),task_id))
+            if changed.rowcount!=1:
+                raise AuthorizationError("Task was claimed concurrently")
+            return {"task_id":task_id,"agent_id":row["agent_id"],"required_capabilities":required,
+                    "payload":json.loads(row["payload_json"]),"tenant_id":identity.tenant_id,
+                    "application_id":identity.application_id,"principal_id":identity.principal_id,
+                    "worker_id":worker_id,"status":"running"}
+
+    def complete_scoped_task(self, identity: RequestIdentity, task_id: str,
+                             worker_id: str, result: dict, status: str="succeeded") -> bool:
+        import json
+        if status not in {"succeeded","failed","cancelled"} or not isinstance(result,dict):
+            raise ValueError("Invalid task completion")
+        with self._session() as db:
+            cur=db.execute("""UPDATE arc_scoped_tasks SET status=?,result_json=?,updated_at=?
+              WHERE task_id=? AND tenant_id=? AND application_id=? AND principal_id=?
+              AND worker_id=? AND status='running'""",
+              (status,json.dumps(result,ensure_ascii=False),int(time.time()),task_id,
+               identity.tenant_id,identity.application_id,identity.principal_id,worker_id))
+            return cur.rowcount==1
+
+    def get_scoped_task(self, identity: RequestIdentity, task_id: str) -> dict | None:
+        import json
+        with self._session() as db:
+            row=db.execute("""SELECT * FROM arc_scoped_tasks WHERE task_id=? AND tenant_id=?
+              AND application_id=? AND principal_id=?""",
+              (task_id,identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()
+        if not row:
+            return None
+        return {"task_id":row["task_id"],"agent_id":row["agent_id"],"status":row["status"],
+                "required_capabilities":json.loads(row["required_capabilities_json"]),
+                "result":json.loads(row["result_json"]) if row["result_json"] else None}
 
     def revoke_credential(self, credential_id: str) -> bool:
         with self._connect() as db:
