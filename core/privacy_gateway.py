@@ -21,6 +21,26 @@ class InferencePolicy:
     policy_version: int = 1
 
 
+def _validate_chat_request(messages: list[dict[str, Any]], temperature: float,
+                          tools: list[dict[str, Any]] | None, stream: bool) -> None:
+    """Apply one provider-independent request contract before any data egress."""
+    if not isinstance(messages, list) or not 1 <= len(messages) <= 100:
+        raise ValueError("Inference requires between 1 and 100 messages")
+    for message in messages:
+        if (not isinstance(message, dict)
+                or message.get("role") not in {"system", "user", "assistant", "tool"}
+                or not isinstance(message.get("content"), str)
+                or not message["content"]
+                or len(message["content"]) > 100_000):
+            raise ValueError("Each message requires a supported role and non-empty text up to 100000 characters")
+    if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) or not 0 <= temperature <= 2:
+        raise ValueError("Temperature must be between 0 and 2")
+    if tools is not None and (not isinstance(tools, list) or any(not isinstance(item, dict) for item in tools)):
+        raise ValueError("Tools must be a list of objects")
+    if not isinstance(stream, bool):
+        raise ValueError("Stream must be a boolean")
+
+
 class PrivacyAwareModelGateway:
     def __init__(self, local_gateway: ModelGateway | None = None,
                  remote_providers: dict[str, OpenAICompatibleProvider] | None = None):
@@ -35,7 +55,10 @@ class PrivacyAwareModelGateway:
              temperature: float=0.7, provider_id: str="ollama") -> Any:
         if not policy.tenant_id or not policy.application_id:
             raise PermissionError("Trusted tenant and application identity are required")
-        if provider_id not in policy.allowed_providers:
+        if policy.data_classification not in {"public", "internal", "private", "sensitive", "restricted"}:
+            raise PermissionError("Unknown data classification; inference is denied")
+        _validate_chat_request(messages, temperature, tools, stream)
+        if not isinstance(provider_id, str) or provider_id not in policy.allowed_providers:
             raise PermissionError("Provider is not allowlisted by application policy")
         if provider_id == "ollama":
             if "local" not in policy.allowed_regions:
