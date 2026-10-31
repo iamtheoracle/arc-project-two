@@ -122,6 +122,28 @@ class TenantSecurityStore:
             );
             CREATE INDEX IF NOT EXISTS idx_arc_scoped_tasks_claim
               ON arc_scoped_tasks(tenant_id,application_id,status,created_at);
+            CREATE TRIGGER IF NOT EXISTS arc_credentials_scope_insert
+            BEFORE INSERT ON arc_credentials
+            WHEN NOT EXISTS (SELECT 1 FROM arc_applications a
+              WHERE a.application_id=NEW.application_id AND a.tenant_id=NEW.tenant_id)
+            BEGIN SELECT RAISE(ABORT,'credential tenant/application mismatch'); END;
+            CREATE TRIGGER IF NOT EXISTS arc_memories_scope_insert
+            BEFORE INSERT ON arc_scoped_memories
+            WHEN NOT EXISTS (SELECT 1 FROM arc_applications a
+              WHERE a.application_id=NEW.application_id AND a.tenant_id=NEW.tenant_id)
+            BEGIN SELECT RAISE(ABORT,'memory tenant/application mismatch'); END;
+            CREATE TRIGGER IF NOT EXISTS arc_tasks_scope_insert
+            BEFORE INSERT ON arc_scoped_tasks
+            WHEN NOT EXISTS (SELECT 1 FROM arc_applications a
+              WHERE a.application_id=NEW.application_id AND a.tenant_id=NEW.tenant_id)
+            BEGIN SELECT RAISE(ABORT,'task tenant/application mismatch'); END;
+            CREATE TRIGGER IF NOT EXISTS arc_memory_grants_scope_insert
+            BEFORE INSERT ON arc_memory_grants
+            WHEN NOT EXISTS (SELECT 1 FROM arc_applications a
+              WHERE a.application_id=NEW.source_application_id AND a.tenant_id=NEW.tenant_id)
+              OR NOT EXISTS (SELECT 1 FROM arc_applications a
+              WHERE a.application_id=NEW.destination_application_id AND a.tenant_id=NEW.tenant_id)
+            BEGIN SELECT RAISE(ABORT,'memory grant tenant/application mismatch'); END;
             """)
             db.commit()
 
