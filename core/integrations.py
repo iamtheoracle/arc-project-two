@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}$")
+PERMISSION_RE = re.compile(r"^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*){0,3}$")
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?$")
 KINDS = {"plugin", "extension", "connector"}
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
@@ -103,8 +104,9 @@ def inspect_manifest(raw: dict[str, Any], trusted_publishers: dict[str, str],
         raise ManifestError("Invalid description")
     for key in ("capabilities", "permissions"):
         values = raw[key]
+        pattern = ID_RE if key == "capabilities" else PERMISSION_RE
         if not isinstance(values, list) or len(values) > 40 or any(
-            not isinstance(v, str) or not ID_RE.fullmatch(v) for v in values
+            not isinstance(v, str) or not pattern.fullmatch(v) for v in values
         ) or len(set(values)) != len(values):
             raise ManifestError("Invalid capability or permission list")
     risk = raw["risk"]
