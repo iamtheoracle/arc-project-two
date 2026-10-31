@@ -44,3 +44,31 @@ def test_reasoning_contract_does_not_request_private_chain_of_thought():
     context = build_reasoning_context("Explain a difficult idea")
     assert "Do not reveal private chain-of-thought" in context
     assert "concise explanation" in context
+
+
+def test_source_requests_require_claim_level_corroboration():
+    profile = assess_request("Research this claim and provide sources")
+    assert profile.needs_source_corroboration is True
+    context = build_reasoning_context("Research this claim and provide sources")
+    assert "supports the specific claim" in context
+
+
+def test_sensitive_context_requires_privacy_review():
+    profile = assess_request("Help me handle my API key and personal data")
+    assert profile.needs_privacy_review is True
+    assert "never request passwords" in " ".join(profile.response_requirements)
+
+
+def test_consequential_actions_require_explicit_confirmation():
+    profile = assess_request("Transfer money to this account")
+    assert profile.needs_human_confirmation is True
+    assert "explicit user authorization" in " ".join(profile.response_requirements)
+
+
+def test_multiple_safety_dimensions_apply_at_the_same_time():
+    profile = assess_request("Today, calculate and transfer my investment funds")
+    assert profile.needs_current_evidence is True
+    assert profile.needs_calculation_check is True
+    assert profile.needs_source_corroboration is True
+    assert profile.needs_human_confirmation is True
+    assert profile.risk_level == "high"
