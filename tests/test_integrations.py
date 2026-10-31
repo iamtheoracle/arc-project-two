@@ -51,7 +51,7 @@ def test_untrusted_publisher_and_tampered_manifest_are_rejected():
 
 
 def test_incompatible_or_overprivileged_manifest_is_not_eligible():
-    incompatible = inspect_manifest(manifest(min_app_version="9.0.0"), TRUST,
+    incompatible = inspect_manifest(manifest(min_app_version="9.0.0", max_app_version=None), TRUST,
                                     allowed_permissions=ALLOWED)
     assert incompatible["compatible"] is False
     assert incompatible["eligible_for_review"] is False
