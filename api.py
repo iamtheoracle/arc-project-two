@@ -18,6 +18,7 @@ from core.providers import OpenAICompatibleProvider, PROVIDERS
 from core.plugins import PluginRegistry
 from core.store import ArcStore
 from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_context, normalize_profile
+from core.reasoning import build_reasoning_context
 from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, SessionNotFoundError, default_agent_registry)
 from core.implementation_planner import plan_implementation
 from core.integrations import ManifestError, load_manifest_directory, load_trust_keys, select_safest
@@ -161,7 +162,7 @@ def _build_agent_registry(store: ArcStore):
             def run_remote(payload, selected_adapter=adapter, selected_agent=agent_id):
                 runtime_store = _available_context_store(store)
                 messages = [
-                    {"role": "system", "content": _system_prompt(runtime_store) + "\\n\\n" + prompts[selected_agent]}
+                    {"role": "system", "content": _system_prompt(runtime_store, payload["latest_user"]) + "\n\n" + prompts[selected_agent]}
                 ] + payload["history"] + [
                     {"role": "user", "content": payload["latest_user"]}
                 ]
@@ -358,7 +359,7 @@ def _plugin_catalog():
     return catalog
 
 
-def _system_prompt(store: ArcStore) -> str:
+def _system_prompt(store: ArcStore, request_text: str = "") -> str:
     memories = store.list_memories(limit=30)
     entries: list[str] = []
     total = 0
@@ -373,7 +374,7 @@ def _system_prompt(store: ArcStore) -> str:
         total += len(entry)
 
     profile = normalize_profile(store.get_user_profile())
-    sections = [SYSTEM_PROMPT, HUMAN_UNDERSTANDING_PROMPT, build_human_context(profile)]
+    sections = [SYSTEM_PROMPT, HUMAN_UNDERSTANDING_PROMPT, build_human_context(profile), build_reasoning_context(request_text)]
     boundaries = store.list_boundaries(active_only=True)
     boundary_data = [
         {"boundary": item["boundary"][:1000], "context": item["context"][:500]}
@@ -938,7 +939,7 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
         agent_history = history[:-1][-79:]
 
     agent = _agent(model, store.approved_tools())
-    agent.messages = [{"role": "system", "content": _system_prompt(store)}] + agent_history
+    agent.messages = [{"role": "system", "content": _system_prompt(store, latest_user)}] + agent_history
     agent.tool_audit = lambda name, outcome: store.audit_tool(name, outcome)
     try:
         answer = agent.chat(latest_user, max_steps=request.max_steps)
