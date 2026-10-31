@@ -103,6 +103,8 @@ class ArcStore:
                     connector_id TEXT,
                     provider TEXT,
                     error_code TEXT,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    result_json TEXT,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
@@ -161,6 +163,8 @@ class ArcStore:
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_event_id ON messages(event_id) WHERE event_id IS NOT NULL")
             task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_tasks)").fetchall()}
             for name, definition in (
+                ("payload_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("result_json", "TEXT"),
                 ("attempts", "INTEGER NOT NULL DEFAULT 0"),
                 ("worker_id", "TEXT"),
                 ("lease_expires_at", "INTEGER"),
@@ -337,14 +341,18 @@ class ArcStore:
         )
 
     def create_agent_task(self, task_id: str, source_agent: str, target_agent: str,
-                          required_capabilities: list[str]) -> dict[str, Any]:
+                          required_capabilities: list[str],
+                          payload: dict[str, Any] | None = None) -> dict[str, Any]:
         capabilities = sorted(set(required_capabilities))
+        if payload is not None and not isinstance(payload, dict):
+            raise ValueError("Agent task payload must be an object")
+        payload_json = json.dumps(payload or {}, ensure_ascii=False)
         with self._session() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
-                "INSERT INTO agent_tasks(task_id,source_agent,target_agent,required_capabilities_json,status) "
-                "VALUES(?,?,?,?, 'queued')",
-                (task_id, source_agent, target_agent, json.dumps(capabilities)),
+                "INSERT INTO agent_tasks(task_id,source_agent,target_agent,required_capabilities_json,status,payload_json) "
+                "VALUES(?,?,?,?, 'queued', ?)",
+                (task_id, source_agent, target_agent, json.dumps(capabilities), payload_json),
             )
             self._insert_task_event(conn, task_id, "task.queued", {
                 "task_id": task_id, "source_agent": source_agent,
@@ -495,7 +503,8 @@ class ArcStore:
 
     def update_agent_task(self, task_id: str, status: str, connector_id: str | None = None,
                           provider: str | None = None, error_code: str | None = None,
-                          worker_id: str | None = None) -> dict[str, Any] | None:
+                          worker_id: str | None = None,
+                          result: dict[str, Any] | None = None) -> dict[str, Any] | None:
         allowed = {"queued", "running", "succeeded", "failed", "cancelled"}
         if status not in allowed:
             raise ValueError("Invalid agent task status")
@@ -518,11 +527,13 @@ class ArcStore:
                 raise ValueError("Invalid agent task state transition")
             conn.execute(
                 "UPDATE agent_tasks SET status=?,connector_id=COALESCE(?,connector_id),"
-                "provider=COALESCE(?,provider),error_code=?,"
+                "provider=COALESCE(?,provider),error_code=?,result_json=COALESCE(?,result_json),"
                 "worker_id=CASE WHEN ? IN ('succeeded','failed','cancelled','queued') THEN NULL ELSE worker_id END,"
                 "lease_expires_at=CASE WHEN ? IN ('succeeded','failed','cancelled','queued') THEN NULL ELSE lease_expires_at END,"
                 "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=?",
-                (status, connector_id, provider, error_code, status, status, task_id),
+                (status, connector_id, provider, error_code,
+                 json.dumps(result, ensure_ascii=False) if result is not None else None,
+                 status, status, task_id),
             )
             self._insert_task_event(conn, task_id, "task." + status, {
                 "task_id": task_id, "status": status, "connector_id": connector_id,
@@ -535,6 +546,9 @@ class ArcStore:
     def _agent_task_row(row: sqlite3.Row) -> dict[str, Any]:
         item = dict(row)
         item["required_capabilities"] = json.loads(item.pop("required_capabilities_json"))
+        item["payload"] = json.loads(item.pop("payload_json", "{}"))
+        item["result"] = json.loads(item["result_json"]) if item.get("result_json") else None
+        item.pop("result_json", None)
         return item
 
     def list_agent_tasks(self, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
