@@ -749,7 +749,23 @@ def test_integration_approval_is_bound_to_signed_manifest_and_audited(client, tm
     assert decided.status_code == 200
     assert decided.json()["approval"]["status"] == "approved"
     assert decided.json()["activation_performed"] is False
-    assert client.get("/v1/integrations/audit", headers=auth()).json()["data"]
+
+    staging = tmp_path / "artifact-staging"
+    staging.mkdir()
+    (staging / "calendar-sync-1.2.0.artifact").write_bytes(b"test artifact")
+    monkeypatch.setenv("ORACLE_ARC_INTEGRATION_ARTIFACT_STAGING_DIR", str(staging))
+    monkeypatch.setenv("ORACLE_ARC_INTEGRATION_INSTALL_DIR", str(tmp_path / "installed"))
+    installed = client.post(
+        "/v1/integrations/calendar-sync/install",
+        headers=auth(),
+        params={"version": item["version"], "manifest_digest": item["manifest_digest"]},
+    )
+    assert installed.status_code == 201
+    assert installed.json()["installation"]["status"] == "staged_inert"
+    assert installed.json()["activation_performed"] is False
+    assert installed.json()["runtime_permissions_granted"] is False
+    assert any(event["action"] == "artifact_staged_inert"
+               for event in client.get("/v1/integrations/audit", headers=auth()).json()["data"])
 
 
 def test_independent_agent_task_submission_requires_owner_auth(client):
