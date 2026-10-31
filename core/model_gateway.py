@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 import ollama
@@ -89,12 +90,22 @@ class OllamaProvider:
         timeout = float(os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
         if timeout <= 0 or timeout > 900:
             raise ValueError("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS must be between 0 and 900.")
-        host = os.environ.get("OLLAMA_HOST")
-        self._client = ollama.Client(host=host, timeout=timeout) if host else ollama.Client(timeout=timeout)
+        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").strip()
+        parsed = urlsplit(host)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("OLLAMA_HOST must be a valid HTTP(S) URL without embedded credentials.")
+        hostname = parsed.hostname.lower()
+        local_hosts = {"localhost", "127.0.0.1", "::1"}
+        is_local = hostname in local_hosts
+        if not is_local and os.environ.get("ORACLE_ARC_ALLOW_REMOTE_OLLAMA", "false").lower() != "true":
+            raise ValueError("Remote Ollama is disabled. Set ORACLE_ARC_ALLOW_REMOTE_OLLAMA=true only after reviewing the data destination and transport security.")
+        if not is_local and parsed.scheme != "https":
+            raise ValueError("Remote Ollama connections must use HTTPS.")
+        self._client = ollama.Client(host=host, timeout=timeout)
         self.manifest = ProviderManifest(
             provider_id="ollama",
-            display_name="Ollama (local)",
-            execution_location="local",
+            display_name="Ollama (local)" if is_local else "Ollama (remote)",
+            execution_location="local" if is_local else "remote",
             capabilities=ModelCapabilities(tool_calling=True, streaming=True),
             description="Local model inference through the owner's configured Ollama host.",
         )
