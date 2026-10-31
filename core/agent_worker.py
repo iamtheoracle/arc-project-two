@@ -45,7 +45,20 @@ def process_one(store: ArcStore, worker_id: str) -> bool:
         if any(key not in payload for key in required):
             raise ValueError("Task payload is incomplete")
         # Import application wiring only in the worker process, never from a manifest.
-        from api import _build_agent_registry
+        from api import _build_agent_registry, _model_name
+        payload["model"] = _model_name(payload["model"])
+        if not isinstance(payload["latest_user"], str) or not payload["latest_user"].strip():
+            raise ValueError("Task user message is invalid")
+        if not isinstance(payload["history"], list) or len(payload["history"]) > 79:
+            raise ValueError("Task history is invalid")
+        if not isinstance(payload["max_steps"], int) or not 1 <= payload["max_steps"] <= 8:
+            raise ValueError("Task step limit is invalid")
+        for message in payload["history"]:
+            if (not isinstance(message, dict)
+                or message.get("role") not in ("user", "assistant")
+                or not isinstance(message.get("content"), str)
+                or len(message["content"]) > 100_000):
+                raise ValueError("Task history entry is invalid")
         registry = _build_agent_registry(store)
         result = registry.dispatch(
             task["target_agent"], payload,
