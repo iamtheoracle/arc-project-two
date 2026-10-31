@@ -235,6 +235,6 @@ Staging an artifact does not authorize activation. A second owner decision is st
 - `PUT /v1/integrations/{integration_id}/activation-approval?version=...&manifest_digest=...` records the separate owner decision.
 - `GET /v1/integrations/activation-approvals` lists activation decisions.
 - `DELETE /v1/integrations/{integration_id}/activation-approval?version=...&manifest_digest=...` revokes a previously approved activation decision and records the reason. Revoked decisions cannot pass the activation gate.
-- `POST /v1/integrations/{integration_id}/activate?version=...&manifest_digest=...` currently fails closed with HTTP 409 because no reviewed integration-specific isolated runtime adapter is configured. It records the blocked attempt. Approval alone never starts code or grants permissions.
+- `POST /v1/integrations/{integration_id}/activate?version=...&manifest_digest=...` currently fails closed with HTTP 409 because no reviewed integration-specific isolated runtime adapter is configured. It rechecks the live signed manifest, installation approval, activation approval and staged artifact digest on every attempt, then records the blocked attempt. Approval alone never starts code or grants permissions.
 
 This separation is intentional: activation remains unavailable until the per-integration runtime adapter, permission broker, sandbox policy, health checks and rollback path have passed review and tests.
