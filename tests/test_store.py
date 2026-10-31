@@ -183,3 +183,18 @@ def test_concurrent_workers_cannot_claim_the_same_agent_task(tmp_path):
     winners = [item for item in results if item is not None]
     assert len(winners) == 1
     assert winners[0]["attempts"] == 1
+
+
+def test_integration_approval_decision_is_persisted_and_audited(tmp_path):
+    store = ArcStore(tmp_path / "integration-approval.sqlite3")
+    requested = store.request_integration_approval("calendar-sync", "1.2.0", "a" * 64, "owner")
+    assert requested["status"] == "pending"
+    approved = store.decide_integration_approval(
+        "calendar-sync", "1.2.0", "a" * 64, True, "owner", "Reviewed requested permissions"
+    )
+    assert approved["status"] == "approved"
+    assert approved["decision_reason"] == "Reviewed requested permissions"
+    assert store.list_integration_audit()[-1]["action"] == "approval_requested"
+    assert store.list_integration_audit()[0]["action"] == "approved"
+    with pytest.raises(ValueError, match="already decided"):
+        store.decide_integration_approval("calendar-sync", "1.2.0", "a" * 64, False, "owner")
