@@ -89,7 +89,7 @@ class TenantIdentityStore:
             raise ValueError("At least one valid capability is required")
         tenant_id, app_id = "ten_" + uuid.uuid4().hex, "app_" + uuid.uuid4().hex
         credential_id, principal = "cred_" + uuid.uuid4().hex, principal_id
-        secret, salt = secrets.token_urlsafe(48), secrets.token_bytes(16)
+        secret, salt = "arc1." + credential_id + "." + secrets.token_urlsafe(48), secrets.token_bytes(16)
         verifier = salt.hex() + "$" + self._verifier(secret, salt)
         now = int(time.time())
         with self._connect() as db:
@@ -107,10 +107,12 @@ class TenantIdentityStore:
     def authenticate(self, secret: str) -> RequestIdentity:
         if not isinstance(secret, str) or len(secret) < 32:
             raise PermissionError("Invalid application credential")
-        # Credential IDs are intentionally not exposed in bearer tokens; bounded scan is
-        # acceptable for the initial SQLite control plane and can later use keyed lookup.
+        parts = secret.split(".", 2)
+        if len(parts) != 3 or parts[0] != "arc1" or not parts[1].startswith("cred_"):
+            raise PermissionError("Invalid application credential")
+        credential_id = parts[1]
         with self._connect() as db:
-            rows = db.execute("""
+            row = db.execute("""
               SELECT c.*, t.status AS tenant_status, a.status AS app_status,
                      a.policy_version, p.status AS principal_status, m.status AS membership_status
               FROM arc_credentials c
@@ -119,8 +121,9 @@ class TenantIdentityStore:
               JOIN arc_principals p ON p.principal_id=c.principal_id
               JOIN arc_app_memberships m ON m.tenant_id=c.tenant_id
                 AND m.application_id=c.application_id AND m.principal_id=c.principal_id
-              WHERE c.revoked_at IS NULL
-            """).fetchall()
+              WHERE c.credential_id=? AND c.revoked_at IS NULL
+            """, (credential_id,)).fetchone()
+        rows = [row] if row else []
         for row in rows:
             try:
                 salt_hex, expected = row["verifier"].split("$", 1)
