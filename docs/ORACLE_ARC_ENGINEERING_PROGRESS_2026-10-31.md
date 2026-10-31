@@ -104,3 +104,43 @@ This branch contains architecture documentation and focused security hardening. 
 - Explicitly records the current system as a private single-owner API/store; this document does not claim tenant isolation is implemented.
 - Multi-tenant/customer-facing access remains blocked until migration, enforcement, cross-scope tests, operational controls and controlled-pilot gates are complete.
 - Commit: `1f31d60140fc8c77271e07d39ed191792a552255`.
+
+
+## 11. First tenant-scoped application access vertical slice
+
+**Implemented in code on this branch; not yet production-verified.**
+
+- Added `core/tenant_security.py` with additive control-plane tables for tenants, applications, principals, hashed/revocable application credentials, app-scoped SPARK memories, explicit memory-sharing grants, and tenant/app/principal-scoped agent tasks.
+- Added `core/platform_routes.py` and mounted it under `/v1/platform` in `api.py`.
+- Owner-only control-plane endpoints provision tenants/apps, issue one-time application credentials, and revoke credentials.
+- Application credentials resolve tenant, application, principal, capability set and policy version from server-side database state. Request bodies and headers cannot choose the identity scope.
+- Scoped SPARK memory endpoints enforce application/principal boundaries, separate sensitive-memory capability, and explicit purpose/category/expiry-bound sharing grants with revocation.
+- Scoped agent task endpoints persist scope, check agent dispatch plus requested capabilities at enqueue, re-check scope/capabilities at claim and completion, and hide cross-app task IDs.
+- Legacy owner routes remain owner-only; app credentials do not authenticate to those legacy endpoints. Existing owner data is not automatically migrated into new tenants.
+- Additive SQLite tables are initialized lazily by the platform router. A production migration/backup/restore procedure and cross-database deployment plan remain required.
+- Added API and unit tests for credential revocation, app isolation, memory sharing/revocation, sensitive-memory gating, task isolation and cross-app denial. CI status pending.
+
+## 12. Privacy-aware provider gateway
+
+- Added `core/privacy_aware_gateway.py` with a single provider decision interface, request-scoped tenant/app/principal policy, data classification, provider allowlist and region checks.
+- Remote model providers require explicit per-request policy; credentials or environment variables alone do not authorize data export.
+- Remotely hosted Ollama is treated as remote egress and requires explicit allowlisting. Local Ollama remains available without remote egress permission.
+- Existing agent registry no longer attaches remote provider connectors based on the former global `ORACLE_ARC_ENABLE_REMOTE_PROVIDER_FALLBACK` flag. This is intentionally fail-closed until all app-agent inference calls pass a trusted `InferencePolicy`.
+- The privacy-aware gateway module is implemented, but complete migration of all existing agent inference calls to this gateway remains pending. Do not claim unified production routing yet.
+
+## 13. CONCIERGE confirmation-gated workflow runtime
+
+- Added `core/concierge_runtime.py` with tenant/app/principal-scoped workflow records, canonical action fingerprints, expiry, atomic one-time confirmation claim, and provider receipt requirement.
+- Added platform routes for planning and confirming actions. Planning does not execute. Execution requires `concierge.action.execute`, exact action fingerprint confirmation and a server-registered provider executor.
+- No provider executor is registered by default; consequential actions return a fail-closed unavailable response. No booking, payment, message, purchase or external change is activated.
+- Added tests for wrong-fingerprint rejection, cross-app workflow denial and provider-confirmed receipt requirement.
+
+## 14. Remaining integration gates
+
+- Integrate the privacy-aware gateway into every app-scoped agent inference call, including context construction that uses only the current app's authorized SPARK memories.
+- Route scoped task claims through a separately authenticated worker service identity and re-authorize grants/credential revocation at execution time; current queue methods intentionally constrain worker operations to the originating principal context.
+- Add scoped agent runtime wiring. The new scoped task queue does not yet authorize the legacy owner agent registry to read app data.
+- Add credential rotation, tenant/app suspension APIs, audit log redaction, rate limiting by credential/tenant and operational key management.
+- Add migrations/backups/restore drills for production DBs, concurrent migration tests and adversarial cross-tenant tests on a production-like database.
+- Add a reviewed CONCIERGE provider adapter for each allowed action type, idempotency handling, provider receipt verification and recovery for workflows left in executing state.
+- Run CI and fix all failures before treating this vertical slice as verified.
