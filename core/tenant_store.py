@@ -166,8 +166,11 @@ class TenantStore:
     def create_memory_grant(self, identity: RequestIdentity, destination_application_id: str,
                             categories: list[str], purpose: str, expires_at: int) -> str:
         self._require(identity, "memory.share")
-        if not categories or not purpose.strip() or expires_at <= identity.issued_at:
-            raise ValueError("A purpose, categories and future expiry are required")
+        shareable_categories = {"general", "preferences", "learning", "projects"}
+        requested_categories = set(categories)
+        if (not requested_categories or not requested_categories.issubset(shareable_categories)
+                or not purpose.strip() or expires_at <= identity.issued_at):
+            raise ValueError("A purpose, shareable categories and future expiry are required; sensitive memories cannot be shared")
         grant="grant_"+uuid.uuid4().hex
         with self._session() as db:
             dest=db.execute("SELECT 1 FROM arc_applications WHERE tenant_id=? AND application_id=? AND status='active'",
@@ -193,7 +196,10 @@ class TenantStore:
             grants=db.execute("SELECT categories_json FROM arc_memory_grants WHERE tenant_id=? AND source_application_id=? AND destination_application_id=? AND principal_id=? AND revoked_at IS NULL AND expires_at>unixepoch()",
                 (identity.tenant_id,source_application_id,identity.application_id,identity.principal_id)).fetchall()
             allowed=set()
-            for grant in grants: allowed.update(json.loads(grant["categories_json"]))
+            for grant in grants:
+                allowed.update(set(json.loads(grant["categories_json"])) & {
+                    "general", "preferences", "learning", "projects"
+                })
             if not allowed: return []
             placeholders=",".join("?" for _ in allowed)
             rows=db.execute(f"SELECT memory_id,category,content,tags_json FROM arc_scoped_memories WHERE tenant_id=? AND application_id=? AND principal_id=? AND category IN ({placeholders})",
