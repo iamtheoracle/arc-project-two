@@ -86,7 +86,7 @@ def inspect_manifest(raw: dict[str, Any], trusted_publishers: dict[str, str],
     integration_id, kind, publisher = raw["integration_id"], raw["kind"], raw["publisher"]
     if not isinstance(integration_id, str) or not ID_RE.fullmatch(integration_id):
         raise ManifestError("Invalid integration ID")
-    if kind not in KINDS:
+    if not isinstance(kind, str) or kind not in KINDS:
         raise ManifestError("Unsupported integration kind")
     if not isinstance(publisher, str) or publisher not in trusted_publishers:
         raise ManifestError("Publisher is not trusted")
@@ -108,7 +108,7 @@ def inspect_manifest(raw: dict[str, Any], trusted_publishers: dict[str, str],
         ) or len(set(values)) != len(values):
             raise ManifestError("Invalid capability or permission list")
     risk = raw["risk"]
-    if risk not in RISK_ORDER:
+    if not isinstance(risk, str) or risk not in RISK_ORDER:
         raise ManifestError("Invalid risk classification")
     digest = raw["artifact_sha256"]
     if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
@@ -184,6 +184,9 @@ def select_safest(candidates: list[dict[str, Any]], required_capabilities: set[s
     eligible = []
     for item in candidates:
         if not item.get("eligible_for_review") or not item.get("signature_valid"):
+            continue
+        # Unknown health is not a pass. A trusted health adapter must report healthy.
+        if item.get("health_status") != "healthy":
             continue
         if not required_capabilities.issubset(set(item.get("capabilities", []))):
             continue
