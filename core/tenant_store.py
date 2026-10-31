@@ -72,7 +72,7 @@ class TenantStore:
             raise PermissionError("Required application capability is not granted")
 
     def create_conversation(self, identity: RequestIdentity, title: str = "") -> str:
-        self._require(identity, "memory.write")
+        self._require(identity, "conversation.write")
         cid=uuid.uuid4().hex
         with self._session() as db:
             db.execute("INSERT INTO arc_scoped_conversations VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)",
@@ -116,6 +116,52 @@ class TenantStore:
                  json.dumps(tags or [],ensure_ascii=False)))
             db.commit()
         return mid
+
+    def list_memories(self, identity: RequestIdentity, limit: int = 100) -> list[dict[str, Any]]:
+        self._require(identity, "memory.read")
+        if not 1 <= limit <= 500:
+            raise ValueError("Memory list limit must be between 1 and 500")
+        with self._session() as db:
+            rows = db.execute(
+                "SELECT memory_id,category,content,tags_json,created_at FROM arc_scoped_memories "
+                "WHERE tenant_id=? AND application_id=? AND principal_id=? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (identity.tenant_id, identity.application_id, identity.principal_id, limit),
+            ).fetchall()
+        result = []
+        for row in rows:
+            if row["category"] == "sensitive" and "memory.sensitive.read" not in identity.capabilities:
+                continue
+            result.append({"memory_id": row["memory_id"], "category": row["category"],
+                           "content": row["content"], "tags": json.loads(row["tags_json"]),
+                           "created_at": row["created_at"]})
+        return result
+
+    def update_memory(self, identity: RequestIdentity, memory_id: str,
+                      content: str, category: str, tags: list[str] | None = None) -> bool:
+        self._require(identity, "memory.write")
+        if category not in {"general","preferences","learning","projects","sensitive"}:
+            raise ValueError("Unknown memory category")
+        if category == "sensitive" and "memory.sensitive.write" not in identity.capabilities:
+            raise PermissionError("Sensitive memory requires a separate capability")
+        with self._session() as db:
+            cursor = db.execute(
+                "UPDATE arc_scoped_memories SET content=?,category=?,tags_json=? "
+                "WHERE tenant_id=? AND application_id=? AND principal_id=? AND memory_id=?",
+                (content, category, json.dumps(tags or [], ensure_ascii=False),
+                 identity.tenant_id, identity.application_id, identity.principal_id, memory_id),
+            )
+        return cursor.rowcount == 1
+
+    def delete_memory(self, identity: RequestIdentity, memory_id: str) -> bool:
+        self._require(identity, "memory.delete")
+        with self._session() as db:
+            cursor = db.execute(
+                "DELETE FROM arc_scoped_memories WHERE tenant_id=? AND application_id=? "
+                "AND principal_id=? AND memory_id=?",
+                (identity.tenant_id, identity.application_id, identity.principal_id, memory_id),
+            )
+        return cursor.rowcount == 1
 
     def create_memory_grant(self, identity: RequestIdentity, destination_application_id: str,
                             categories: list[str], purpose: str, expires_at: int) -> str:
