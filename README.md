@@ -225,3 +225,15 @@ POST /v1/integrations/{integration_id}/install?version={version}&manifest_digest
 ```
 
 **Important:** this is inert artifact staging, not code installation or activation. Archives are not extracted; modules are not imported; no process is launched; no runtime permissions are granted. Activation remains disabled until a reviewed integration-specific runtime adapter, isolated installer/executor, health checks, rollback and a separate owner activation decision exist. The artifact must be pre-positioned by a trusted operator; this endpoint does not fetch arbitrary URLs.
+
+
+#### Separate activation approval
+
+Staging an artifact does not authorize activation. A second owner decision is stored independently and bound to the same integration ID, version and manifest digest:
+
+- `POST /v1/integrations/{integration_id}/activation-approval?version=...&manifest_digest=...` requests activation review. It requires a still-trusted manifest, prior installation approval, and a staged artifact whose bytes still match the manifest digest.
+- `PUT /v1/integrations/{integration_id}/activation-approval?version=...&manifest_digest=...` records the separate owner decision.
+- `GET /v1/integrations/activation-approvals` lists activation decisions.
+- `POST /v1/integrations/{integration_id}/activate?version=...&manifest_digest=...` currently fails closed with HTTP 409 because no reviewed integration-specific isolated runtime adapter is configured. It records the blocked attempt. Approval alone never starts code or grants permissions.
+
+This separation is intentional: activation remains unavailable until the per-integration runtime adapter, permission broker, sandbox policy, health checks and rollback path have passed review and tests.
