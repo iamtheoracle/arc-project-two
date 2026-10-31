@@ -20,7 +20,7 @@ from core.store import ArcStore
 from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_context, normalize_profile
 from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, SessionNotFoundError, default_agent_registry)
 from core.implementation_planner import plan_implementation
-from core.integrations import ManifestError, load_manifest_directory, load_trust_keys
+from core.integrations import ManifestError, load_manifest_directory, load_trust_keys, select_safest
 
 app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
@@ -449,7 +449,25 @@ def implementation_plan(request: ImplementationPlanRequest, store: ArcStore = De
     """Recommend responsible agents and integrations; never installs or executes them."""
     enabled = {item["agent_id"]: item["enabled"] for item in _build_agent_registry(store).list_agents()}
     plan = plan_implementation(request.description, available_agents=enabled)
-    return {"plan": plan, "available_plugins": _plugin_catalog().list_plugins()}
+    try:
+        candidates = _integration_catalog(store)
+        allowed = {item.strip() for item in os.environ.get(
+            "ORACLE_ARC_ALLOWED_INTEGRATION_PERMISSIONS", ""
+        ).split(",") if item.strip()}
+        selected = select_safest(
+            candidates, set(plan["required_capabilities"]), allowed
+        )
+        integration_status = "evaluated"
+    except ManifestError:
+        candidates, selected = [], None
+        integration_status = "trust_configuration_invalid"
+    return {
+        "plan": plan,
+        "available_plugins": _plugin_catalog().list_plugins(),
+        "integration_candidates": candidates,
+        "selected_verified_integration": selected,
+        "integration_selection_status": integration_status,
+    }
 
 
 def _integration_catalog(store: ArcStore) -> list[dict[str, Any]]:
