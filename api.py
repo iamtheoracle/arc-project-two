@@ -143,7 +143,7 @@ def _build_agent_registry(store: ArcStore):
 
             def run(payload, selected_host=host, selected_agent=agent_id):
                 runtime_store = _available_context_store(store)
-                runtime = ArcAgent(model=payload["model"], approved_tools=runtime_store.approved_tools(),
+                runtime = ArcAgent(model=payload["model"], approved_tools=runtime_store.approved_tools(PluginRegistry().tool_fingerprints),
                                    host=selected_host)
                 runtime.tool_audit = lambda name, outcome: runtime_store.audit_tool(name, outcome)
                 runtime.messages = [
@@ -945,7 +945,7 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
         pending_message_id = store.add_message(conversation_id, "user", latest_user)
         agent_history = history[:-1][-79:]
 
-    agent = _agent(model, store.approved_tools())
+    agent = _agent(model, store.approved_tools(PluginRegistry().tool_fingerprints))
     agent.messages = [{"role": "system", "content": _system_prompt(store, latest_user)}] + agent_history
     agent.tool_audit = lambda name, outcome: store.audit_tool(name, outcome)
     try:
@@ -1011,7 +1011,7 @@ def delete_memory(memory_id: str, store: ArcStore = Depends(get_store)):
 @app.get("/v1/tools", dependencies=[Depends(require_owner)])
 def tools(store: ArcStore = Depends(get_store)):
     registry = PluginRegistry()
-    approved = store.approved_tools()
+    approved = store.approved_tools(registry.tool_fingerprints)
     return {"data": [{"name": item["name"], "description": item.get("description", ""),
                       "approved": item["name"] in approved}
                      for item in registry.tools]}
@@ -1023,7 +1023,10 @@ def approve_tool(tool_name: str, request: ToolApproval, store: ArcStore = Depend
     known = {item["name"] for item in registry.tools}
     if tool_name not in known:
         raise HTTPException(status_code=404, detail="Unknown tool.")
-    store.set_tool_approval(tool_name, request.approved)
+    fingerprint = registry.tool_fingerprints.get(tool_name)
+    if fingerprint is None:
+        raise HTTPException(status_code=404, detail="Unknown tool.")
+    store.set_tool_approval(tool_name, fingerprint, request.approved)
     return {"name": tool_name, "approved": request.approved}
 
 
