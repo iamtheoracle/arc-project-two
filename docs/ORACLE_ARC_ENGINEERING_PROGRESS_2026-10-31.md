@@ -178,3 +178,19 @@ This branch contains architecture documentation and focused security hardening. 
 - Add SPARK provenance, correction, retention and deletion propagation with explicit cross-application grants.
 - Add production-like migration, backup/restore, adversarial isolation, queue recovery and operational tests.
 - No customer traffic, production deployment, external side effects or money movement is enabled by this tranche.
+
+
+## Platform control-plane milestone — first implementation slice
+
+- Added `core/platform_control_plane.py`, a tenant/application-scoped metadata and execution control plane.
+- Added immutable, versioned agent manifests with canonical SHA-256 integrity digests. Manifests declare required capabilities, allowed tool identifiers, permitted model route IDs and a trusted runtime identifier; application manifests cannot grant capabilities or tool grants the application credential does not already possess.
+- Added explicit model-route registration for the existing provider set (Ollama, OpenRouter, Groq and Gemini), with classification and execution-region allowlists. Route resolution and execution submission are tenant/application scoped.
+- Added per-application quotas for execution rate, concurrent queued/running work and input bytes. Workloads fail closed until an application quota is configured.
+- Added an execution queue with scoped idempotency keys, worker leases, bounded retry attempts, dead-letter transition, lease-expiry recovery, worker ownership checks, scoped cancellation and success/failure states.
+- Added usage ledger records and per-application aggregate usage summaries. These are metering primitives, not billing or payment processing.
+- Added application-authenticated API endpoints in `core/platform_routes.py` for agent registration/read/disable, model route configuration, quota configuration, execution submission/read/cancel and usage records/summaries.
+- Added `tests/test_platform_control_plane.py` covering version immutability, tenant isolation, capability/tool grants, model classification/region policy, quotas, idempotency, lifecycle, lease recovery and usage accounting.
+- This is a control-plane and queue foundation, not a dynamic third-party code execution environment. It does not load arbitrary developer code. A separate trusted runtime/worker host, live identity revalidation immediately before execution, provider execution wiring, lease heartbeats, migration/restore drills and production observability are still required.
+- The API currently exposes submit/read/cancel and metering operations; worker claim/complete/fail/recovery remain internal control-plane methods and must be wired to a separately authenticated worker service before enabling workloads.
+- No customer workloads, third-party runtimes, external actions, production deployment or billing are enabled by this tranche.
+- Validation: changes and tests are committed to the working branch. No successful CI run or local test execution has been verified in this session; do not treat the tests as passing.
