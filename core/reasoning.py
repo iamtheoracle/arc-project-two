@@ -20,30 +20,30 @@ class ReasoningProfile:
 
 
 _CURRENT = re.compile(
-    r"\\b(latest|current|currently|today|yesterday|tomorrow|this week|"
+    r"\b(latest|current|currently|today|yesterday|tomorrow|this week|"
     r"recent|newest|now|price|exchange rate|availability|open now|"
-    r"who is the present|as of \\d{4})\\b",
+    r"who is the present|as of \d{4})\b",
     re.IGNORECASE,
 )
 _HIGH_STAKES = re.compile(
-    r"\\b(medical|medicine|medication|diagnos|symptom|treatment|"
+    r"\b(medical|medicine|medication|diagnos|symptom|treatment|"
     r"legal|lawyer|lawsuit|contract|tax|investment|investing|loan|"
     r"credit|banking|financial|suicide|self.?harm|emergency|"
-    r"security breach|exploit|vulnerability|production data)\\b",
+    r"security breach|exploit|vulnerability|production data)\b",
     re.IGNORECASE,
 )
 _CODE = re.compile(
-    r"\\b(code|coding|program|debug|bug|exception|stack trace|"
+    r"\b(code|coding|program|debug|bug|exception|stack trace|"
     r"repository|github|api|database|sql|deploy|deployment|"
-    r"function|class|test|compiler|build)\\b",
+    r"function|class|test|compiler|build)\b",
     re.IGNORECASE,
 )
 _CALC = re.compile(
-    r"\\b(calculate|calculation|how many|how much|percentage|percent|"
-    r"convert|conversion|sum|average|interest rate|total|estimate)\\b",
+    r"\b(calculate|calculation|how many|how much|percentage|percent|"
+    r"convert|conversion|sum|average|interest rate|total|estimate)\b",
     re.IGNORECASE,
 )
-_COMPARE = re.compile(r"\\b(compare|versus|vs\\.?|better|best|trade.?off|pros and cons)\\b", re.IGNORECASE)
+_COMPARE = re.compile(r"\b(compare|versus|vs\.?|better|best|trade.?off|pros and cons)\b", re.IGNORECASE)
 
 
 def assess_request(text: str) -> ReasoningProfile:
@@ -129,4 +129,4 @@ def build_reasoning_context(text: str) -> str:
         "logic, arithmetic, safety, completeness, and clarity. If a check cannot be completed, "
         "say so rather than implying that it passed."
     )
-    return "\\n".join(lines)
+    return "\n".join(lines)
