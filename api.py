@@ -19,6 +19,7 @@ from core.plugins import PluginRegistry
 from core.store import ArcStore
 from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_context, normalize_profile
 from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, SessionNotFoundError, default_agent_registry)
+from core.implementation_planner import plan_implementation
 
 app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
@@ -77,6 +78,10 @@ class UserProfileUpdate(BaseModel):
 class BoundaryCreate(BaseModel):
     boundary: str = Field(min_length=3, max_length=1000)
     context: str = Field(default="", max_length=500)
+
+
+class ImplementationPlanRequest(BaseModel):
+    description: str = Field(min_length=3, max_length=10_000)
 
 
 
@@ -425,6 +430,14 @@ def list_agents(store: ArcStore = Depends(get_store)):
 def list_plugins():
     # Metadata only: this endpoint never imports or executes plugin files.
     return {"data": _plugin_catalog().list_plugins()}
+
+
+@app.post("/v1/implementation/plan", dependencies=[Depends(require_owner)])
+def implementation_plan(request: ImplementationPlanRequest, store: ArcStore = Depends(get_store)):
+    """Recommend responsible agents and integrations; never installs or executes them."""
+    enabled = {item["agent_id"]: item["enabled"] for item in _build_agent_registry(store).list_agents()}
+    plan = plan_implementation(request.description, available_agents=enabled)
+    return {"plan": plan, "available_plugins": _plugin_catalog().list_plugins()}
 
 
 @app.post("/v1/agents/{agent_id}/chat", dependencies=[Depends(require_owner)])
