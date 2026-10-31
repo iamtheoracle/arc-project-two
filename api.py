@@ -227,7 +227,8 @@ def chat(request: ChatRequest, store: ArcStore = Depends(get_store)):
                 store.add_message(conversation_id, item["role"], item["content"])
             agent_history = history[:-1][-79:]
 
-        agent = _agent(model, store.approved_tools())
+        registry = PluginRegistry()
+        agent = _agent(model, store.approved_tools(registry.tool_fingerprints))
         agent.messages = [{"role": "system", "content": _system_prompt(store)}] + agent_history
         agent.tool_audit = lambda name, outcome: store.audit_tool(name, outcome)
         try:
@@ -301,7 +302,7 @@ def delete_memory(memory_id: str, store: ArcStore = Depends(get_store)):
 @app.get("/v1/tools", dependencies=[Depends(require_owner)])
 def tools(store: ArcStore = Depends(get_store)):
     registry = PluginRegistry()
-    approved = store.approved_tools()
+    approved = store.approved_tools(registry.tool_fingerprints)
     return {
         "data": [{
             "name": item["name"],
@@ -313,10 +314,11 @@ def tools(store: ArcStore = Depends(get_store)):
 
 @app.put("/v1/tools/{tool_name}/approval", dependencies=[Depends(require_owner)])
 def approve_tool(tool_name: str, request: ToolApproval, store: ArcStore = Depends(get_store)):
-    known = {item["name"] for item in PluginRegistry().tools}
-    if tool_name not in known:
+    registry = PluginRegistry()
+    fingerprint = registry.tool_fingerprints.get(tool_name)
+    if fingerprint is None:
         raise HTTPException(status_code=404, detail="Unknown tool.")
-    store.set_tool_approval(tool_name, request.approved)
+    store.set_tool_approval(tool_name, fingerprint, request.approved)
     return {"name": tool_name, "approved": request.approved}
 
 
