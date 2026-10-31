@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,7 @@ class PluginRegistry:
         self.plugins: dict[str, dict] = {}
         self.tools: list[dict] = []
         self.handlers: dict[str, Callable] = {}
+        self.tool_fingerprints: dict[str, str] = {}
         self.load_all()
 
     def load_all(self) -> None:
@@ -59,6 +61,7 @@ class PluginRegistry:
             if not isinstance(raw_tools, list):
                 return
             accepted: list[dict] = []
+            source_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             for tool in raw_tools:
                 if not isinstance(tool, dict):
                     continue
@@ -71,8 +74,11 @@ class PluginRegistry:
                         or not isinstance(parameters, dict) or parameters.get("type") != "object"
                         or not callable(handler)):
                     continue
+                canonical_schema = json.dumps({"name": name, "description": description[:1000], "parameters": parameters}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+                fingerprint = hashlib.sha256((source_digest + "\\n" + canonical_schema).encode("utf-8")).hexdigest()
                 accepted.append({"name": name, "description": description[:1000], "parameters": parameters})
                 self.handlers[name] = handler
+                self.tool_fingerprints[name] = fingerprint
                 seen_tools.add(name)
             if accepted:
                 self.plugins[plugin_name] = {"name": plugin_name, "tools": accepted}
