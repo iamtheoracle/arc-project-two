@@ -147,7 +147,7 @@ def _build_agent_registry(store: ArcStore):
                                    host=selected_host)
                 runtime.tool_audit = lambda name, outcome: runtime_store.audit_tool(name, outcome)
                 runtime.messages = [
-                    {"role": "system", "content": _system_prompt(runtime_store) + "\n\n" + prompts[selected_agent]}
+                    {"role": "system", "content": _system_prompt(runtime_store, payload["latest_user"]) + "\n\n" + prompts[selected_agent]}
                 ] + payload["history"]
                 return runtime.chat(payload["latest_user"], max_steps=payload["max_steps"])
 
