@@ -106,3 +106,21 @@ def test_worker_revalidation_rejects_membership_revocation(tmp_path):
     with pytest.raises(PermissionError):
         TenantExecutionGuard(identities).authorize(identity,("agent.oracle.dispatch",))
 
+
+
+def test_sensitive_memories_cannot_be_shared_even_with_explicit_grant(tmp_path):
+    path=str(tmp_path/"tenant.sqlite3")
+    ids=TenantIdentityStore(path)
+    source=ids.provision("Tenant A","UNIBUD","principal-a",
+        ["memory.write","memory.sensitive.write","memory.share"])
+    destination=ids.provision_application(source["tenant_id"],"WAYWARD","principal-a",
+        ["memory.shared.read"])
+    src,dst=ids.authenticate(source["secret"]),ids.authenticate(destination["secret"])
+    store=TenantStore(path)
+    store.save_memory(src,"Highly private","sensitive")
+    with pytest.raises(ValueError,match="sensitive memories cannot be shared"):
+        store.create_memory_grant(src,dst.application_id,["sensitive"],
+            "Attempted sensitive sharing",src.issued_at+3600)
+    grant=store.create_memory_grant(src,dst.application_id,["preferences"],
+        "Share only preferences",src.issued_at+3600)
+    assert store.shared_memories(dst,src.application_id)==[]
