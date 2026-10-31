@@ -48,53 +48,65 @@ def stage_approved_artifact(
     source = source_root / f"{integration_id}-{version}.artifact"
     if source.is_symlink() or not source.is_file() or source.resolve().parent != source_root:
         raise ArtifactError("Staged artifact is missing or unsafe")
-    target_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if target_root.is_symlink():
-        raise ArtifactError("Install directory cannot be a symlink")
-    destination = target_root / f"{integration_id}-{version}.artifact"
-    if destination.exists() or destination.is_symlink():
-        raise ArtifactError("This exact artifact version is already staged")
 
-    fd, temporary_name = tempfile.mkstemp(prefix=".oracle-arc-", dir=target_root)
-    digest = hashlib.sha256()
-    size = 0
+    source_fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    temporary_name = None
+    fd = None
     try:
-        source_fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            metadata = os.fstat(source_fd)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0 or metadata.st_size > MAX_ARTIFACT_BYTES:
-                raise ArtifactError("Artifact size or file type is outside the allowed range")
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "wb") as output, os.fdopen(source_fd, "rb") as input_file:
-                for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
-                    size += len(chunk)
-                    if size > MAX_ARTIFACT_BYTES:
-                        raise ArtifactError("Artifact exceeds the maximum allowed size")
-                    digest.update(chunk)
-                    output.write(chunk)
-                output.flush()
-                os.fsync(output.fileno())
-        except Exception:
-            try:
-                os.close(source_fd)
-            except OSError:
-                pass
-            raise
-        actual = digest.hexdigest()
-        if size == 0 or actual != expected_sha256:
+        metadata = os.fstat(source_fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0 or metadata.st_size > MAX_ARTIFACT_BYTES:
+            raise ArtifactError("Artifact size or file type is outside the allowed range")
+
+        # Verify before creating the install directory or writing any installed bytes.
+        digest = hashlib.sha256()
+        size = 0
+        with os.fdopen(os.dup(source_fd), "rb") as input_file:
+            for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_ARTIFACT_BYTES:
+                    raise ArtifactError("Artifact exceeds the maximum allowed size")
+                digest.update(chunk)
+        if size == 0 or digest.hexdigest() != expected_sha256:
             raise ArtifactError("Artifact digest does not match the approved manifest")
+
+        target_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if target_root.is_symlink():
+            raise ArtifactError("Install directory cannot be a symlink")
+        destination = target_root / f"{integration_id}-{version}.artifact"
+        if destination.exists() or destination.is_symlink():
+            raise ArtifactError("This exact artifact version is already staged")
+
+        fd, temporary_name = tempfile.mkstemp(prefix=".oracle-arc-", dir=target_root)
+        os.fchmod(fd, 0o600)
+        os.lseek(source_fd, 0, os.SEEK_SET)
+        copied_digest = hashlib.sha256()
+        copied_size = 0
+        with os.fdopen(fd, "wb") as output, os.fdopen(os.dup(source_fd), "rb") as input_file:
+            fd = None
+            for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+                copied_size += len(chunk)
+                if copied_size > MAX_ARTIFACT_BYTES:
+                    raise ArtifactError("Artifact exceeds the maximum allowed size")
+                copied_digest.update(chunk)
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        actual = copied_digest.hexdigest()
+        if copied_size != size or actual != expected_sha256:
+            raise ArtifactError("Artifact changed during staging")
         # link() is atomic and fails rather than replacing an existing installed version.
         os.link(temporary_name, destination, follow_symlinks=False)
         os.unlink(temporary_name)
-    except Exception:
-        try:
+        temporary_name = None
+    finally:
+        os.close(source_fd)
+        if fd is not None:
             os.close(fd)
-        except OSError:
-            pass
-        try:
-            os.unlink(temporary_name)
-        except OSError:
-            pass
-        raise
-    return {"artifact_path": str(destination), "sha256": actual, "size_bytes": size,
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+
+    return {"artifact_path": str(destination), "sha256": actual, "size_bytes": copied_size,
             "status": "staged_inert"}
