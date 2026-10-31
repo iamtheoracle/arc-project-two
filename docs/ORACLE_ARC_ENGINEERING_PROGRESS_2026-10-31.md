@@ -49,14 +49,23 @@
 - Commits: `ef2df1f18f839c5d462351a4eba825260b9402ed` (middleware/capacity), `63c9ca9f01b64f547e7a9b915cfb77e9fe97cc4e` (rate default), `00c447a45996b6f02af5641a1be594e09a97e65f` (tests).
 - Important limitation: these in-process limits are not a substitute for gateway-level limits when multiple workers or replicas are deployed.
 
+### 7. Canonical local-model gateway restored
+- Restored the provider-neutral gateway and its capability/registry contract from the personal-core work without copying its incompatible facade verbatim.
+- Updated `OllamaProvider` and `ModelGateway` to accept the per-agent host used by the adaptive agent registry.
+- Updated `LocalLLM` to route all local model calls through the gateway while preserving the `ArcAgent(model=..., host=...)` constructor contract.
+- Remote Ollama endpoints remain fail-closed unless explicitly allowed, and non-local Ollama requires HTTPS; no silent provider fallback is introduced.
+- Restored gateway contract tests, including capability enforcement, malformed request rejection and facade routing.
+- Commits: `cc4d688725e335b4abba0ca717d82a50d637cffd` (gateway), `ff8845fd6f18f4964976b8f95fbd43685ae7f39f` (facade), `38dd5d95e15c4284de7928938e6e403ddd33802e` (tests).
+- Scope boundary: remote HTTP adapters in `core/providers.py` still use the agent-registry connector contract. Full adapter unification, normalized cancellation/usage semantics and per-request privacy routing remain pending.
+
 ## Remaining high-priority work
 
 | Priority | Work | State |
 |---|---|---|
 | P0 | Verify CI on this exact branch head | Pending |
 | P0 | Restore personal-core request-body, rate-limit and concurrency protections without trusting spoofable proxy headers | Implemented; CI pending; ingress multi-worker controls still required |
-| P0 | Reconcile `ArcAgent(host=...)` with a gateway-backed `LocalLLM` contract | Pending |
-| P0 | Consolidate `core/model_gateway.py` and `core/providers.py` behind one provider contract | Pending |
+| P0 | Reconcile `ArcAgent(host=...)` with a gateway-backed `LocalLLM` contract | Implemented; CI pending |
+| P0 | Consolidate `core/model_gateway.py` and `core/providers.py` behind one provider contract | Partial: local Ollama gateway restored; remote adapter unification pending |
 | P0 | Add migration tests from both existing database shapes, including legacy name-only tool approvals | Pending |
 | P0 | Preserve sandbox restrictions and fingerprint approvals through final reconciliation | In progress |
 | P0 | Design tenant/app identities, scoped credentials and per-record ownership before any consumer app exposure | Not started |
