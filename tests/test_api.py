@@ -782,6 +782,17 @@ def test_integration_approval_is_bound_to_signed_manifest_and_audited(client, tm
     )
     assert activation_decision.status_code == 200
     assert activation_decision.json()["activation_approval"]["status"] == "approved"
+    installed_artifact = tmp_path / "installed" / "calendar-sync-1.2.0.artifact"
+    installed_artifact.write_bytes(b"tampered after staging")
+    tampered_activation = client.post(
+        "/v1/integrations/calendar-sync/activate",
+        headers=auth(),
+        params={"version": item["version"], "manifest_digest": item["manifest_digest"]},
+    )
+    assert tampered_activation.status_code == 409
+    assert "integrity" in tampered_activation.json()["detail"]
+    installed_artifact.write_bytes(b"test artifact")
+
     blocked = client.post(
         "/v1/integrations/calendar-sync/activate",
         headers=auth(),
