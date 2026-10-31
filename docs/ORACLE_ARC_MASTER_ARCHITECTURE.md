@@ -221,7 +221,11 @@ Health remains `unknown` unless a trusted integration-specific health adapter is
 
 The owner-authenticated API exposes catalog inspection, exact-manifest approval requests, approval/rejection decisions, and audit history. Approval binds to integration ID, version and canonical manifest digest. Any changed manifest requires a new approval. The database stores the request, decision maker, reason and timestamps in separate approval and audit tables.
 
-Approval is not installation or activation. No external artifact installer or runtime permission grant is enabled by this milestone. Before that stage, the project still needs artifact acquisition with digest verification, isolated installation, runtime sandboxing, health adapters, rollback and revocation.
+Approval is not activation. The owner-authenticated `POST /v1/integrations/{integration_id}/install` endpoint now supports a narrow inert-staging step: it requires approval for the exact manifest digest, reads a pre-positioned artifact from a private server-side staging directory, checks the artifact SHA-256 while copying, applies owner-only file permissions, atomically refuses replacement of an existing version, and appends an audit event. Artifact size is capped at 25 MiB; symlink inputs and invalid identifiers are rejected. The artifact is stored as opaque bytes only: archives are not extracted, modules are not imported, no process is launched and no runtime permission is granted. This is not code installation or activation.
+
+The artifact must be pre-positioned by a trusted operator at `<integration-id>-<version>.artifact`. Configure `ORACLE_ARC_INTEGRATION_ARTIFACT_STAGING_DIR` (default `data/integration-artifact-staging`) and `ORACLE_ARC_INTEGRATION_INSTALL_DIR` (default `data/integrations`). Arbitrary manifest URLs are never fetched.
+
+Still required before real activation: a reviewed per-integration runtime adapter, rootless isolated installer/executor, narrowly scoped runtime permission broker, integration-specific health checks, separate owner activation approval, deactivation/revocation, rollback, and end-to-end sandbox tests.
 
 ### Independent agent worker
 
