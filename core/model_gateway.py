@@ -68,9 +68,20 @@ class ProviderRegistry:
         self._providers: Dict[str, ModelProvider] = {}
 
     def register(self, provider: ModelProvider) -> None:
-        provider_id = provider.manifest.provider_id
-        if not provider_id or provider_id.strip() != provider_id:
+        manifest = getattr(provider, "manifest", None)
+        if not isinstance(manifest, ProviderManifest):
+            raise ValueError("Provider must expose a valid ProviderManifest.")
+        provider_id = manifest.provider_id
+        if not isinstance(provider_id, str) or not provider_id or provider_id.strip() != provider_id:
             raise ValueError("Provider ID must be a non-empty normalized string.")
+        if not provider_id.replace("-", "").replace("_", "").isalnum():
+            raise ValueError("Provider ID contains unsupported characters.")
+        if manifest.execution_location not in {"local", "remote", "test"}:
+            raise ValueError("Provider execution location must be local, remote, or test.")
+        if not isinstance(manifest.capabilities, ModelCapabilities):
+            raise ValueError("Provider capabilities must use ModelCapabilities.")
+        if not callable(getattr(provider, "chat", None)):
+            raise ValueError("Provider must implement a callable chat method.")
         if provider_id in self._providers:
             raise ValueError(f"Provider '{provider_id}' is already registered.")
         self._providers[provider_id] = provider
@@ -107,7 +118,7 @@ class OllamaProvider:
             display_name="Ollama (local)" if is_local else "Ollama (remote)",
             execution_location="local" if is_local else "remote",
             capabilities=ModelCapabilities(tool_calling=True, streaming=True),
-            description="Local model inference through the owner's configured Ollama host.",
+            description="Ollama inference through the configured endpoint; execution location is disclosed in this manifest.",
         )
 
     def chat(
@@ -145,6 +156,22 @@ class ModelGateway:
         stream: bool = False,
         temperature: float = 0.7,
     ) -> Any:
+        capabilities = self.provider.manifest.capabilities
+        if tools and not capabilities.tool_calling:
+            raise ValueError("The selected provider does not support tool calling.")
+        if stream and not capabilities.streaming:
+            raise ValueError("The selected provider does not support streaming.")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("A non-empty model identifier is required.")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("At least one chat message is required.")
+        for message in messages:
+            if (not isinstance(message, dict)
+                    or message.get("role") not in {"system", "user", "assistant", "tool"}
+                    or not isinstance(message.get("content"), str)):
+                raise ValueError("Chat messages must contain a supported role and string content.")
+        if not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
+            raise ValueError("Temperature must be between 0 and 2.")
         return self.provider.chat(model, messages, tools=tools, stream=stream, temperature=temperature)
 
     def provider_manifest(self) -> Dict[str, Any]:
