@@ -9,6 +9,8 @@ from dataclasses import dataclass
 import os
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
+import ollama
+
 @dataclass(frozen=True)
 class ModelCapabilities:
     text: bool = True
@@ -84,8 +86,6 @@ class ProviderRegistry:
 class OllamaProvider:
     """Local Ollama adapter. It never downloads models or sends data to a cloud API."""
     def __init__(self) -> None:
-        import ollama
-
         timeout = float(os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
         if timeout <= 0 or timeout > 900:
             raise ValueError("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS must be between 0 and 900.")
