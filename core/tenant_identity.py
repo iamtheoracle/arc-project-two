@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
+from contextlib import contextmanager
 import time
 import uuid
 from dataclasses import dataclass
@@ -30,7 +31,7 @@ class RequestIdentity:
 class TenantIdentityStore:
     def __init__(self, database_path: str):
         self.database_path = database_path
-        with self._connect() as db:
+        with self._session() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS arc_tenants(
               tenant_id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -74,6 +75,18 @@ class TenantIdentityStore:
         db.execute("PRAGMA busy_timeout=10000")
         return db
 
+    @contextmanager
+    def _session(self):
+        db = self._connect()
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     @staticmethod
     def _verifier(secret: str, salt: bytes) -> str:
         return hashlib.pbkdf2_hmac("sha256", secret.encode(), salt, 310_000).hex()
@@ -92,7 +105,7 @@ class TenantIdentityStore:
         secret, salt = "arc1." + credential_id + "." + secrets.token_urlsafe(48), secrets.token_bytes(16)
         verifier = salt.hex() + "$" + self._verifier(secret, salt)
         now = int(time.time())
-        with self._connect() as db:
+        with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("INSERT INTO arc_tenants VALUES(?,?, 'active',?)", (tenant_id, tenant_name.strip(), now))
             db.execute("INSERT INTO arc_applications VALUES(?,?,?,'active',1)", (app_id, tenant_id, application_name.strip()))
@@ -111,7 +124,7 @@ class TenantIdentityStore:
         if len(parts) != 3 or parts[0] != "arc1" or not parts[1].startswith("cred_"):
             raise PermissionError("Invalid application credential")
         credential_id = parts[1]
-        with self._connect() as db:
+        with self._session() as db:
             row = db.execute("""
               SELECT c.*, t.status AS tenant_status, a.status AS app_status,
                      a.policy_version, p.status AS principal_status, m.status AS membership_status
@@ -158,7 +171,7 @@ class TenantIdentityStore:
         secret, salt = secrets.token_urlsafe(48), secrets.token_bytes(16)
         verifier = salt.hex() + "$" + self._verifier(secret, salt)
         now = int(time.time())
-        with self._connect() as db:
+        with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
             tenant = db.execute("SELECT 1 FROM arc_tenants WHERE tenant_id=? AND status='active'", (tenant_id,)).fetchone()
             principal = db.execute("SELECT 1 FROM arc_principals WHERE tenant_id=? AND principal_id=? AND status='active'", (tenant_id, principal_id)).fetchone()
@@ -173,14 +186,14 @@ class TenantIdentityStore:
                 "application_id": app_id, "principal_id": principal_id, "expires_at": now + ttl_seconds}
 
     def revoke(self, credential_id: str) -> bool:
-        with self._connect() as db:
+        with self._session() as db:
             cursor = db.execute("UPDATE arc_credentials SET revoked_at=? WHERE credential_id=? AND revoked_at IS NULL",
                                 (int(time.time()), credential_id))
             db.commit()
             return cursor.rowcount == 1
 
     def revoke_membership(self, tenant_id: str, application_id: str, principal_id: str) -> bool:
-        with self._connect() as db:
+        with self._session() as db:
             cursor = db.execute("UPDATE arc_app_memberships SET status='revoked' WHERE tenant_id=? AND application_id=? AND principal_id=? AND status='active'",
                                 (tenant_id, application_id, principal_id))
             db.commit()
