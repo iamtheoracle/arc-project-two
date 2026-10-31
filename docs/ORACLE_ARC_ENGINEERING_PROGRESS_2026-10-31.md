@@ -2,7 +2,7 @@
 
 **Working branch:** `feat/oracle-arc-network-platform-architecture`  
 **Repository:** `iamtheoracle/arc-project-two`  
-**Current verified commit:** `a9433b0b877140a96f13caacfcc871a99cc41e75`  
+**Latest recorded commit:** `00c447a45996b6f02af5641a1be594e09a97e65f`  
 **State:** Active development; not merged or deployed.
 
 ## Completed in this working branch
@@ -38,14 +38,23 @@
 - Updated `.github/workflows/verify.yml` so pushes to this working branch are included in the verification workflow.
 - The prior personal-core CI run succeeded (run 41216114771).
 - The prior human-understanding CI run succeeded, including real rootless Podman worker and sandbox restriction checks (run 41161023335).
-- The working branch's own CI result is **not yet verified**. The combined status query returned no status entries at the time of this log. Do not treat prior branch CI as validation of these new commits.
+- The working branch's own CI is **not yet verified**. Workflow runs 41248791535 and 41248756359 were observed queued on commit c78bfc2333e48fb7b12e01af3775e85df65d1434. New commits subsequently triggered further verification, which must be checked against the latest branch head. Do not treat queued runs or prior-branch CI as passing validation.
+
+### 6. API request and inference resource guards added
+- Added a bounded request-body middleware to the working branch. It rejects oversized declared and streamed bodies before endpoint processing.
+- Added a process-local per-transport-peer sliding-window rate limiter with a bounded 10,000-key table. It deliberately ignores forwarded-IP headers; a trusted ingress must enforce limits across multiple workers.
+- Added a bounded inference semaphore to reject excess chat work with HTTP 503 and Retry-After rather than allowing unbounded concurrent inference.
+- Configuration is range-validated at startup; defaults are 1 MiB request bodies, 600 requests per source per minute, and one concurrent chat.
+- Added API tests for streamed body rejection, spoofed forwarded-header handling, rate-limit responses and semaphore release.
+- Commits: `ef2df1f18f839c5d462351a4eba825260b9402ed` (middleware/capacity), `63c9ca9f01b64f547e7a9b915cfb77e9fe97cc4e` (rate default), `00c447a45996b6f02af5641a1be594e09a97e65f` (tests).
+- Important limitation: these in-process limits are not a substitute for gateway-level limits when multiple workers or replicas are deployed.
 
 ## Remaining high-priority work
 
 | Priority | Work | State |
 |---|---|---|
 | P0 | Verify CI on this exact branch head | Pending |
-| P0 | Restore personal-core request-body, rate-limit and concurrency protections without trusting spoofable proxy headers | Pending |
+| P0 | Restore personal-core request-body, rate-limit and concurrency protections without trusting spoofable proxy headers | Implemented; CI pending; ingress multi-worker controls still required |
 | P0 | Reconcile `ArcAgent(host=...)` with a gateway-backed `LocalLLM` contract | Pending |
 | P0 | Consolidate `core/model_gateway.py` and `core/providers.py` behind one provider contract | Pending |
 | P0 | Add migration tests from both existing database shapes, including legacy name-only tool approvals | Pending |
