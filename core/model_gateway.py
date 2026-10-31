@@ -1,7 +1,7 @@
 """Provider-neutral, policy-aware model gateway for Oracle Arc.
 
-Only the local Ollama adapter is enabled in this first milestone. Remote providers
-must be added as explicit adapters with their own privacy, billing and contract tests.
+Only explicitly registered providers are reachable; request validation is shared with
+the privacy-aware gateway so direct and tenant-scoped calls enforce the same contract.
 """
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 import ollama
+from .inference_contract import validate_inference_request
+
 
 @dataclass(frozen=True)
 class ModelCapabilities:
@@ -21,6 +23,7 @@ class ModelCapabilities:
     tool_calling: bool = False
     structured_output: bool = False
     streaming: bool = False
+
 
 @dataclass(frozen=True)
 class ProviderManifest:
@@ -49,6 +52,7 @@ class ProviderManifest:
             "description": self.description,
         }
 
+
 @runtime_checkable
 class ModelProvider(Protocol):
     manifest: ProviderManifest
@@ -62,8 +66,10 @@ class ModelProvider(Protocol):
         temperature: float = 0.7,
     ) -> Any: ...
 
+
 class ProviderRegistry:
     """In-memory registry; registration is explicit and duplicate-safe."""
+
     def __init__(self) -> None:
         self._providers: Dict[str, ModelProvider] = {}
 
@@ -95,8 +101,10 @@ class ProviderRegistry:
     def manifests(self) -> List[Dict[str, Any]]:
         return [provider.manifest.public_dict() for provider in self._providers.values()]
 
+
 class OllamaProvider:
     """Configured Ollama adapter with explicit host routing and remote-host safeguards."""
+
     def __init__(self, host: Optional[str] = None) -> None:
         timeout = float(os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
         if timeout <= 0 or timeout > 900:
@@ -138,8 +146,10 @@ class OllamaProvider:
             kwargs["tools"] = tools
         return self._client.chat(**kwargs, stream=True) if stream else self._client.chat(**kwargs)
 
+
 class ModelGateway:
-    """Routes model requests through an explicitly registered provider."""
+    """Routes validated model requests through an explicitly registered provider."""
+
     def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None) -> None:
         self.registry = registry or ProviderRegistry()
         if registry is None:
@@ -156,22 +166,12 @@ class ModelGateway:
         stream: bool = False,
         temperature: float = 0.7,
     ) -> Any:
+        validate_inference_request(model, messages, tools, stream, temperature)
         capabilities = self.provider.manifest.capabilities
         if tools and not capabilities.tool_calling:
             raise ValueError("The selected provider does not support tool calling.")
         if stream and not capabilities.streaming:
             raise ValueError("The selected provider does not support streaming.")
-        if not isinstance(model, str) or not model.strip():
-            raise ValueError("A non-empty model identifier is required.")
-        if not isinstance(messages, list) or not messages:
-            raise ValueError("At least one chat message is required.")
-        for message in messages:
-            if (not isinstance(message, dict)
-                    or message.get("role") not in {"system", "user", "assistant", "tool"}
-                    or not isinstance(message.get("content"), str)):
-                raise ValueError("Chat messages must contain a supported role and string content.")
-        if not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
-            raise ValueError("Temperature must be between 0 and 2.")
         return self.provider.chat(model, messages, tools=tools, stream=stream, temperature=temperature)
 
     def provider_manifest(self) -> Dict[str, Any]:
