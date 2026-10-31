@@ -695,3 +695,20 @@ class ArcStore:
                 (max(1, min(limit, 500)),),
             ).fetchall()
         return [dict(row) for row in rows]
+
+
+    def record_integration_event(self, integration_id: str, version: str, action: str,
+                                 actor: str, reason: str, manifest_digest: str) -> None:
+        """Append an integration lifecycle event to the audit trail."""
+        values = (integration_id, version, action, actor, reason, manifest_digest)
+        if any(not isinstance(value, str) for value in values):
+            raise ValueError("Invalid integration audit event")
+        if not all(value.strip() for value in (integration_id, version, action, actor, manifest_digest)):
+            raise ValueError("Integration audit identifiers cannot be blank")
+        if len(reason) > 1000:
+            raise ValueError("Integration audit reason is too long")
+        with self._session() as conn:
+            conn.execute(
+                "INSERT INTO integration_audit(integration_id,version,action,actor,reason,manifest_digest) "
+                "VALUES(?,?,?,?,?,?)", values,
+            )
