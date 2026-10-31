@@ -61,8 +61,18 @@ def plan_implementation(description: str, available_agents: dict[str, bool] | No
     if not matched:
         matched = [RULES[-1]]
 
-    # A technical/integration request belongs to ORACLE; BUD remains the coordinator.
-    primary = "oracle" if any(r.agent_id == "oracle" for r in matched) else matched[0].agent_id
+    # Specialist intent takes precedence over incidental analysis words:
+    # visual work belongs to ORBITS; memory governance belongs to SPARK.
+    # ORACLE owns technical/integration work; BUD owns conversation-only work.
+    matched_agents = {rule.agent_id for rule in matched}
+    if "orbits" in matched_agents:
+        primary = "orbits"
+    elif "spark" in matched_agents:
+        primary = "spark"
+    elif "oracle" in matched_agents:
+        primary = "oracle"
+    else:
+        primary = "bud"
     ordered_agents = [primary]
     for rule in matched:
         if rule.agent_id not in ordered_agents:
