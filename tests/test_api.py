@@ -85,10 +85,10 @@ def test_tool_permissions_default_to_denied_and_can_be_revoked(client):
     assert api.get_store().approved_tools(__import__("core.plugins", fromlist=["PluginRegistry"]).PluginRegistry().tool_fingerprints) == set()
     response = client.put("/v1/tools/calculate/approval", headers=auth(), json={"approved": True})
     assert response.status_code == 200
-    assert "calculate" in api.get_store().approved_tools()
+    assert "calculate" in api.get_store().approved_tools(__import__("core.plugins", fromlist=["PluginRegistry"]).PluginRegistry().tool_fingerprints)
     response = client.put("/v1/tools/calculate/approval", headers=auth(), json={"approved": False})
     assert response.status_code == 200
-    assert "calculate" not in api.get_store().approved_tools()
+    assert "calculate" not in api.get_store().approved_tools(__import__("core.plugins", fromlist=["PluginRegistry"]).PluginRegistry().tool_fingerprints)
 
 
 def test_unknown_tool_cannot_be_approved(client):
