@@ -60,3 +60,42 @@ def test_revoked_application_credential_is_rejected(client):
     revoked=client.delete(f"/v1/platform/credentials/{credential_id}",headers=owner())
     assert revoked.status_code==200
     assert client.get("/v1/platform/identity",headers={"Authorization":"Bearer "+token}).status_code==401
+
+
+def test_scoped_agent_task_api_enforces_application_boundary(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Tenant"}).json()["tenant_id"]
+    app_a=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"A"}).json()["application_id"]
+    app_b=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"B"}).json()["application_id"]
+    caps=["agent.oracle.dispatch","reasoning"]
+    token_a=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_a}/credentials",
+        headers=owner(),json={"principal_id":"p1","capabilities":caps}).json()["credential"]
+    token_b=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_b}/credentials",
+        headers=owner(),json={"principal_id":"p1","capabilities":caps}).json()["credential"]
+    ha={"Authorization":"Bearer "+token_a}
+    hb={"Authorization":"Bearer "+token_b}
+    created=client.post("/v1/platform/agent-tasks",headers=ha,
+        json={"agent_id":"oracle","required_capabilities":["reasoning"],"payload":{"prompt":"analyze"}})
+    assert created.status_code==202
+    task_id=created.json()["task_id"]
+    assert client.get(f"/v1/platform/agent-tasks/{task_id}",headers=hb).status_code==404
+    claim=client.post(f"/v1/platform/agent-tasks/{task_id}/claim?worker_id=worker-a",headers=ha)
+    assert claim.status_code==200
+    complete=client.post(f"/v1/platform/agent-tasks/{task_id}/complete",headers=ha,
+        json={"worker_id":"worker-a","status":"succeeded","result":{"answer":"done"}})
+    assert complete.status_code==200
+
+
+def test_concierge_plan_is_allowed_but_execution_fails_closed_without_provider(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Tenant"}).json()["tenant_id"]
+    app=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"App"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app}/credentials",
+        headers=owner(),json={"principal_id":"p1","capabilities":["concierge.workflow.plan","concierge.action.execute"]}).json()["credential"]
+    headers={"Authorization":"Bearer "+token}
+    plan=client.post("/v1/platform/concierge/workflows",headers=headers,json={
+        "action":{"kind":"booking.create","provider":"not-configured",
+                  "parameters":{"slot":"10:00"},"consequential":True}
+    })
+    assert plan.status_code==201
+    confirm=client.post(f"/v1/platform/concierge/workflows/{plan.json()['workflow_id']}/confirm",
+        headers=headers,json={"action_fingerprint":plan.json()["action_fingerprint"]})
+    assert confirm.status_code==503
