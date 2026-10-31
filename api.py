@@ -689,12 +689,34 @@ def activate_integration(
     store: ArcStore = Depends(get_store),
 ):
     """Fail closed until an audited integration-specific runtime adapter is installed."""
+    try:
+        matches = [item for item in _integration_catalog(store)
+                   if item.get("integration_id") == integration_id
+                   and item.get("version") == version
+                   and item.get("manifest_digest") == manifest_digest
+                   and item.get("eligible_for_review") and item.get("signature_valid")]
+    except ManifestError:
+        raise HTTPException(status_code=503, detail="Integration trust configuration is invalid.")
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="The exact manifest is no longer trusted or compatible.")
+    install_approvals = store.list_integration_approvals(limit=500)
+    if not any(item["integration_id"] == integration_id and item["version"] == version
+               and item["manifest_digest"] == manifest_digest and item["status"] == "approved"
+               for item in install_approvals):
+        raise HTTPException(status_code=403, detail="Installation approval is no longer valid.")
     approvals = store.list_integration_activation_approvals(limit=500)
     approved = any(item["integration_id"] == integration_id and item["version"] == version
                    and item["manifest_digest"] == manifest_digest and item["status"] == "approved"
                    for item in approvals)
     if not approved:
         raise HTTPException(status_code=403, detail="Separate owner activation approval is required.")
+    install_dir = os.environ.get("ORACLE_ARC_INTEGRATION_INSTALL_DIR", "data/integrations")
+    try:
+        present = verify_staged_artifact(integration_id, version, matches[0]["artifact_sha256"], install_dir)
+    except (ArtifactError, OSError):
+        present = False
+    if not present:
+        raise HTTPException(status_code=409, detail="The staged artifact failed integrity verification.")
     store.record_integration_event(
         integration_id, version, "activation_blocked_no_runtime_adapter", "owner",
         "Activation remains disabled until a reviewed isolated runtime adapter is configured.",
