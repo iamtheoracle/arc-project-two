@@ -8,6 +8,7 @@ Oracle Arc is a standalone project. It is not Vantoris X Money, UNIBUD, The Arc 
 
 - Local inference through Ollama; default model: `qwen2.5:7b`.
 - Provider-neutral model gateway with an explicit capability manifest and fail-closed provider registry. Ollama is the only enabled adapter in this milestone.
+- Ollama endpoints are classified accurately as local or remote. Remote hosts are rejected by default; remote use requires explicit opt-in and HTTPS, and the capability manifest discloses remote execution.
 - Owner-authenticated `GET /v1/capabilities` endpoint exposes the configured provider's supported capabilities without exposing credentials.
 - Owner-only HTTP API using a server-side bearer secret and constant-time token comparison.
 - OpenAI-compatible chat endpoint: `POST /v1/chat/completions`.
@@ -44,6 +45,8 @@ set +a
 # 5. Start the API bound to loopback, not the public internet.
 uvicorn api:app --host 127.0.0.1 --port 8090
 ```
+
+Keep `OLLAMA_HOST` on loopback for local-only operation. Remote Ollama requires `ORACLE_ARC_ALLOW_REMOTE_OLLAMA=true` and an HTTPS endpoint; remote inference sends prompts and any included context to that remote host. The capability manifest will identify it as remote.
 
 The model must already be available in Ollama. Oracle Arc does not automatically download arbitrary models from API requests.
 
@@ -88,6 +91,7 @@ Conversation continuity: the first chat response returns `conversation_id`. Send
 ## Security boundaries
 
 - The API refuses protected requests if `ORACLE_ARC_API_KEY` is missing or incorrect.
+- Ollama is only described as local when its configured URL is a loopback/localhost address. Remote Ollama is blocked unless explicitly enabled, requires HTTPS, and is identified as remote in `/v1/capabilities`.
 - Keep `ORACLE_ARC_API_KEY` and the SQLite database on a trusted server. Never use a `VITE_*` or other browser-exposed variable for secrets.
 - The API binds to `127.0.0.1` by default in the documented command. For a remote platform integration, use a private network or authenticated gateway with TLS; do not expose this port publicly without that layer.
 - In-process Python plugins are disabled by default because they are not sandboxed. `ORACLE_ARC_ENABLE_INPROCESS_PLUGINS=true` is a development-only escape hatch and is unsafe for production. A separate restricted worker is required before production tool execution. When deliberately testing locally, set `ORACLE_ARC_TRUSTED_PLUGINS` to personally reviewed plugin filename stems and separately approve each tool through the authenticated API.
