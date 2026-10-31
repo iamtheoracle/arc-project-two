@@ -28,7 +28,13 @@ class InferencePolicy:
 
     def permits(self, provider_id: str, region: str | None) -> bool:
         if provider_id == "ollama":
-            return True
+            return (
+                self.allow_remote
+                and "ollama" in self.allowed_remote_providers
+                and self.data_classification not in {"restricted", "sensitive"}
+                and (self.required_region is None or region == self.required_region)
+                and (not self.allowed_regions or region in self.allowed_regions)
+            )
         return (
             self.allow_remote
             and provider_id in self.allowed_remote_providers
@@ -65,10 +71,15 @@ class PrivacyAwareModelGateway:
              preferred_provider: str = "ollama", tools: list[dict] | None = None,
              stream: bool = False, temperature: float = 0.7) -> ProviderResult:
         if preferred_provider == "ollama":
+            manifest = self.local.provider_manifest()
+            execution_location = manifest.get("execution_location", "unknown")
+            remote = execution_location == "remote"
+            if remote and not policy.permits("ollama", None):
+                raise ProviderPolicyError("Privacy policy denies remote Ollama egress")
             result = self.local.chat(model, messages, tools=tools, stream=stream,
                                      temperature=temperature)
-            return ProviderResult(result, "ollama", "local-or-configured-endpoint",
-                                  policy.policy_version, False)
+            return ProviderResult(result, "ollama", execution_location,
+                                  policy.policy_version, remote)
         selected = self.remote.get(preferred_provider)
         if selected is None:
             raise ProviderPolicyError("Requested provider is not registered")
