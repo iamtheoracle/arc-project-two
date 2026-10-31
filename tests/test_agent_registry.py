@@ -13,6 +13,12 @@ def test_default_registry_registers_bud_and_oracle_first():
     assert agents["oracle"]["enabled"] is True
     assert agents["spark"]["enabled"] is False
     assert agents["orbits"]["enabled"] is False
+    assert agents["concierge"]["enabled"] is False
+    assert agents["concierge"]["role"] == "Practical coordination, service navigation and authorized real-world workflows"
+    assert set(agents["concierge"]["capabilities"]) == {
+        "service_discovery", "booking_research", "appointment_planning",
+        "travel_coordination", "workflow_follow_through",
+    }
 
 
 def test_agent_registry_fails_over_to_next_connector():
@@ -108,3 +114,13 @@ def test_agent_registry_marks_backup_as_fallback_when_primary_is_in_cooldown():
     assert result["connector_id"] == "backup"
     assert result["fallback_used"] is True
     assert result["attempted_connectors"] == ["backup"]
+
+
+
+def test_concierge_is_registered_but_cannot_dispatch_without_activation():
+    registry = default_agent_registry()
+    agents = {item["agent_id"]: item for item in registry.list_agents()}
+    assert "concierge" in agents
+    assert agents["concierge"]["enabled"] is False
+    with pytest.raises(RegistryError, match="unknown or disabled"):
+        registry.dispatch("concierge", {"task_id": "concierge-1"})
