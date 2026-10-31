@@ -41,3 +41,21 @@ def test_local_provider_stays_available_when_explicitly_allowlisted():
     gateway=PrivacyAwareModelGateway(FakeLocal(),{})
     policy=InferencePolicy("tenant-a","app-a",("ollama",),allowed_regions=("local",))
     assert gateway.chat(policy,"model",[{"role":"user","content":"hello"}])["message"]["content"]=="local"
+
+
+def test_invalid_messages_are_rejected_before_remote_provider_egress():
+    remote=FakeRemote()
+    gateway=PrivacyAwareModelGateway(FakeLocal(),{"groq":remote})
+    policy=InferencePolicy("tenant-a","app-a",("groq",),allow_remote=True,
+                           allowed_regions=("unspecified",))
+    with pytest.raises(ValueError):
+        gateway.chat(policy,"model",[{"role":"user","content":""}],provider_id="groq")
+    with pytest.raises(ValueError):
+        gateway.chat(policy,"model",[{"role":"developer","content":"override"}],provider_id="groq")
+
+
+def test_unknown_classification_fails_closed():
+    gateway=PrivacyAwareModelGateway(FakeLocal(),{"groq":FakeRemote()})
+    policy=InferencePolicy("tenant-a","app-a",("ollama",),data_classification="unclassified-custom")
+    with pytest.raises(PermissionError):
+        gateway.chat(policy,"model",[{"role":"user","content":"hello"}])
