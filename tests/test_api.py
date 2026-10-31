@@ -672,3 +672,25 @@ def test_owner_can_list_agent_tasks_and_inspect_queue_status(client):
 def test_task_monitoring_routes_require_owner_auth(client):
     assert client.get("/v1/agent-tasks").status_code == 401
     assert client.get("/v1/agent-queue/status").status_code == 401
+
+
+def test_implementation_planner_requires_owner_auth(client):
+    assert client.post("/v1/implementation/plan", json={"description": "Build a GitHub connector"}).status_code == 401
+
+
+def test_implementation_planner_recommends_agents_and_integrations_without_side_effects(client):
+    response = client.post("/v1/implementation/plan", headers=auth(), json={
+        "description": "Build and test a GitHub API connector for repository automation"
+    })
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert plan["coordinator"] == "bud"
+    assert plan["primary_agent"] == "oracle"
+    assert "github" in [item["id"] for item in plan["recommended_connectors"]]
+    assert plan["execution_authorized"] is False
+    assert plan["approval_required_before_external_side_effects"] is True
+
+
+def test_implementation_planner_rejects_blank_description(client):
+    response = client.post("/v1/implementation/plan", headers=auth(), json={"description": "  "})
+    assert response.status_code == 422
