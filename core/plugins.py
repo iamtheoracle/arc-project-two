@@ -16,9 +16,11 @@ class PluginRegistry:
     def __init__(self, plugins_dir: str = "plugins", trusted_plugins: set[str] | None = None):
         self.plugins_dir = Path(plugins_dir).resolve()
         configured = os.environ.get("ORACLE_ARC_TRUSTED_PLUGINS", "")
-        self.trusted_plugins = set(trusted_plugins) if trusted_plugins is not None else {
+        # In-process Python plugins are not sandboxed; deny them by default.
+        enabled = os.environ.get("ORACLE_ARC_ENABLE_INPROCESS_PLUGINS", "").lower() == "true"
+        self.trusted_plugins = set(trusted_plugins) if trusted_plugins is not None else ({
             item.strip() for item in configured.split(",") if item.strip()
-        }
+        } if enabled else set())
         self.plugins: dict[str, dict] = {}
         self.tools: list[dict] = []
         self.handlers: dict[str, Callable] = {}
