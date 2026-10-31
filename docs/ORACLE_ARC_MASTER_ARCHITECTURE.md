@@ -205,3 +205,26 @@ The planner separately identifies required capabilities and candidate plugins, e
 - Keyword matching can miss context or over-match terms; the plan is advisory and must be reviewed for ambiguous or high-impact work.
 
 **Validation required:** unit tests cover technical/integration routing, visual and memory specialist selection, disabled-agent visibility, empty input, authentication and the no-side-effects contract. The endpoint must remain owner-authenticated.
+
+
+## 9. Trusted integration manager and independent workers
+
+### Manifest manager
+
+`core/integrations.py` treats plugin, extension and connector manifests as untrusted data until validated. Publisher HMAC signatures are checked against server-side trust keys. The inspector validates IDs, semantic versions, app-version compatibility, declared capabilities, permission allowlists, risk classification and artifact SHA-256 digest. It never imports, downloads or executes manifest code.
+
+Candidate selection requires a valid signature, compatible app version, all requested capabilities and permissions within the configured allowlist. Eligible candidates are ordered by lower declared risk, fewer permissions and then known health status. Declared risk is a publisher claim and is not a substitute for artifact review or sandboxing.
+
+Health remains `unknown` unless a trusted integration-specific health adapter is wired. A health URL in a manifest is metadata only; it is not fetched. This prevents arbitrary manifest URLs from creating an SSRF path.
+
+### Approval and audit
+
+The owner-authenticated API exposes catalog inspection, exact-manifest approval requests, approval/rejection decisions, and audit history. Approval binds to integration ID, version and canonical manifest digest. Any changed manifest requires a new approval. The database stores the request, decision maker, reason and timestamps in separate approval and audit tables.
+
+Approval is not installation or activation. No external artifact installer or runtime permission grant is enabled by this milestone. Before that stage, the project still needs artifact acquisition with digest verification, isolated installation, runtime sandboxing, health adapters, rollback and revocation.
+
+### Independent agent worker
+
+`core/agent_worker.py` is a separate process that claims durable tasks, renews expiring leases, dispatches through the configured agent registry and persists results only while it owns the lease. `POST /v1/agent-tasks/submit` queues work for this process. Existing synchronous chat remains unchanged.
+
+Workers and API must share the same transactional database. Current SQLite queue coordination is single-host/shared-volume only; multi-host deployment requires PostgreSQL or another shared transactional store. Worker credentials and network permissions must be scoped independently from owner API credentials. The task payload contains conversation context and must be protected as sensitive data at rest and in backups.
