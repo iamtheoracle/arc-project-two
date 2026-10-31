@@ -7,7 +7,6 @@ import os
 import time
 import uuid
 import threading
-from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
