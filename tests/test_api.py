@@ -29,6 +29,17 @@ def test_private_endpoints_require_owner_auth(client):
     assert client.get("/v1/tools").status_code == 401
 
 
+def test_capability_manifest_is_owner_authenticated_and_local_only(client):
+    assert client.get("/v1/capabilities").status_code == 401
+    response = client.get("/v1/capabilities", headers=auth())
+    assert response.status_code == 200
+    manifest = response.json()["data"][0]
+    assert manifest["provider_id"] == "ollama"
+    assert manifest["execution_location"] == "local"
+    assert manifest["capabilities"]["tool_calling"] is True
+    assert "api_key" not in response.text.lower()
+
+
 def test_healthz_is_liveness_only_and_does_not_disclose_model(client):
     response = client.get("/healthz")
     assert response.status_code == 200
