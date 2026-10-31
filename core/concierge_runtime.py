@@ -68,7 +68,7 @@ class ConciergeWorkflowStore:
 
     def confirm_and_execute(self, identity, workflow_id: str, confirmed_fingerprint: str,
                             executor: Callable[[dict[str,Any],str],dict[str,Any]]) -> dict:
-        with sqlite3.connect(self.path) as db:
+        with self._session() as db:
             db.row_factory=sqlite3.Row
             row=db.execute("""SELECT * FROM concierge_workflows WHERE workflow_id=? AND tenant_id=?
               AND application_id=? AND principal_id=?""",
@@ -92,13 +92,13 @@ class ConciergeWorkflowStore:
             receipt=executor(action,workflow_id)
             if not isinstance(receipt,dict) or not receipt.get("provider_receipt_id") or receipt.get("status") not in {"confirmed","completed"}:
                 raise ConciergeError("Provider did not return a verifiable completion receipt")
-            with sqlite3.connect(self.path) as db:
+            with self._session() as db:
                 db.execute("UPDATE concierge_workflows SET status='succeeded',provider_receipt_json=?,updated_at=? WHERE workflow_id=? AND status='executing'",
                            (json.dumps(receipt,sort_keys=True),int(time.time()),workflow_id))
                 db.commit()
             return {"workflow_id":workflow_id,"status":"succeeded","provider_receipt":receipt}
         except Exception:
-            with sqlite3.connect(self.path) as db:
+            with self._session() as db:
                 db.execute("UPDATE concierge_workflows SET status='failed',updated_at=? WHERE workflow_id=? AND status='executing'",
                            (int(time.time()),workflow_id))
                 db.commit()
