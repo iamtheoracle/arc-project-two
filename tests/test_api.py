@@ -9,6 +9,7 @@ from core.store import ArcStore
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("ORACLE_ARC_API_KEY", "owner-test-secret-0123456789-abcdef")
     monkeypatch.setenv("ORACLE_ARC_MODEL", "qwen2.5:7b")
+    monkeypatch.setenv("ORACLE_ARC_TRUSTED_PLUGINS", "calculator")
     monkeypatch.setenv("ORACLE_ARC_DB_PATH", str(tmp_path / "oracle.sqlite3"))
     api._store = ArcStore(tmp_path / "oracle.sqlite3")
     with TestClient(api.app) as test_client:
