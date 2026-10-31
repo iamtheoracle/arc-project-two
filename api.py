@@ -7,6 +7,7 @@ import os
 import time
 import uuid
 import threading
+from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -21,6 +22,7 @@ from core.human_understanding import HUMAN_UNDERSTANDING_PROMPT, build_human_con
 from core.agent_registry import (Connector, PluginCatalog, PluginManifest, RegistryError, SessionConnector, SessionConnectorRegistry, SessionNotFoundError, default_agent_registry)
 from core.implementation_planner import plan_implementation
 from core.integrations import ManifestError, load_manifest_directory, load_trust_keys, select_safest
+from core.integration_lifecycle import ArtifactError, stage_approved_artifact
 
 app = FastAPI(title="Oracle Arc", version="0.1.1", docs_url=None, redoc_url=None, openapi_url=None)
 _store: ArcStore | None = None
@@ -538,6 +540,54 @@ def decide_integration_approval(integration_id: str, request: IntegrationApprova
     if approval is None:
         raise HTTPException(status_code=404, detail="Approval request not found.")
     return {"approval": approval, "installation_performed": False, "activation_performed": False}
+
+
+@app.post("/v1/integrations/{integration_id}/install", dependencies=[Depends(require_owner)], status_code=201)
+def install_approved_integration(
+    integration_id: str,
+    version: str = Query(..., min_length=5, max_length=40),
+    manifest_digest: str = Query(..., min_length=64, max_length=64),
+    store: ArcStore = Depends(get_store),
+):
+    """Stage approved artifact bytes after digest verification; never execute them."""
+    try:
+        catalog = _integration_catalog(store)
+    except ManifestError:
+        raise HTTPException(status_code=503, detail="Integration trust configuration is invalid.")
+    matches = [item for item in catalog if item.get("integration_id") == integration_id
+               and item.get("version") == version and item.get("manifest_digest") == manifest_digest
+               and item.get("eligible_for_review") and item.get("signature_valid")]
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="The exact manifest is no longer trusted or compatible.")
+    approvals = store.list_integration_approvals(limit=500)
+    approved = any(item["integration_id"] == integration_id and item["version"] == version
+                   and item["manifest_digest"] == manifest_digest and item["status"] == "approved"
+                   for item in approvals)
+    if not approved:
+        raise HTTPException(status_code=403, detail="Owner approval for this exact manifest is required.")
+    staging_dir = os.environ.get("ORACLE_ARC_INTEGRATION_ARTIFACT_STAGING_DIR",
+                                 "data/integration-artifact-staging")
+    install_dir = os.environ.get("ORACLE_ARC_INTEGRATION_INSTALL_DIR",
+                                 "data/integrations")
+    try:
+        staged = stage_approved_artifact(
+            integration_id, version, matches[0]["artifact_sha256"], staging_dir, install_dir
+        )
+    except ArtifactError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except OSError:
+        raise HTTPException(status_code=503, detail="Integration artifact staging failed.")
+    store.record_integration_event(
+        integration_id, version, "artifact_staged_inert", "owner",
+        "Approved artifact SHA-256 verified; no code was executed or permissions granted.",
+        manifest_digest,
+    )
+    return {
+        "integration_id": integration_id, "version": version,
+        "manifest_digest": manifest_digest, "installation": staged,
+        "activation_performed": False, "runtime_permissions_granted": False,
+        "next_requirement": "A reviewed integration-specific runtime adapter and separate owner activation approval are required.",
+    }
 
 
 @app.get("/v1/integrations/approvals", dependencies=[Depends(require_owner)])
