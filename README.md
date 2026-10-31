@@ -206,3 +206,22 @@ python -m core.agent_worker
 The API can enqueue work through authenticated `POST /v1/agent-tasks/submit` and returns a task ID. Workers use the same configured durable database, atomic claims, expiring leases, heartbeat renewal and bounded recovery. Configure `ORACLE_ARC_DB_PATH` to the shared database path accessible to both API and worker. SQLite is suitable for a single-host shared-volume deployment; it is not a cross-host coordination database. Multi-host workers require PostgreSQL or another shared transactional queue before production scaling.
 
 Workers need the same server-side model/provider configuration as the API. They do not receive the owner API key from task payloads. Use a separate OS/service identity and restrict database, model and network access. The existing synchronous chat route remains synchronous; the submit endpoint is the independent-worker path.
+
+
+#### Approved integration artifact staging (inert)
+
+The owner may stage an exact, already-approved artifact after its bytes have been placed in a private server-side staging directory. This endpoint verifies the current trusted manifest, exact version and digest, and owner approval before copying the artifact atomically into the install directory.
+
+Configure:
+- `ORACLE_ARC_INTEGRATION_ARTIFACT_STAGING_DIR` (default `data/integration-artifact-staging`)
+- `ORACLE_ARC_INTEGRATION_INSTALL_DIR` (default `data/integrations`)
+
+Place the artifact at `<integration-id>-<version>.artifact` in the staging directory. The file must be a regular, non-symlink file no larger than 25 MiB. The service verifies SHA-256 while copying, stores it with owner-only file permissions, refuses replacement of an existing version, and records the action in the integration audit log.
+
+Call the owner-authenticated endpoint:
+
+```http
+POST /v1/integrations/{integration_id}/install?version={version}&manifest_digest={digest}
+```
+
+**Important:** this is inert artifact staging, not code installation or activation. Archives are not extracted; modules are not imported; no process is launched; no runtime permissions are granted. Activation remains disabled until a reviewed integration-specific runtime adapter, isolated installer/executor, health checks, rollback and a separate owner activation decision exist. The artifact must be pre-positioned by a trusted operator; this endpoint does not fetch arbitrary URLs.
