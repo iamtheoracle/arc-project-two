@@ -225,7 +225,9 @@ Approval is not activation. The owner-authenticated `POST /v1/integrations/{inte
 
 The artifact must be pre-positioned by a trusted operator at `<integration-id>-<version>.artifact`. Configure `ORACLE_ARC_INTEGRATION_ARTIFACT_STAGING_DIR` (default `data/integration-artifact-staging`) and `ORACLE_ARC_INTEGRATION_INSTALL_DIR` (default `data/integrations`). Arbitrary manifest URLs are never fetched.
 
-Still required before real activation: a reviewed per-integration runtime adapter, rootless isolated installer/executor, narrowly scoped runtime permission broker, integration-specific health checks, separate owner activation approval, deactivation/revocation, rollback, and end-to-end sandbox tests.
+A separate activation-approval table and owner-authenticated request/decision routes now add a second decision after inert staging. The request verifies the current signed manifest, the original installation approval and the staged artifact digest. Activation decisions are bound to the same integration ID, version and manifest digest and are written to the audit log. The activation endpoint deliberately returns HTTP 409 and records the blocked attempt until an integration-specific isolated runtime adapter is reviewed and configured; approval does not execute code or grant permissions.
+
+Still required before real activation: a reviewed per-integration runtime adapter, rootless isolated installer/executor, narrowly scoped runtime permission broker, integration-specific health checks, revocation/deactivation, rollback, and end-to-end sandbox tests.
 
 ### Independent agent worker
 
