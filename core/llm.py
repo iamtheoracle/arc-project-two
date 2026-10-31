@@ -1,27 +1,29 @@
-"""Local Ollama inference adapter with explicit deadlines and bounded configuration."""
-import os
+"""Compatibility facade for Oracle Arc's provider-neutral model gateway."""
 from typing import Any, Dict, List, Optional
-import ollama
+
+from .model_gateway import ModelGateway
+
 
 class LocalLLM:
+    """Preserves the existing agent interface while routing through ModelGateway."""
     def __init__(self, model: str = "qwen2.5:7b", temperature: float = 0.7):
         self.model = model
         self.temperature = temperature
-        timeout = float(os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
-        if timeout <= 0 or timeout > 900:
-            raise ValueError("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS must be between 0 and 900.")
-        host = os.environ.get("OLLAMA_HOST")
-        self._client = ollama.Client(host=host, timeout=timeout) if host else ollama.Client(timeout=timeout)
+        self.gateway = ModelGateway()
 
-    def chat(self, messages: List[Dict[str, str]], tools: Optional[List[Dict]] = None, stream: bool = False) -> Dict[str, Any]:
-        kwargs = {"model": self.model, "messages": messages, "options": {"temperature": self.temperature}}
-        if tools: kwargs["tools"] = tools
-        if stream: return self._client.chat(**kwargs, stream=True)
-        return self._client.chat(**kwargs)
+    def chat(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None, stream: bool = False) -> Any:
+        return self.gateway.chat(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            stream=stream,
+            temperature=self.temperature,
+        )
 
     def generate(self, prompt: str, system: Optional[str] = None) -> str:
         messages = []
-        if system: messages.append({"role": "system", "content": system})
+        if system:
+            messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         response = self.chat(messages)
         return response["message"]["content"]
