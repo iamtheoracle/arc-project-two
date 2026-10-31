@@ -82,3 +82,27 @@ def test_spark_memory_read_update_delete_are_principal_and_app_scoped(tmp_path):
     assert store.delete_memory(identity,memory_id)
     assert store.list_memories(identity)==[]
 
+def test_worker_revalidates_revocation_and_required_capabilities(tmp_path):
+    from core.tenant_execution import TenantExecutionGuard
+    path=str(tmp_path/"tenant.sqlite3")
+    identities=TenantIdentityStore(path)
+    issued=identities.provision("Tenant A","UNIBUD","principal-a",
+        ["agent.oracle.dispatch","reasoning"])
+    identity=identities.authenticate(issued["secret"])
+    guard=TenantExecutionGuard(identities)
+    assert guard.authorize(identity,("agent.oracle.dispatch","reasoning"))==identity
+    assert identities.revoke(issued["credential_id"])
+    with pytest.raises(PermissionError,match="authorization failed"):
+        guard.authorize(identity,("agent.oracle.dispatch",))
+
+
+def test_worker_revalidation_rejects_membership_revocation(tmp_path):
+    from core.tenant_execution import TenantExecutionGuard
+    path=str(tmp_path/"tenant.sqlite3")
+    identities=TenantIdentityStore(path)
+    issued=identities.provision("Tenant A","UNIBUD","principal-a",["agent.oracle.dispatch"])
+    identity=identities.authenticate(issued["secret"])
+    identities.revoke_membership(issued["tenant_id"],issued["application_id"],"principal-a")
+    with pytest.raises(PermissionError):
+        TenantExecutionGuard(identities).authorize(identity,("agent.oracle.dispatch",))
+
