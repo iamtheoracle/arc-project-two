@@ -19,6 +19,7 @@ Oracle Arc provides reusable intelligence infrastructure:
 - ORACLE reasoning, research, planning and problem-solving.
 - SPARK permissioned memory and continuity.
 - ORBITS visual understanding and supported creative workflows.
+- CONCIERGE practical service discovery, booking research, appointment planning, travel coordination and workflow follow-through.
 - Agent registry, task orchestration, capability contracts and evaluation.
 - Tool execution and integration lifecycle controls.
 - Identity, tenant isolation, audit, usage, reliability and security boundaries.
@@ -151,6 +152,7 @@ Sensitive personal data must not be inferred for personalization. Temporary mood
 - ORACLE handles reasoning and technical analysis.
 - SPARK controls memory access and lifecycle; it does not silently persist every observation.
 - ORBITS handles visual tasks only when the user or application has authorized the relevant image/file input.
+- CONCIERGE coordinates practical service workflows. It may research options and prepare actions, but booking, purchasing, payments, sending messages or changing external records require a configured integration, app-scoped authorization and any required user confirmation. It must report only provider-confirmed outcomes.
 - Agents receive scoped task envelopes, not shared database credentials.
 - Agent-to-agent messages are untrusted inputs and carry task ID, actor, scope, purpose, deadline and permitted outputs.
 - Agents cannot grant themselves capabilities, change tenant context, approve their own tools or override product policy.
