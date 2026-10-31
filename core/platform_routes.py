@@ -67,6 +67,11 @@ class TaskCreate(BaseModel):
     required_capabilities:list[str]=Field(default_factory=list,max_length=20)
     payload:dict=Field(default_factory=dict)
 
+class TaskComplete(BaseModel):
+    worker_id:str=Field(min_length=1,max_length=128)
+    status:str="succeeded"
+    result:dict=Field(default_factory=dict)
+
 class ConciergePlan(BaseModel):
     action:dict
     ttl_seconds:int=Field(default=900,ge=60,le=3600)
@@ -178,12 +183,13 @@ def claim_scoped_agent_task(task_id:str,worker_id:str,identity=Depends(require_a
         raise HTTPException(404,str(exc))
 
 @router.post("/agent-tasks/{task_id}/complete")
-def complete_scoped_agent_task(task_id:str,worker_id:str,status:str="succeeded",
-                               result:dict|None=None,identity=Depends(require_application)):
+def complete_scoped_agent_task(task_id:str,body:TaskComplete,identity=Depends(require_application)):
     try:
-        if not _store().complete_scoped_task(identity,task_id,worker_id,result or {},status):
+        if not _store().complete_scoped_task(identity,task_id,body.worker_id,body.result,body.status):
             raise HTTPException(404,"Running task not found in this application scope")
-        return {"task_id":task_id,"status":status}
+        return {"task_id":task_id,"status":body.status}
+    except AuthorizationError as exc:
+        raise HTTPException(403,str(exc))
     except ValueError as exc:
         raise HTTPException(422,str(exc))
 
