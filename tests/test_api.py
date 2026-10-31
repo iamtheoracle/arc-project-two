@@ -750,3 +750,29 @@ def test_integration_approval_is_bound_to_signed_manifest_and_audited(client, tm
     assert decided.json()["approval"]["status"] == "approved"
     assert decided.json()["activation_performed"] is False
     assert client.get("/v1/integrations/audit", headers=auth()).json()["data"]
+
+
+def test_independent_agent_task_submission_requires_owner_auth(client):
+    assert client.post("/v1/agent-tasks/submit", json={
+        "messages": [{"role": "user", "content": "Debug this service"}]
+    }).status_code == 401
+
+
+def test_independent_agent_task_submission_persists_payload_and_routes_to_oracle(client):
+    response = client.post("/v1/agent-tasks/submit", headers=auth(), json={
+        "messages": [
+            {"role": "user", "content": "Please inspect the architecture"},
+            {"role": "user", "content": "Debug and fix the API implementation"},
+        ],
+        "agent_id": "bud",
+    })
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "queued"
+    assert data["worker_execution"] == "independent"
+    task = client.get(f"/v1/agent-tasks/{data['task_id']}", headers=auth()).json()
+    assert task["target_agent"] == "oracle"
+    assert task["payload"]["latest_user"] == "Debug and fix the API implementation"
+    assert task["payload"]["history"] == [
+        {"role": "user", "content": "Please inspect the architecture"}
+    ]
