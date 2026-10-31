@@ -185,6 +185,39 @@ class TenantIdentityStore:
         return {"credential_id": credential_id, "secret": secret, "tenant_id": tenant_id,
                 "application_id": app_id, "principal_id": principal_id, "expires_at": now + ttl_seconds}
 
+    def validate_identity(self, identity: RequestIdentity,
+                          required_capabilities: Iterable[str] = ()) -> RequestIdentity:
+        """Re-check live credential, membership and policy state before worker/agent actions."""
+        with self._session() as db:
+            row = db.execute("""
+              SELECT c.tenant_id,c.application_id,c.principal_id,c.capabilities_json,
+                     c.expires_at,c.revoked_at,t.status AS tenant_status,
+                     a.status AS app_status,a.policy_version,p.status AS principal_status,
+                     m.status AS membership_status
+              FROM arc_credentials c
+              JOIN arc_tenants t ON t.tenant_id=c.tenant_id
+              JOIN arc_applications a ON a.tenant_id=c.tenant_id AND a.application_id=c.application_id
+              JOIN arc_principals p ON p.principal_id=c.principal_id
+              JOIN arc_app_memberships m ON m.tenant_id=c.tenant_id
+                AND m.application_id=c.application_id AND m.principal_id=c.principal_id
+              WHERE c.credential_id=?
+            """, (identity.credential_id,)).fetchone()
+        if row is None or row["revoked_at"] is not None or row["expires_at"] <= int(time.time()):
+            raise PermissionError("Worker identity is expired or revoked")
+        if (row["tenant_id"] != identity.tenant_id or row["application_id"] != identity.application_id
+                or row["principal_id"] != identity.principal_id):
+            raise PermissionError("Worker identity scope mismatch")
+        if (row["tenant_status"] != "active" or row["app_status"] != "active"
+                or row["principal_status"] != "active" or row["membership_status"] != "active"):
+            raise PermissionError("Worker tenant, application or membership is disabled")
+        import json
+        current_caps = tuple(json.loads(row["capabilities_json"]))
+        if row["policy_version"] != identity.policy_version or current_caps != identity.capabilities:
+            raise PermissionError("Worker identity policy is stale")
+        if not set(required_capabilities).issubset(current_caps):
+            raise PermissionError("Worker identity lacks required capabilities")
+        return identity
+
     def revoke(self, credential_id: str) -> bool:
         with self._session() as db:
             cursor = db.execute("UPDATE arc_credentials SET revoked_at=? WHERE credential_id=? AND revoked_at IS NULL",
