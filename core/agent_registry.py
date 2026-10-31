@@ -245,4 +245,9 @@ def default_agent_registry() -> AgentRegistry:
     registry.register_agent(AgentDefinition(
         "orbits", "ORBITS", "Visual understanding and creative workflows",
         ("image_understanding", "visual_analysis", "creative_workflows"), enabled=False))
+    registry.register_agent(AgentDefinition(
+        "concierge", "CONCIERGE",
+        "Practical coordination, service navigation and authorized real-world workflows",
+        ("service_discovery", "booking_research", "appointment_planning",
+         "travel_coordination", "workflow_follow_through"), enabled=False))
     return registry
