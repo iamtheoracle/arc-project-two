@@ -240,25 +240,30 @@ class PlatformWorker:
             })
 
             for function_name, tool_id, arguments, call_id in parsed_calls:
-                # Refresh every boundary immediately before each consequential tool call.
-                self.identities.validate(self.identity, "execution.complete")
-                latest_row, latest_context = self._execution_context(execution_id, worker_id)
-                manifest_tools, app_grants, owner_policy, worker_capabilities = (
-                    self._effective_tool_policy(latest_row, latest_context["manifest"])
-                )
-                result = self.tool_broker.execute(
-                    tool_id, arguments,
-                    context=ToolContext(
-                        tenant_id=latest_row["tenant_id"],
-                        application_id=latest_row["application_id"],
-                        execution_id=execution_id,
-                        principal_id=latest_row["principal_id"],
-                    ),
-                    manifest_tools=manifest_tools,
-                    application_grants=app_grants,
-                    owner_policy=owner_policy,
-                    worker_capabilities=worker_capabilities,
-                )
+                # Hold a short database reservation across the bounded local tool call.
+                # Revocation either commits first and blocks this call, or waits until this
+                # in-flight call finishes; after revoke returns, no subsequent call can run.
+                with self.tool_grants.execution_guard(
+                    self.identity.tenant_id, self.identity.application_id, tool_id
+                ):
+                    self.identities.validate(self.identity, "execution.complete")
+                    latest_row, latest_context = self._execution_context(execution_id, worker_id)
+                    manifest_tools, app_grants, owner_policy, worker_capabilities = (
+                        self._effective_tool_policy(latest_row, latest_context["manifest"])
+                    )
+                    result = self.tool_broker.execute(
+                        tool_id, arguments,
+                        context=ToolContext(
+                            tenant_id=latest_row["tenant_id"],
+                            application_id=latest_row["application_id"],
+                            execution_id=execution_id,
+                            principal_id=latest_row["principal_id"],
+                        ),
+                        manifest_tools=manifest_tools,
+                        application_grants=app_grants,
+                        owner_policy=owner_policy,
+                        worker_capabilities=worker_capabilities,
+                    )
                 tool_message = {
                     "role": "tool",
                     "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
