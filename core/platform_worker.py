@@ -25,7 +25,7 @@ class PlatformWorker:
             db.row_factory=sqlite3.Row
             row=db.execute("""SELECT e.*,a.manifest_json,a.status agent_status,
                 r.enabled route_enabled,r.provider_id current_provider,r.model_id current_model,
-                r.data_classifications_json,r.regions_json
+                r.data_classifications_json,r.regions_json,e.classification,e.region
                 FROM arc_executions e
                 JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
                   AND a.application_id=e.application_id AND a.agent_id=e.agent_id
@@ -45,10 +45,12 @@ class PlatformWorker:
         route={"provider_id":row["model_provider"],"model_id":row["model_id"],
                "classifications":json.loads(row["data_classifications_json"]),
                "regions":json.loads(row["regions_json"])}
-        if not set(manifest["required_capabilities"]).issubset(self.identity.capabilities):
-            raise PermissionError("Worker lacks the agent's required capabilities")
-        if not set(manifest["allowed_tools"]).issubset(self.identity.capabilities):
-            raise PermissionError("Worker lacks the agent's declared tool grants")
+        if row["classification"] not in json.loads(row["data_classifications_json"]):
+            raise PermissionError("Model route no longer permits this data classification")
+        if row["region"] not in json.loads(row["regions_json"]):
+            raise PermissionError("Model route no longer permits this execution region")
+        if manifest["allowed_tools"]:
+            raise PermissionError("This runtime has no enabled scoped tool broker; tool execution is denied")
         return dict(row),{"manifest":manifest,"route":route}
 
     @staticmethod
