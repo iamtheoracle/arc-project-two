@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import math
 from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
@@ -108,7 +109,7 @@ class OllamaProvider:
 
     def __init__(self, host: Optional[str] = None, timeout_seconds: Optional[float] = None) -> None:
         timeout = float(timeout_seconds if timeout_seconds is not None else os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
-        if timeout <= 0 or timeout > 900:
+        if not math.isfinite(timeout) or timeout <= 0 or timeout > 900:
             raise ValueError("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS must be between 0 and 900.")
         host = (host or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).strip()
         parsed = urlsplit(host)
@@ -185,7 +186,7 @@ class ModelGateway:
         self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
         if timeout_seconds is not None and (
             isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
-            or not 0 < timeout_seconds <= 900
+            or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900
         ):
             raise ValueError("Provider timeout must be greater than 0 and at most 900 seconds.")
         self.registry = registry or ProviderRegistry()
