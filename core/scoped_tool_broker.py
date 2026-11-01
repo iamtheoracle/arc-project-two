@@ -35,13 +35,18 @@ class ScopedToolBroker:
         for tool in tools:
             if not isinstance(tool, ToolDefinition):
                 raise ValueError("Only reviewed ToolDefinition entries can be registered")
-            if not tool.tool_id or not tool.capability or not callable(tool.handler):
+            if (not isinstance(tool.tool_id, str) or not re.fullmatch(r"[a-z][a-z0-9._-]{1,63}", tool.tool_id)
+                    or not isinstance(tool.capability, str) or not tool.capability
+                    or not callable(tool.handler)):
                 raise ValueError("Tool registration is incomplete")
             function_name = tool.function_name or tool.tool_id.replace(".", "_")
             if not isinstance(function_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", function_name):
                 raise ValueError("Tool function names must use provider-safe characters")
             if tool.tool_id in self._tools:
                 raise ValueError("Duplicate tool registration")
+            if any((registered.function_name or registered.tool_id.replace(".", "_")) == function_name
+                   for registered in self._tools.values()):
+                raise ValueError("Duplicate provider tool function name")
             self._validate_schema_definition(tool.parameters)
             self._tools[tool.tool_id] = tool
 
