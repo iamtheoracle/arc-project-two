@@ -188,20 +188,24 @@ class DocumentQuarantineStore:
             path.unlink(missing_ok=True)
             raise
         scope = (identity.tenant_id, identity.application_id, identity.principal_id)
-        with self._db() as db:
-            db.execute(
-                """INSERT INTO arc_document_quarantine
-                (asset_id,tenant_id,application_id,principal_id,filename,sha256,
-                 size_bytes,stored_name,status,scanner_result,created_at,expires_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (asset.asset_id, *scope, asset.filename, digest, len(data), stored_name,
-                 "quarantined", None, now, now + retention_seconds),
-            )
-            row = db.execute(
-                "SELECT * FROM arc_document_quarantine WHERE asset_id=?",
-                (asset.asset_id,),
-            ).fetchone()
-            self._audit(db, row, "quarantined", now)
+        try:
+            with self._db() as db:
+                db.execute(
+                    """INSERT INTO arc_document_quarantine
+                    (asset_id,tenant_id,application_id,principal_id,filename,sha256,
+                     size_bytes,stored_name,status,scanner_result,created_at,expires_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (asset.asset_id, *scope, asset.filename, digest, len(data), stored_name,
+                     "quarantined", None, now, now + retention_seconds),
+                )
+                row = db.execute(
+                    "SELECT * FROM arc_document_quarantine WHERE asset_id=?",
+                    (asset.asset_id,),
+                ).fetchone()
+                self._audit(db, row, "quarantined", now)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
         try:
             scanner_result = self.scanner(path)
         except MalwareDetected:
