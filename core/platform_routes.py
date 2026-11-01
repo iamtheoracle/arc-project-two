@@ -78,6 +78,7 @@ class DocumentIngest(BaseModel):
     source_uri:str=Field(min_length=1,max_length=2048)
     content:str=Field(min_length=1,max_length=100000)
     classification:str="private"
+    retention_seconds:int=Field(default=31536000,ge=60,le=31536000)
 
 class DocumentUploadRequest(BaseModel):
     filename:str=Field(min_length=1,max_length=180)
@@ -223,7 +224,8 @@ def upload_platform_document(body: DocumentUploadRequest, identity=Depends(requi
         if not isinstance(extracted, str) or not extracted.strip():
             raise HTTPException(422, "Document extraction produced no indexable text")
         document_id = DocumentRetrievalStore(database).index_text(
-            identity, body.title, body.source_uri, extracted, body.classification
+            identity, body.title, body.source_uri, extracted, body.classification,
+            body.retention_seconds
         )
         return {
             "asset_id": asset.asset_id, "sha256": asset.sha256,
@@ -270,7 +272,8 @@ def ingest_platform_document(body: DocumentIngest, identity=Depends(require_appl
     try:
         store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
         document_id = store.index_text(
-            identity, body.title, body.source_uri, body.content, body.classification
+            identity, body.title, body.source_uri, body.content, body.classification,
+            body.retention_seconds
         )
         return {"document_id": document_id, "indexed": True, "source_uri": body.source_uri}
     except AuthorizationError as exc:
