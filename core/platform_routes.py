@@ -14,6 +14,7 @@ from typing import Any, Callable
 from core.concierge_runtime import ConciergeWorkflowStore, ConciergeError
 from core.tenant_security import TenantSecurityStore, AuthorizationError
 from core.platform_control_plane import PlatformControlPlane
+from core.worker_identity import WorkerIdentityStore, WorkerIdentity
 
 router=APIRouter(prefix="/v1/platform",tags=["platform-identity"])
 _CONCIERGE_EXECUTORS: dict[str, Callable] = {}
@@ -241,6 +242,117 @@ def confirm_concierge_workflow(workflow_id:str,body:ConciergeConfirmation,
 # application-supplied code; a separately trusted worker must host approved runtimes.
 def _control_plane() -> PlatformControlPlane:
     return PlatformControlPlane(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+
+
+def _worker_store() -> WorkerIdentityStore:
+    return WorkerIdentityStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+
+
+def require_worker(authorization: str | None = Header(default=None)) -> WorkerIdentity:
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(401, "Worker credential required")
+    try:
+        return _worker_store().authenticate(token)
+    except PermissionError:
+        raise HTTPException(401, "Invalid, expired or revoked worker credential")
+
+
+class WorkerIssue(BaseModel):
+    capabilities: list[str] = Field(min_length=1, max_length=4)
+    ttl_seconds: int = Field(default=86400, ge=60, le=2592000)
+
+
+class WorkerClaim(BaseModel):
+    lease_seconds: int = Field(default=60, ge=5, le=900)
+
+
+class WorkerHeartbeat(BaseModel):
+    lease_seconds: int = Field(default=60, ge=5, le=900)
+
+
+class WorkerResult(BaseModel):
+    output: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkerFailure(BaseModel):
+    error_code: str = Field(pattern=r"^[a-z0-9_.-]{1,80}$")
+    retryable: bool = True
+
+
+@router.post("/tenants/{tenant_id}/applications/{application_id}/workers", status_code=201,
+             dependencies=[Depends(require_owner)])
+def issue_worker(tenant_id: str, application_id: str, body: WorkerIssue):
+    try:
+        worker_id, token = _worker_store().issue(
+            tenant_id, application_id, body.capabilities, body.ttl_seconds)
+        return {"worker_id": worker_id, "credential": token, "shown_once": True}
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.delete("/workers/{worker_id}", dependencies=[Depends(require_owner)])
+def revoke_worker(worker_id: str):
+    if not _worker_store().revoke(worker_id):
+        raise HTTPException(404, "Active worker not found")
+    return {"worker_id": worker_id, "revoked": True}
+
+
+@router.post("/worker/executions/claim")
+def worker_claim(body: WorkerClaim, worker: WorkerIdentity = Depends(require_worker)):
+    try:
+        _worker_store().validate(worker, "execution.claim")
+        execution = _control_plane().claim_execution(
+            worker.worker_id, body.lease_seconds, worker.tenant_id, worker.application_id)
+        return {"execution": asdict(execution) if execution else None}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/worker/executions/{execution_id}/heartbeat")
+def worker_heartbeat(execution_id: str, body: WorkerHeartbeat,
+                     worker: WorkerIdentity = Depends(require_worker)):
+    try:
+        _worker_store().validate(worker, "execution.heartbeat")
+        ok = _control_plane().heartbeat_execution(execution_id, worker.worker_id, body.lease_seconds)
+        if not ok:
+            raise HTTPException(409, "Execution lease is no longer owned or has expired")
+        return {"execution_id": execution_id, "lease_extended": True}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+
+
+@router.post("/worker/executions/{execution_id}/complete")
+def worker_complete(execution_id: str, body: WorkerResult,
+                    worker: WorkerIdentity = Depends(require_worker)):
+    try:
+        _worker_store().validate(worker, "execution.complete")
+        ok = _control_plane().complete_execution(execution_id, worker.worker_id, body.output)
+        if not ok:
+            raise HTTPException(409, "Execution lease is no longer owned or has expired")
+        return {"execution_id": execution_id, "status": "succeeded"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/worker/executions/{execution_id}/fail")
+def worker_fail(execution_id: str, body: WorkerFailure,
+                worker: WorkerIdentity = Depends(require_worker)):
+    try:
+        _worker_store().validate(worker, "execution.fail")
+        ok = _control_plane().fail_execution(
+            execution_id, worker.worker_id, body.error_code, body.retryable)
+        if not ok:
+            raise HTTPException(409, "Execution lease is no longer owned or has expired")
+        return {"execution_id": execution_id, "status": "failure_recorded"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 class AgentVersionCreate(BaseModel):
