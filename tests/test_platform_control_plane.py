@@ -259,4 +259,54 @@ def test_revoked_submitter_credential_fences_queued_execution(tmp_path):
                    (int(time.time()), identity.credential_id))
     assert workers.claim(worker, 5) is None
     assert cp.get_execution(identity, execution_id).status == "failed"
-    assert cp.get_execution(identity, execution_id).error_code == "application_authorization_revoked"
+    assert cp.get_execution(identity, execution_id).error_code == "execution_policy_rejected"
+
+
+
+def test_model_route_change_after_submission_fences_execution(tmp_path):
+    from core.platform_workers import WorkerService
+
+    path, _, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    execution_id = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
+    workers = WorkerService(path)
+    worker = workers.authenticate(workers.register(identity, ["oracle-arc-agent-v1"])["credential"])
+    cp.configure_model_route(identity, "local-default", "ollama", "different-model",
+                              ["public", "internal", "private"], ["local"])
+    assert workers.claim(worker, 5) is None
+    execution = cp.get_execution(identity, execution_id)
+    assert execution.status == "failed"
+    assert execution.error_code == "execution_policy_rejected"
+
+
+def test_trusted_runtime_dispatch_rejects_uninstalled_and_tool_enabled_runtimes(monkeypatch):
+    import pytest
+    from core.platform_runtime import (
+        RuntimeUnavailable, TrustedRuntimeRegistry, default_runtime_registry,
+    )
+
+    registry = TrustedRuntimeRegistry()
+    registry.register("unit-test-runtime", lambda execution, manifest: {"ok": True})
+    assert registry.execute("unit-test-runtime", {}, {"runtime": "unit-test-runtime"}) == {"ok": True}
+    with pytest.raises(RuntimeUnavailable):
+        registry.execute("not-installed", {}, {"runtime": "not-installed"})
+
+    default = default_runtime_registry()
+    with pytest.raises(RuntimeUnavailable, match="tool adapters"):
+        default.execute("oracle-arc-agent-v1",
+                        {"model_provider": "ollama", "input_json": '{"messages":[{"role":"user","content":"hi"}]}'},
+                        {"runtime": "oracle-arc-agent-v1", "allowed_tools": ["tool.search"]})
+
+
+def test_first_runtime_refuses_remote_ollama_egress(monkeypatch):
+    import pytest
+    from core.platform_runtime import RuntimeUnavailable, default_runtime_registry
+
+    monkeypatch.setenv("OLLAMA_HOST", "https://remote.example")
+    with pytest.raises(RuntimeUnavailable, match="local Ollama only"):
+        default_runtime_registry().execute(
+            "oracle-arc-agent-v1",
+            {"model_provider": "ollama",
+             "input_json": '{"messages":[{"role":"user","content":"hello"}]}'},
+            {"runtime": "oracle-arc-agent-v1", "allowed_tools": []})
