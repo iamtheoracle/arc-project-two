@@ -13,9 +13,9 @@ import secrets
 import sqlite3
 import time
 import uuid
-import os
 from dataclasses import dataclass
 from pathlib import Path
+from core.platform_runtime import trusted_runtime_ids
 
 
 @dataclass(frozen=True)
@@ -58,8 +58,7 @@ class WorkerService:
                 or any(not isinstance(x, str) or not x.strip() or len(x) > 128 for x in runtime_ids)
                 or len(set(runtime_ids)) != len(runtime_ids)):
             raise ValueError("Provide 1–20 unique approved runtime identifiers")
-        configured = os.environ.get("ORACLE_ARC_TRUSTED_RUNTIME_IDS", "oracle-arc-agent-v1")
-        trusted = {item.strip() for item in configured.split(",") if item.strip()}
+        trusted = trusted_runtime_ids()
         if not set(runtime_ids).issubset(trusted):
             raise PermissionError("Runtime is not in the server-side trusted runtime allowlist")
         return sorted(runtime_ids)
