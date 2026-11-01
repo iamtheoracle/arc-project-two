@@ -1,8 +1,12 @@
 """Fail-closed local-only TTS container runner."""
 from __future__ import annotations
 
+import base64
+import hashlib
+import io
 import json
 import os
+import wave
 import re
 import subprocess
 from pathlib import Path
@@ -56,4 +60,22 @@ def run_local_tts(text: str, voice_id: str = "local-default") -> dict[str, Any]:
             or not isinstance(result.get("audio_base64"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", str(result.get("sha256", "")))):
         raise RuntimeError("Local TTS worker returned an invalid result contract")
+    try:
+        audio = base64.b64decode(result["audio_base64"], validate=True)
+        if not audio or len(audio) > 20 * 1024 * 1024:
+            raise ValueError("audio size")
+        if hashlib.sha256(audio).hexdigest() != result["sha256"]:
+            raise ValueError("audio digest")
+        with wave.open(io.BytesIO(audio), "rb") as wav_file:
+            channels, width, rate, frames = (wav_file.getnchannels(), wav_file.getsampwidth(),
+                                             wav_file.getframerate(), wav_file.getnframes())
+            duration = frames / rate if rate else 0
+            if (channels not in (1, 2) or width not in (2, 4) or not 8000 <= rate <= 48000
+                    or frames <= 0 or duration > 300
+                    or result.get("sample_rate_hz") != rate
+                    or result.get("channels") != channels
+                    or result.get("size_bytes") != len(audio)):
+                raise ValueError("audio metadata")
+    except (ValueError, TypeError, wave.Error) as exc:
+        raise RuntimeError("Local TTS worker returned invalid or unverifiable WAV audio") from exc
     return result
