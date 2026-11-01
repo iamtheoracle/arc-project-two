@@ -271,9 +271,20 @@ class DocumentRetrievalStore:
         if not isinstance(document_id, str) or not document_id.startswith("doc_"):
             raise ValueError("Invalid document identifier")
         with self._db() as db:
-            cursor = db.execute("""UPDATE arc_documents SET status='deleted',content='',
+            now = int(time.time())
+            row = db.execute("""SELECT content_sha256 FROM arc_documents WHERE document_id=?
+                AND tenant_id=? AND application_id=? AND principal_id=? AND status='active'""",
+                (document_id, current.tenant_id, current.application_id,
+                 current.principal_id)).fetchone()
+            if row is None:
+                return False
+            db.execute("""UPDATE arc_documents SET status='deleted',content='',
                 updated_at=? WHERE document_id=? AND tenant_id=? AND application_id=?
                 AND principal_id=? AND status='active'""",
-                (int(time.time()), document_id, current.tenant_id,
+                (now, document_id, current.tenant_id,
                  current.application_id, current.principal_id))
-            return cursor.rowcount == 1
+            db.execute("""INSERT INTO arc_document_access_audit
+                VALUES(?,?,?,?,?,?,?,?)""",
+                ("daud_" + uuid.uuid4().hex, current.tenant_id, current.application_id,
+                 current.principal_id, "delete", row["content_sha256"], 0, now))
+            return True
