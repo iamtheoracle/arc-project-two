@@ -40,6 +40,7 @@ class PlatformWorker:
         with sqlite3.connect(self.database_path, timeout=15) as db:
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA busy_timeout=15000")
+            now = int(time.time())
             row = db.execute("""SELECT e.*,a.manifest_json,a.status agent_status,
                 r.enabled route_enabled,r.provider_id current_provider,r.model_id current_model,
                 r.data_classifications_json,r.regions_json
@@ -49,10 +50,20 @@ class PlatformWorker:
                   AND a.version=e.agent_version
                 JOIN arc_model_routes r ON r.tenant_id=e.tenant_id
                   AND r.application_id=e.application_id AND r.route_id=e.route_id
+                JOIN arc_credentials c ON c.credential_id=e.credential_id
+                  AND c.tenant_id=e.tenant_id AND c.application_id=e.application_id
+                  AND c.principal_id=e.principal_id
+                JOIN arc_tenants t ON t.tenant_id=e.tenant_id
+                JOIN arc_applications app ON app.tenant_id=e.tenant_id
+                  AND app.application_id=e.application_id
+                JOIN arc_principals p ON p.principal_id=e.principal_id
                 WHERE e.execution_id=? AND e.tenant_id=? AND e.application_id=?
-                  AND e.status='running' AND e.lease_owner=? AND e.lease_expires_at>?""",
+                  AND e.status='running' AND e.lease_owner=? AND e.lease_expires_at>?
+                  AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at>?)
+                  AND t.status='active' AND app.status='active' AND p.status='active'
+                  AND e.policy_version=app.policy_version""",
                 (execution_id, self.identity.tenant_id, self.identity.application_id,
-                 worker_id, int(time.time()))).fetchone()
+                 worker_id, now, now)).fetchone()
         if row is None:
             raise PermissionError("Execution lease or application scope is no longer valid")
         if row["agent_status"] != "active" or not row["route_enabled"]:
@@ -78,10 +89,11 @@ class PlatformWorker:
                 JOIN arc_tenants t ON t.tenant_id=c.tenant_id
                 JOIN arc_applications a ON a.tenant_id=c.tenant_id AND a.application_id=c.application_id
                 JOIN arc_principals p ON p.principal_id=c.principal_id
-                WHERE c.tenant_id=? AND c.application_id=? AND c.principal_id=?
-                  AND c.revoked_at IS NULL AND c.expires_at>? AND t.status='active'
-                  AND a.status='active' AND p.status='active'""",
-                (row["tenant_id"], row["application_id"], row["principal_id"], now)).fetchall()
+                WHERE c.credential_id=? AND c.tenant_id=? AND c.application_id=? AND c.principal_id=?
+                  AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at>?)
+                  AND t.status='active' AND a.status='active' AND p.status='active'""",
+                (row["credential_id"], row["tenant_id"], row["application_id"],
+                 row["principal_id"], now)).fetchall()
         capabilities: set[str] = set()
         for item in rows:
             try:
