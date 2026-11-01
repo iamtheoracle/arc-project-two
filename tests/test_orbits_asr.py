@@ -70,5 +70,11 @@ def test_asr_registry_is_not_advertised_until_model_is_installed(monkeypatch, tm
     model = tmp_path / "installed-model"
     model.mkdir()
     monkeypatch.setenv("ORACLE_ARC_ASR_MODEL_DIR", str(model))
+    import core.orbits_asr_runtime as asr_runtime
+    monkeypatch.setattr(asr_runtime, "run_local_asr", lambda data: {
+        "text": "offline transcript", "transcription_status": "completed",
+        "inference_location": "local",
+    })
     registry = build_default_orbits_registry(runner=lambda *_: {"ok": True})
-    assert registry.processors if hasattr(registry, "processors") else True
+    assert "audio.transcribe" in registry._processors
+    assert registry.process("audio.transcribe", asset, data)["text"] == "offline transcript"
