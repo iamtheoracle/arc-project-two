@@ -266,7 +266,8 @@ class DocumentQuarantineStore:
         documents = DocumentRetrievalStore(self.database_path)
         identity = documents._reauthorize(identity)
         if "document.audit" not in identity.capabilities and "document.delete" not in identity.capabilities:
-            raise PermissionError("Document audit capability is not granted")
+            from core.tenant_security import AuthorizationError
+            raise AuthorizationError("Document audit capability is not granted")
         with self._db() as db:
             rows = db.execute(
                 """SELECT action,sha256,occurred_at FROM arc_document_quarantine_audit
