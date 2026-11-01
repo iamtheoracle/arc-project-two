@@ -43,6 +43,9 @@ class Execution:
     agent_version: str
     model_provider: str
     model_id: str
+    route_id: str | None
+    classification: str
+    region: str
     status: str
     attempt: int
     max_attempts: int
@@ -94,6 +97,7 @@ class PlatformControlPlane:
               application_id TEXT NOT NULL, principal_id TEXT NOT NULL,
               agent_id TEXT NOT NULL, agent_version TEXT NOT NULL,
               model_provider TEXT NOT NULL, model_id TEXT NOT NULL, route_id TEXT,
+              classification TEXT NOT NULL DEFAULT 'private', region TEXT NOT NULL DEFAULT 'local',
               status TEXT NOT NULL CHECK(status IN
                 ('queued','running','succeeded','failed','cancelled','dead_letter')),
               attempt INTEGER NOT NULL, max_attempts INTEGER NOT NULL,
@@ -112,6 +116,10 @@ class PlatformControlPlane:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN request_digest TEXT")
             if "route_id" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN route_id TEXT")
+            if "classification" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN classification TEXT NOT NULL DEFAULT 'private'")
+            if "region" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN region TEXT NOT NULL DEFAULT 'local'")
             db.commit()
 
     def _connect(self):
@@ -364,11 +372,11 @@ class PlatformControlPlane:
             try:
                 db.execute("""INSERT INTO arc_executions
                     (execution_id,tenant_id,application_id,principal_id,agent_id,agent_version,
-                     model_provider,model_id,route_id,status,attempt,max_attempts,input_json,created_at,
+                     model_provider,model_id,route_id,classification,region,status,attempt,max_attempts,input_json,created_at,
                      updated_at,idempotency_key,request_digest)
-                    VALUES(?,?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?)""",
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?)""",
                     (execution_id, identity.tenant_id, identity.application_id, identity.principal_id,
-                     agent_id, version, route["provider_id"], route["model_id"], route_id, max_attempts,
+                     agent_id, version, route["provider_id"], route["model_id"], route_id, classification, region, max_attempts,
                      input_json, now, now, idempotency_key, request_digest))
             except sqlite3.IntegrityError:
                 if idempotency_key is None:
