@@ -48,22 +48,48 @@ class OpenAICompatibleProvider:
     def configured(self) -> bool:
         return bool(self.api_key.strip())
 
-    def chat(self, payload: dict[str, Any]) -> str:
+    def chat_response(self, payload: dict[str, Any], *,
+                      tools: list[dict[str, Any]] | None = None,
+                      temperature: float = 0.4,
+                      model: str | None = None) -> dict[str, Any]:
         if not self.configured:
             raise ProviderError("Provider credentials are not configured")
         headers = {self.config.api_key_header: ("Bearer " if self.config.bearer else "") + self.api_key,
                    "Content-Type": "application/json"}
-        body = {"model": self.model, "messages": payload["messages"], "temperature": 0.4}
+        body = {
+            "model": model or self.model,
+            "messages": payload["messages"],
+            "temperature": temperature,
+        }
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
         try:
             response = self.client.post(self.config.endpoint, headers=headers,
                                         json=body, timeout=self.timeout_seconds)
             response.raise_for_status()
             data = response.json()
-            answer = data["choices"][0]["message"]["content"]
-            if not isinstance(answer, str) or not answer.strip():
+            message = data["choices"][0]["message"]
+            if not isinstance(message, dict):
+                raise ProviderError("Provider returned an invalid message")
+            content = message.get("content")
+            tool_calls = message.get("tool_calls") or []
+            if (not isinstance(content, str) or not content.strip()) and not tool_calls:
                 raise ProviderError("Provider returned an empty response")
-            return answer
+            usage = data.get("usage") or {}
+            return {
+                "message": message,
+                "prompt_eval_count": int(usage.get("prompt_tokens", 0) or 0),
+                "eval_count": int(usage.get("completion_tokens", 0) or 0),
+            }
         except ProviderError:
             raise
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
             raise ProviderError("Configured model provider request failed") from exc
+
+    def chat(self, payload: dict[str, Any]) -> str:
+        response = self.chat_response(payload)
+        content = response["message"].get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ProviderError("Provider returned a tool call without a text response")
+        return content
