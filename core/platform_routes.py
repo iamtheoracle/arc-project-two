@@ -89,7 +89,7 @@ class DocumentUploadRequest(BaseModel):
     classification:str="private"
     retention_seconds:int=Field(default=604800,ge=60,le=31536000)
 
-class OrbitProcessRequest(BaseModel):
+class AudioSynthesizeRequest(BaseModel):\n    text: str = Field(min_length=1, max_length=4000)\n    voice_id: str = Field(default="local-default", min_length=1, max_length=64)\n\nclass OrbitProcessRequest(BaseModel):
     processor_id:str=Field(min_length=1,max_length=64)
     filename:str=Field(min_length=1,max_length=180)
     mime_type:str|None=Field(default=None,max_length=128)
@@ -310,6 +310,34 @@ def delete_platform_document(document_id: str, identity=Depends(require_applicat
         return {"document_id": document_id, "deleted": True}
     except AuthorizationError as exc:
         raise HTTPException(403, str(exc))
+
+
+@router.get("/audio/voices")
+def list_local_audio_voices(identity=Depends(require_application)):
+    if "audio.synthesize" not in identity.capabilities:
+        raise HTTPException(403, "Audio synthesis capability is not granted")
+    # Only this server-reviewed identifier is currently supported.
+    return {"voices": [{"voice_id": "local-default", "engine": "piper",
+                        "availability": "configured" if os.environ.get("ORACLE_ARC_TTS_MODEL_DIR") else "not_configured",
+                        "inference_location": "local"}]}
+
+
+@router.post("/audio/synthesize", status_code=200)
+def synthesize_platform_audio(body: AudioSynthesizeRequest, identity=Depends(require_application)):
+    """Synthesize a short response using the separately installed local TTS worker."""
+    if "audio.synthesize" not in identity.capabilities:
+        raise HTTPException(403, "Audio synthesis capability is not granted")
+    if body.voice_id != "local-default":
+        raise HTTPException(422, "Requested voice is not in the reviewed local voice catalogue")
+    try:
+        from core.orbits_tts_runtime import run_local_tts
+        result = run_local_tts(body.text, body.voice_id)
+        return {"voice_id": body.voice_id, "audio": result,
+                "delivery": "ephemeral", "retained": False}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        raise HTTPException(503, "Local speech synthesis is unavailable or failed")
 
 
 @router.post("/orbits/process", status_code=200)
