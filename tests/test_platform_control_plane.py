@@ -143,6 +143,9 @@ def test_idempotency_key_rejects_different_payload(tmp_path):
     with pytest.raises(ValueError, match="different request payload"):
         cp.submit_execution(identity, "research", "1.0.0", "local-default",
                             {"query": "different"}, idempotency_key="same-key")
+    with pytest.raises(ValueError, match="different request payload"):
+        cp.submit_execution(identity, "research", "1.0.0", "local-default",
+                            {"query": "first"}, max_attempts=2, idempotency_key="same-key")
     assert cp.get_execution(identity, first).input_json == '{"query":"first"}'
 
 
@@ -239,3 +242,21 @@ def test_worker_lease_cannot_complete_after_expiry_or_cancellation(tmp_path):
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
                    (int(time.time()) - 1, execution_id))
     assert not workers.complete(worker, execution_id, {"late": True})
+
+
+
+def test_revoked_submitter_credential_fences_queued_execution(tmp_path):
+    from core.platform_workers import WorkerService
+
+    path, _, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    execution_id = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
+    workers = WorkerService(path)
+    worker = workers.authenticate(workers.register(identity, ["oracle-arc-agent-v1"])["credential"])
+    with cp._session() as db:
+        db.execute("UPDATE arc_credentials SET revoked_at=? WHERE credential_id=?",
+                   (int(time.time()), identity.credential_id))
+    assert workers.claim(worker, 5) is None
+    assert cp.get_execution(identity, execution_id).status == "failed"
+    assert cp.get_execution(identity, execution_id).error_code == "application_authorization_revoked"
