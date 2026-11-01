@@ -45,6 +45,15 @@ class WorkerService:
             """)
             db.execute("""CREATE INDEX IF NOT EXISTS arc_workers_scope
               ON arc_workers(tenant_id,application_id,status)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS arc_tool_invocations(
+              invocation_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+              application_id TEXT NOT NULL, execution_id TEXT NOT NULL,
+              worker_id TEXT NOT NULL, tool_id TEXT NOT NULL,
+              decision TEXT NOT NULL CHECK(decision IN ('allowed','denied')),
+              reason_code TEXT NOT NULL, recorded_at INTEGER NOT NULL
+            )""")
+            db.execute("""CREATE INDEX IF NOT EXISTS arc_tool_invocations_scope
+              ON arc_tool_invocations(tenant_id,application_id,recorded_at)""")
             db.commit()
         finally:
             db.close()
@@ -315,12 +324,15 @@ class WorkerService:
             db.close()
 
     def authorize_tool_call(self, worker: WorkerIdentity, execution_id: str, tool_id: str) -> bool:
-        """Revalidate live execution policy and the exact tool grant immediately before invocation."""
+        """Revalidate and durably audit every tool attempt without logging arguments/results."""
         self._reauthorize(worker)
-        if not isinstance(tool_id, str) or not tool_id:
+        if not isinstance(tool_id, str) or not tool_id or len(tool_id) > 128:
             raise ValueError("A valid tool identifier is required")
+        now = int(time.time())
+        decision, reason = "denied", "execution_or_grant_invalid"
         db = self._db()
         try:
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute("""SELECT e.*,a.manifest_json FROM arc_executions e
               JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
                 AND a.application_id=e.application_id AND a.agent_id=e.agent_id
@@ -328,18 +340,45 @@ class WorkerService:
               WHERE e.execution_id=? AND e.tenant_id=? AND e.application_id=?
                 AND e.status='running' AND e.lease_owner=? AND e.lease_expires_at>?""",
               (execution_id, worker.tenant_id, worker.application_id,
-               worker.worker_id, int(time.time()))).fetchone()
-            if row is None:
-                return False
-            manifest = json.loads(row["manifest_json"])
-            if tool_id not in manifest.get("allowed_tools", []):
-                return False
-            if not self._execution_authorized(db, row, manifest):
-                return False
-            return True
+               worker.worker_id, now)).fetchone()
+            if row is not None:
+                manifest = json.loads(row["manifest_json"])
+                if tool_id not in manifest.get("allowed_tools", []):
+                    reason = "tool_not_in_agent_manifest"
+                elif not self._execution_authorized(db, row, manifest):
+                    reason = "live_execution_policy_rejected"
+                else:
+                    decision, reason = "allowed", "live_policy_and_manifest_grant_valid"
+            invocation_id = "tinv_" + uuid.uuid4().hex
+            db.execute("""INSERT INTO arc_tool_invocations
+              (invocation_id,tenant_id,application_id,execution_id,worker_id,tool_id,decision,reason_code,recorded_at)
+              VALUES(?,?,?,?,?,?,?,?,?)""",
+              (invocation_id, worker.tenant_id, worker.application_id, execution_id,
+               worker.worker_id, tool_id, decision, reason, now))
+            db.commit()
+            return decision == "allowed"
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
+    def list_tool_invocations(self, identity, execution_id: str, limit: int = 100) -> list[dict]:
+        """Read audit metadata only within the caller's tenant/application scope."""
+        if "execution.read" not in identity.capabilities:
+            raise PermissionError("execution.read capability is required")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+            raise ValueError("Audit limit must be between 1 and 500")
+        db = self._db()
+        try:
+            rows = db.execute("""SELECT invocation_id,execution_id,worker_id,tool_id,
+              decision,reason_code,recorded_at FROM arc_tool_invocations
+              WHERE tenant_id=? AND application_id=? AND execution_id=?
+              ORDER BY recorded_at DESC,invocation_id DESC LIMIT ?""",
+              (identity.tenant_id, identity.application_id, execution_id, limit)).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            db.close()
     def heartbeat(self, worker: WorkerIdentity, execution_id: str, lease_seconds: int = 60) -> bool:
         self._reauthorize(worker)
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) or not 5 <= lease_seconds <= 900:
