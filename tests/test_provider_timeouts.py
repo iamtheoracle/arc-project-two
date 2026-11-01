@@ -61,3 +61,19 @@ def test_remote_provider_passes_explicit_timeout_to_http_client():
     assert captured["endpoint"] == config.endpoint
     assert captured["timeout"] == 4.5
     assert result["message"]["content"] == "ok"
+
+
+
+def test_ollama_timeout_can_be_tightened_between_worker_rounds(monkeypatch):
+    import core.model_gateway as gateway_module
+
+    seen = []
+
+    class FakeOllamaClient:
+        def __init__(self, host, timeout):
+            seen.append(timeout)
+
+    monkeypatch.setattr(gateway_module.ollama, "Client", FakeOllamaClient)
+    provider = OllamaProvider(timeout_seconds=30)
+    provider.set_timeout_seconds(2.25)
+    assert seen == [30, 2.25]
