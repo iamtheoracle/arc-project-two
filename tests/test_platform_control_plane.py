@@ -364,6 +364,17 @@ def test_remote_runtime_requires_remote_route_and_explicit_residency(tmp_path):
     remote_manifest["runtime"] = "oracle-arc-remote-agent-v1"
     registered = cp.register_agent(identity, "remote-research", "1.0.0", remote_manifest)
     assert registered.manifest["runtime"] == "oracle-arc-remote-agent-v1"
+    cp.set_quota(identity, window_seconds=60, max_executions=5,
+                 max_concurrent=2, max_input_bytes=2048)
+    execution_id = cp.submit_execution(
+        identity, "remote-research", "1.0.0", "remote-route",
+        {"messages": [{"role": "user", "content": "hello"}]},
+        classification="private", region="unspecified")
+    assert cp.get_execution(identity, execution_id).region == "unspecified"
+    with pytest.raises(PermissionError, match="unspecified residency"):
+        cp.submit_execution(identity, "remote-research", "1.0.0", "remote-route",
+                            {"messages": [{"role": "user", "content": "hello"}]},
+                            classification="private", region="remote")
 
     invalid = dict(remote_manifest)
     invalid["model_routes"] = ["local-default"]
