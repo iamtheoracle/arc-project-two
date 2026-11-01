@@ -109,7 +109,7 @@ def test_project_one_application_identity_and_owner_tool_governance_share_the_li
         headers=owner(),json={"principal_id":"arc-console-owner","capabilities":[
             "agent.read","agent.register","agent.execute","agent.execution.read",
             "model.route.manage","model.route.use","quota.read","quota.manage",
-            "usage.read","reasoning"
+            "usage.read","reasoning","tool.search"
         ]})
     assert issued.status_code==201
     app_headers={"Authorization":"Bearer "+issued.json()["credential"]}
@@ -182,3 +182,50 @@ def test_legacy_tenant_identity_schema_isolated_from_project_one_platform_schema
     assert platform_identity.status_code==200
     assert platform_identity.json()["application_id"]==platform_app.json()["application_id"]
     assert (tmp_path/"platform_tenant_identity.sqlite3").exists()
+
+
+def test_execution_event_stream_replays_durable_events_only_to_the_owning_principal(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Event tenant"}).json()["tenant_id"]
+    app_a=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),
+        json={"name":"Event owner"}).json()["application_id"]
+    app_b=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),
+        json={"name":"Other app"}).json()["application_id"]
+    caps=["agent.read","agent.register","agent.execute","agent.execution.read",
+          "model.route.manage","model.route.use","quota.manage","usage.read","reasoning"]
+    token_a=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_a}/credentials",
+        headers=owner(),json={"principal_id":"event-owner","capabilities":caps}).json()["credential"]
+    token_b=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_b}/credentials",
+        headers=owner(),json={"principal_id":"event-other","capabilities":caps}).json()["credential"]
+    ha={"Authorization":"Bearer "+token_a}
+    hb={"Authorization":"Bearer "+token_b}
+    assert client.put("/v1/platform/model-routes/default",headers=ha,json={
+        "route_id":"default","provider_id":"ollama","model_id":"qwen2.5:7b",
+        "data_classifications":["private"],"regions":["local"]
+    }).status_code==200
+    assert client.put("/v1/platform/quotas",headers=ha,json={
+        "window_seconds":60,"max_executions":10,"max_concurrent":2,"max_input_bytes":4096
+    }).status_code==200
+    manifest={"display_name":"Event agent","description":"Event test",
+        "required_capabilities":["reasoning"],"allowed_tools":[],
+        "model_routes":["default"],"runtime":"oracle-arc-agent-v1"}
+    assert client.post("/v1/platform/agents/versions",headers=ha,json={
+        "agent_id":"event-agent","version":"1.0.0","manifest":manifest
+    }).status_code==201
+    queued=client.post("/v1/platform/executions",headers=ha,json={
+        "agent_id":"event-agent","agent_version":"1.0.0","route_id":"default",
+        "payload":{"prompt":"hello"},"classification":"private","region":"local"
+    })
+    assert queued.status_code==202,queued.text
+
+    own_stream=client.get("/v1/platform/executions/events",
+        params={"after":0,"duration_seconds":1},headers=ha)
+    assert own_stream.status_code==200
+    assert own_stream.headers["content-type"].startswith("text/event-stream")
+    assert "event: execution" in own_stream.text
+    assert queued.json()["execution_id"] in own_stream.text
+
+    other_stream=client.get("/v1/platform/executions/events",
+        params={"after":0,"duration_seconds":1},headers=hb)
+    assert other_stream.status_code==200
+    assert "event: execution" not in other_stream.text
+    assert queued.json()["execution_id"] not in other_stream.text
