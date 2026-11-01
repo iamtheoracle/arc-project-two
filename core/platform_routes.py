@@ -22,6 +22,7 @@ from core.platform_control_plane import PlatformControlPlane
 from core.worker_identity import WorkerIdentityStore, WorkerIdentity
 from core.document_retrieval import DocumentRetrievalStore
 from core.orbits import (build_default_orbits_registry, validate_asset, OrbitAssetRejected, OrbitProcessorUnavailable)
+from core.orbits_quarantine import (DocumentQuarantineStore, MalwareDetected, MalwareScannerUnavailable, QuarantineError, clamav_scan)
 
 router=APIRouter(prefix="/v1/platform",tags=["platform-identity"])
 _CONCIERGE_EXECUTORS: dict[str, Callable] = {}
@@ -77,6 +78,15 @@ class DocumentIngest(BaseModel):
     source_uri:str=Field(min_length=1,max_length=2048)
     content:str=Field(min_length=1,max_length=100000)
     classification:str="private"
+
+class DocumentUploadRequest(BaseModel):
+    filename:str=Field(min_length=1,max_length=180)
+    mime_type:str|None=Field(default=None,max_length=128)
+    data_base64:str=Field(min_length=4,max_length=36000000)
+    title:str=Field(min_length=1,max_length=240)
+    source_uri:str=Field(min_length=1,max_length=2048)
+    classification:str="private"
+    retention_seconds:int=Field(default=604800,ge=60,le=31536000)
 
 class OrbitProcessRequest(BaseModel):
     processor_id:str=Field(min_length=1,max_length=64)
@@ -189,6 +199,69 @@ def read_shared_memories(source_application_id:str,identity=Depends(require_appl
         return {"data":_store().shared_memories(identity,source_application_id)}
     except AuthorizationError as exc:
         raise HTTPException(403,str(exc))
+
+
+@router.post("/documents/upload", status_code=201)
+def upload_platform_document(body: DocumentUploadRequest, identity=Depends(require_application)):
+    """Quarantine, scan, extract and index a document under the caller's scope."""
+    if "orbits.process" not in identity.capabilities:
+        raise HTTPException(403, "ORBITS processing capability is not granted")
+    if "document.index" not in identity.capabilities:
+        raise HTTPException(403, "Document indexing capability is not granted")
+    try:
+        raw = base64.b64decode(body.data_base64, validate=True)
+        asset = validate_asset(raw, body.filename, body.mime_type)
+        if asset.media_type != "document":
+            raise HTTPException(422, "Document upload accepts PDF or plain-text documents only")
+        database = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+        quarantine = DocumentQuarantineStore(
+            database, scanner=clamav_scan
+        )
+        stored = quarantine.ingest(identity, asset, raw, body.retention_seconds)
+        result = build_default_orbits_registry().process("document.extract", asset, raw)
+        extracted = result.get("text")
+        if not isinstance(extracted, str) or not extracted.strip():
+            raise HTTPException(422, "Document extraction produced no indexable text")
+        document_id = DocumentRetrievalStore(database).index_text(
+            identity, body.title, body.source_uri, extracted, body.classification
+        )
+        return {
+            "asset_id": asset.asset_id, "sha256": asset.sha256,
+            "quarantine_status": stored["status"], "expires_at": stored["expires_at"],
+            "document_id": document_id, "indexed": True, "source_uri": body.source_uri,
+        }
+    except MalwareDetected as exc:
+        raise HTTPException(422, str(exc))
+    except MalwareScannerUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except OrbitAssetRejected as exc:
+        raise HTTPException(422, str(exc))
+    except OrbitProcessorUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except QuarantineError as exc:
+        raise HTTPException(503, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/documents/quarantine/{asset_id}/audit")
+def read_document_quarantine_audit(asset_id: str, identity=Depends(require_application)):
+    if "document.audit" not in identity.capabilities and "document.delete" not in identity.capabilities:
+        raise HTTPException(403, "Document audit capability is not granted")
+    store = DocumentQuarantineStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    return {"asset_id": asset_id, "events": store.audit(identity, asset_id)}
+
+
+@router.delete("/documents/quarantine/{asset_id}")
+def delete_quarantined_document(asset_id: str, identity=Depends(require_application)):
+    if "document.delete" not in identity.capabilities:
+        raise HTTPException(403, "Document deletion capability is not granted")
+    store = DocumentQuarantineStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    if not store.delete(identity, asset_id):
+        raise HTTPException(404, "Quarantined asset not found in this application and principal scope")
+    return {"asset_id": asset_id, "deleted": True}
 
 
 @router.post("/documents", status_code=201)
