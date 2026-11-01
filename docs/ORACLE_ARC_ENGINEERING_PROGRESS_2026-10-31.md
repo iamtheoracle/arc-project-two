@@ -246,3 +246,17 @@ This branch contains architecture documentation and focused security hardening. 
 
 - Developer API coverage expanded in `tests/test_platform_routes.py`: a full authenticated API flow provisions an application, configures a local model route and quota, publishes an agent, registers a worker, submits an execution and reads usage; a second flow validates remote residency and classification restrictions. Commit: `8aa9108cfad23379783905e792df29637adb6dd3`.
 - Route selection now separately requires `model.route.use`, in addition to execution permission. Commit: `d3cec2d005bfeadabf4f4de1cc39fae74f95169d`.
+
+
+## Local LLM tool-use integration — 2026-11-01
+
+- Added `core/platform_tools.py`, a code-installed tool registry. Developer manifests can reference only stable IDs installed by platform code; they cannot upload or register executable handlers.
+- Installed the first tool, `math.calculate`, with a strict arithmetic AST allowlist, bounded expression length/node count/exponent/numeric magnitude and JSON input/output size limits. Calls, names, attributes, indexing, comprehensions, imports and other executable syntax are rejected.
+- Agent publication now rejects unknown/uninstalled tool IDs. The application must already hold the exact tool capability; manifests cannot self-grant it.
+- Added worker-side `authorize_tool_call`: every invocation rechecks the live worker identity, tenant/application scope, current execution lease ownership, active agent version, submitting credential, membership, policy version, model route and tool grant.
+- Connected the local Ollama runtime to its provider's tool-call interface. It advertises only installed tools in the agent's manifest, invokes the live authorization callback immediately before each call, appends tool results to the model conversation and returns the model's final answer and aggregated token usage.
+- Bounded local tool loop to five model turns; per-call tool input/output is bounded by the installed descriptor. Remote runtimes remain tool-disabled.
+- Added tests for calculator arithmetic and injection rejection, tool registry allowlisting, local Ollama tool-call round-trip, authorization denial and live credential revocation.
+- Commits in this slice: `390378180f40ba40aac271d67bb065cd2a4fd1c9`, `022d6992aa24ba677b42ff5c5387afeba23fc923`, `e57eb7b428adeef77e97442bd22ad0c80802d63c`, `4aa26af25f9a0fdddb606a36dd38d83c928a914a`, `af8e04ca4a4d2668511ebbab33cd5a90df5eab5a`, `89b0210abef8345e10e0487374e362a175087112`, `c99e97fdf3155c44a554947d263848d45b467415`, `8752b923bd9d2aff6dff17bffe24e1fadf9ff50a`, `11c219aa728f3b84c87a48331e5192dfa4ba8bad`, `e50231004db56dd8faf2c4e95a2808acb7b9305e`, `af3304731db1ce3744bcf732c86fcd0d9e6ca009`, `dd367690b2b2d19efa96786a04105795e9f8a8e4`.
+- Validation boundary: source and tests are committed, but no local test execution or successful GitHub Actions run has been verified. This does not establish that the new tests pass. No Ollama model has been pulled or run in this session; no provider credentials, production deployment, customer workload or arbitrary code execution has been enabled.
+- Remaining immediate work: execute the focused test suite and fix failures; test against a real local Ollama model and verify tool-call wire compatibility; add strict total tool-call limits and provider timeouts/cancellation; add per-tool audit events and rate budgets; implement reviewed, isolated non-calculator adapters only after runtime isolation is proven.
