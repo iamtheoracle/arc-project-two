@@ -261,7 +261,15 @@ class WorkerService:
                 return None
             claimed = db.execute("SELECT * FROM arc_executions WHERE execution_id=?",
                                  (selected["execution_id"],)).fetchone()
-            result = {key: claimed[key] for key in claimed.keys()}
+            # Never disclose credential verifiers, policy internals, or idempotency
+            # fingerprints to the worker process.
+            allowed_fields = (
+                "execution_id", "tenant_id", "application_id", "agent_id",
+                "agent_version", "model_provider", "model_id", "status",
+                "attempt", "max_attempts", "input_json", "route_id",
+                "classification", "region", "lease_expires_at",
+            )
+            result = {key: claimed[key] for key in allowed_fields}
             db.commit()
             return result
         except Exception:
