@@ -24,12 +24,23 @@ def _database_path():
     return os.environ.get("ORACLE_ARC_DB_PATH","data/oracle_arc.sqlite3")
 
 
+def _identity_database_path():
+    # The legacy /v1/tenants identity schema predates TenantSecurityStore and is not
+    # column-compatible with the Project One /v1/platform schema. Keep it in a
+    # separate SQLite file so enabling both routers cannot corrupt either identity plane.
+    configured=os.environ.get("ORACLE_ARC_TENANT_IDENTITY_DB_PATH")
+    if configured:
+        return configured
+    base,extension=os.path.splitext(_database_path())
+    return base+"_tenant_identity"+(extension or ".sqlite3")
+
+
 def _identity_store():
-    return TenantIdentityStore(_database_path())
+    return TenantIdentityStore(_identity_database_path())
 
 
 def _tenant_store():
-    return TenantStore(_database_path())
+    return TenantStore(_identity_database_path())
 
 
 def _owner(authorization: str|None=Header(default=None)):
