@@ -1,5 +1,7 @@
 import json
 import sqlite3
+import threading
+import time
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
@@ -297,3 +299,68 @@ def test_worker_rechecks_owner_grant_after_model_requests_tool(tmp_path, monkeyp
     assert checks >= 2
     assert plugins.calls == []
     assert control.get_execution(identity, execution_id).status in {"failed", "dead_letter"}
+
+
+def test_owner_revocation_linearizes_with_an_in_flight_tool_call(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(tmp_path)
+    grant_id = grants.list(identity.tenant_id, identity.application_id)[0]["grant_id"]
+    started = threading.Event()
+    release = threading.Event()
+    revoked = threading.Event()
+    result_box = {}
+
+    class BlockingPlugins:
+        def execute(self, name, arguments):
+            started.set()
+            assert release.wait(4), "test did not release the bounded tool handler"
+            return "Result: 42"
+
+    monkeypatch.setattr(worker_module, "ModelGateway", FakeGateway)
+    worker = PlatformWorker(
+        database, worker_token,
+        tool_broker=build_platform_tool_broker(BlockingPlugins()),
+    )
+
+    def run_worker():
+        try:
+            result_box["result"] = worker.run_once()
+        except Exception as exc:
+            result_box["error"] = exc
+
+    worker_thread = threading.Thread(target=run_worker)
+    worker_thread.start()
+    assert started.wait(3), "worker did not reach the registered tool handler"
+
+    def revoke():
+        grants.revoke(grant_id, "owner-test")
+        revoked.set()
+
+    revoke_thread = threading.Thread(target=revoke)
+    revoke_thread.start()
+    time.sleep(0.15)
+    assert not revoked.is_set(), "revocation must wait for the already-authorized bounded tool call"
+    release.set()
+    worker_thread.join(5)
+    revoke_thread.join(5)
+
+    assert not worker_thread.is_alive()
+    assert not revoke_thread.is_alive()
+    assert "error" not in result_box, repr(result_box.get("error"))
+    assert result_box["result"]["status"] == "succeeded"
+    assert revoked.is_set()
+    assert grants.list(identity.tenant_id, identity.application_id)[0]["status"] == "revoked"
+
+    second_execution = control.submit_execution(
+        identity, "research", "1.0.0", "local-default",
+        {"prompt": "try again after revocation"}, classification="private",
+        region="local", max_attempts=2,
+    )
+    worker_again = PlatformWorker(
+        database, worker_token,
+        tool_broker=build_platform_tool_broker(FakePlugins()),
+    )
+    with pytest.raises(PermissionError):
+        worker_again.run_once()
+    assert control.get_execution(identity, second_execution).status in {"failed", "dead_letter"}
