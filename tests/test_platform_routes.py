@@ -1,4 +1,5 @@
 import pytest
+import base64
 from fastapi.testclient import TestClient
 import api
 
@@ -337,3 +338,75 @@ def test_execution_event_stream_replays_durable_events_only_to_the_owning_princi
     assert other_stream.status_code==200
     assert "event: execution" not in other_stream.text
     assert queued.json()["execution_id"] not in other_stream.text
+
+
+def test_document_upload_quarantines_scans_extracts_indexes_and_audits(client, monkeypatch):
+    import core.platform_routes as platform_routes
+
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Quarantine tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Quarantine app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "principal-q", "capabilities": [
+            "orbits.process", "document.index", "document.search",
+            "document.delete", "document.audit"
+        ]},
+    ).json()["credential"]
+    headers = {"Authorization": "Bearer " + token}
+    monkeypatch.setattr(platform_routes, "clamav_scan", lambda path: "ClamAV clean")
+    class Registry:
+        def process(self, processor_id, asset, data):
+            assert processor_id == "document.extract"
+            return {"text": data.decode("utf-8")}
+    monkeypatch.setattr(platform_routes, "build_default_orbits_registry", lambda: Registry())
+    data = b"Verified document ingestion evidence for Oracle Arc."
+    uploaded = client.post("/v1/platform/documents/upload", headers=headers, json={
+        "filename": "evidence.txt", "mime_type": "text/plain",
+        "data_base64": base64.b64encode(data).decode("ascii"),
+        "title": "Evidence", "source_uri": "arc://uploads/evidence",
+        "retention_seconds": 3600,
+    })
+    assert uploaded.status_code == 201, uploaded.text
+    payload = uploaded.json()
+    assert payload["quarantine_status"] == "clean"
+    assert payload["indexed"] is True
+    asset_id = payload["asset_id"]
+    searched = client.get("/v1/platform/documents/search", headers=headers,
+                          params={"query": "ingestion evidence"})
+    assert searched.status_code == 200
+    assert searched.json()["count"] == 1
+    audit = client.get(f"/v1/platform/documents/quarantine/{asset_id}/audit", headers=headers)
+    assert audit.status_code == 200
+    assert [event["action"] for event in audit.json()["events"]] == [
+        "quarantined", "scanner_clean"
+    ]
+    deleted = client.delete(f"/v1/platform/documents/quarantine/{asset_id}", headers=headers)
+    assert deleted.status_code == 200
+    audit = client.get(f"/v1/platform/documents/quarantine/{asset_id}/audit", headers=headers)
+    assert audit.json()["events"][-1]["action"] == "owner_requested_bytes_deleted"
+
+
+def test_document_upload_fails_closed_when_malware_scanner_is_unavailable(client, monkeypatch):
+    import core.platform_routes as platform_routes
+    from core.orbits_quarantine import MalwareScannerUnavailable
+
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Scanner tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Scanner app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "principal-s", "capabilities": [
+            "orbits.process", "document.index"
+        ]},
+    ).json()["credential"]
+    monkeypatch.setattr(platform_routes, "clamav_scan",
+                        lambda path: (_ for _ in ()).throw(MalwareScannerUnavailable("scanner offline")))
+    response = client.post("/v1/platform/documents/upload",
+        headers={"Authorization": "Bearer " + token}, json={
+            "filename": "safe.txt", "data_base64": base64.b64encode(b"safe text").decode(),
+            "title": "Safe", "source_uri": "arc://uploads/safe",
+        })
+    assert response.status_code == 503
