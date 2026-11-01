@@ -195,6 +195,10 @@ class PlatformControlPlane:
             identity.tenant_id, identity.application_id)
         if not set(tools).issubset(active_tool_grants):
             raise PermissionError("Agent manifest references a tool without an active owner grant")
+        # The application principal must independently hold each tool capability.
+        # Owner approval and app authorization are separate permission boundaries.
+        if not set(tools).issubset(identity.capabilities):
+            raise PermissionError("Agent manifest references a tool not granted to the application principal")
         canonical = self._json(manifest)
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         with self._session() as db:
