@@ -208,6 +208,32 @@ def test_spark_memory_is_opt_in_and_permission_checked(tmp_path, monkeypatch):
     assert control.get_execution(identity, execution_id).status in {"failed", "dead_letter"}
 
 
+def test_worker_enforces_execution_deadline_after_bounded_provider_wait(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(
+        tmp_path, tool=False
+    )
+    monkeypatch.setenv("ORACLE_ARC_EXECUTION_TIMEOUT_SECONDS", "1")
+
+    class SlowGateway:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            time.sleep(1.05)
+            return {"message": {"content": "Too late.", "tool_calls": []}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", SlowGateway)
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    with pytest.raises(TimeoutError, match="execution_deadline_exceeded"):
+        worker.run_once()
+    assert control.get_execution(identity, execution_id).status == "queued"
+
+
 def test_worker_checks_cancellation_immediately_after_provider_returns(tmp_path, monkeypatch):
     import core.platform_worker as worker_module
 
