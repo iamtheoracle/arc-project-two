@@ -151,7 +151,7 @@ def test_remote_model_adapter_preserves_tool_calls_and_usage(monkeypatch):
     class FakeRemoteClient:
         def chat_response(self, payload, *, tools=None, temperature=0.4, model=None):
             assert model == "remote-model"
-            assert tools and tools[0]["function"]["name"] == "tool.calculate"
+            assert tools and tools[0]["function"]["name"] == "tool_calculate"
             assert payload["messages"][-1]["content"] == "calculate 6 * 7"
             return {
                 "message": {
@@ -159,7 +159,7 @@ def test_remote_model_adapter_preserves_tool_calls_and_usage(monkeypatch):
                     "tool_calls": [{
                         "id": "call_123",
                         "type": "function",
-                        "function": {"name": "tool.calculate", "arguments": "{\\"expression\\":\\"6 * 7\\"}"},
+                        "function": {"name": "tool_calculate", "arguments": "{\\"expression\\":\\"6 * 7\\"}"},
                     }],
                 },
                 "prompt_eval_count": 12,
@@ -175,7 +175,7 @@ def test_remote_model_adapter_preserves_tool_calls_and_usage(monkeypatch):
     gateway = ModelGateway(registry=registry, provider_id="openrouter")
     response = gateway.chat("remote-model", [{"role": "user", "content": "calculate 6 * 7"}],
                             tools=[{"type": "function", "function": {
-                                "name": "tool.calculate", "parameters": {"type": "object"},
+                                "name": "tool_calculate", "parameters": {"type": "object"},
                             }}])
     assert response["message"]["tool_calls"][0]["id"] == "call_123"
     assert response["prompt_eval_count"] == 12
