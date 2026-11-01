@@ -14,6 +14,7 @@ from typing import Any, Callable
 from core.concierge_runtime import ConciergeWorkflowStore, ConciergeError
 from core.tenant_security import TenantSecurityStore, AuthorizationError
 from core.platform_control_plane import PlatformControlPlane
+from core.model_discovery import LocalOllamaDiscovery, DiscoveryError
 
 router=APIRouter(prefix="/v1/platform",tags=["platform-identity"])
 _CONCIERGE_EXECUTORS: dict[str, Callable] = {}
@@ -274,6 +275,41 @@ class ExecutionCreate(BaseModel):
     max_attempts: int = Field(default=3, ge=1, le=10)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
 
+
+
+
+def _model_discovery() -> LocalOllamaDiscovery:
+    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+    try:
+        return LocalOllamaDiscovery(host=host)
+    except ValueError as exc:
+        raise HTTPException(503, "Local model discovery is not safely configured") from exc
+
+
+@router.get("/models/discovered")
+def discover_local_models(limit: int = 100, identity=Depends(require_application)):
+    try:
+        _store().require(identity, "model.route.read")
+        return {"provider": "ollama", "models": _model_discovery().public_inventory(limit)}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except DiscoveryError as exc:
+        raise HTTPException(503, str(exc))
+
+
+@router.get("/providers/ollama/health")
+def local_ollama_health(identity=Depends(require_application)):
+    try:
+        _store().require(identity, "model.route.read")
+        health = _model_discovery().health()
+        return {"provider_id": health.provider_id, "healthy": health.healthy,
+                "status": health.status, "version": health.version}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except DiscoveryError as exc:
+        raise HTTPException(503, str(exc))
 
 @router.post("/agents/versions", status_code=201)
 def register_agent_version(body: AgentVersionCreate, identity=Depends(require_application)):
