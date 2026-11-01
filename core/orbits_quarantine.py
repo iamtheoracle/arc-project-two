@@ -271,7 +271,7 @@ class DocumentQuarantineStore:
             rows = db.execute(
                 """SELECT action,sha256,occurred_at FROM arc_document_quarantine_audit
                 WHERE asset_id=? AND tenant_id=? AND application_id=? AND principal_id=?
-                ORDER BY occurred_at,event_id""",
+                ORDER BY rowid""",
                 (asset_id, identity.tenant_id, identity.application_id, identity.principal_id),
             ).fetchall()
         return [dict(row) for row in rows]
