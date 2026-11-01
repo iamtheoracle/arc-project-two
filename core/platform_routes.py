@@ -8,7 +8,7 @@ from dataclasses import asdict
 import hmac
 import os
 from pathlib import Path
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 import asyncio
 import json
@@ -195,7 +195,7 @@ def ingest_platform_document(body: DocumentIngest, identity=Depends(require_appl
 
 
 @router.get("/documents/search")
-def search_platform_documents(query: str = Field(min_length=2, max_length=2000),
+def search_platform_documents(query: str = Query(min_length=2, max_length=2000),
                                limit: int = 5, identity=Depends(require_application)):
     try:
         store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
