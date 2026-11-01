@@ -4,6 +4,7 @@ import pytest
 
 from core.platform_control_plane import PlatformControlPlane
 from core.tenant_identity import TenantIdentityStore
+from core.tool_grants import ToolGrantStore
 
 
 CAPS = [
@@ -19,6 +20,11 @@ def setup(tmp_path, name="Tenant A", app="APP"):
     identities = TenantIdentityStore(path)
     issued = identities.provision(name, app, "principal-" + name.lower().replace(" ", "-"), CAPS)
     identity = identities.authenticate(issued["secret"])
+    # Tests model the separate owner grant plane; application capabilities alone
+    # must not silently authorize a tool.
+    grants = ToolGrantStore(path)
+    for tool_id in ("tool.search", "tool.calendar"):
+        grants.grant(identity.tenant_id, identity.application_id, tool_id, "test-owner")
     return path, identities, identity, PlatformControlPlane(path)
 
 
