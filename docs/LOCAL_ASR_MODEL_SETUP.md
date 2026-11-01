@@ -17,6 +17,21 @@ The runtime deliberately does not download or resolve a model name. It requires 
 `TRANSFORMERS_OFFLINE=1`, runs Podman with `--network=none`, and fails closed if the
 model directory or worker image is missing.
 
+## Provision a pinned model snapshot
+
+Install the provisioning-only dependency on a trusted host (not in the worker):
+
+```bash
+python -m pip install -r requirements-asr-provision.txt
+export ORACLE_ARC_ASR_MODEL_ID=Systran/faster-whisper-small
+export ORACLE_ARC_ASR_MODEL_REVISION=<immutable-hugging-face-commit>
+export ORACLE_ARC_ASR_MODEL_DIR=/opt/oracle-arc/models/whisper-small
+python scripts/install-asr-model.py
+```
+
+Use a reviewed immutable commit hash, not a floating branch or tag. The installer writes
+a SHA-256 manifest. Review the model's license and provenance before provisioning.
+
 ## Build and configure
 
 ```bash
