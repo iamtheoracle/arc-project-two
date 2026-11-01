@@ -1,8 +1,9 @@
-"""Trusted Oracle Arc platform worker runtime and daemon loop.
+"""Trusted Oracle Arc platform worker and permission-intersected tool lifecycle.
 
-The runner claims only its own application's work, revalidates policy before inference,
-renews leases while a model call is active, and atomically commits output plus provider
-usage. Tools remain denied until a scoped broker is implemented.
+Workers claim only their own application queue. Model tool calls are exposed only when the
+immutable agent manifest, live application-principal capability, live owner grant, and
+worker credential all authorize the same reviewed tool. Tool handlers are server-registered;
+agent-supplied code is never imported or evaluated.
 """
 from __future__ import annotations
 
@@ -14,15 +15,21 @@ from typing import Any
 
 from core.model_gateway import ModelGateway
 from core.platform_control_plane import PlatformControlPlane
+from core.platform_tool_registry import build_platform_tool_broker
+from core.scoped_tool_broker import ScopedToolBroker, ToolContext
+from core.tool_grants import ToolGrantStore
 from core.worker_identity import WorkerIdentityStore
 
 
 class PlatformWorker:
-    def __init__(self, database_path: str, worker_token: str):
+    def __init__(self, database_path: str, worker_token: str,
+                 tool_broker: ScopedToolBroker | None = None):
         self.database_path = database_path
         self.identities = WorkerIdentityStore(database_path)
         self.identity = self.identities.authenticate(worker_token)
         self.control = PlatformControlPlane(database_path)
+        self.tool_grants = ToolGrantStore(database_path)
+        self.tool_broker = tool_broker or build_platform_tool_broker()
         self.identities.validate(self.identity, "execution.claim")
         self.identities.validate(self.identity, "execution.complete")
 
@@ -54,12 +61,47 @@ class PlatformWorker:
         regions = json.loads(row["regions_json"])
         if row["classification"] not in classifications or row["region"] not in regions:
             raise PermissionError("Model route no longer permits this classification or region")
-        if manifest["allowed_tools"]:
-            raise PermissionError("No scoped tool broker is enabled; tool execution is denied")
         return dict(row), {
             "manifest": manifest,
             "route": {"provider_id": row["model_provider"], "model_id": row["model_id"]},
         }
+
+    def _application_tool_capabilities(self, row: dict[str, Any]) -> set[str]:
+        """Read current, unexpired principal capabilities; never trust a queued snapshot."""
+        now = int(time.time())
+        with sqlite3.connect(self.database_path, timeout=15) as db:
+            rows = db.execute("""SELECT c.capabilities_json
+                FROM arc_credentials c
+                JOIN arc_tenants t ON t.tenant_id=c.tenant_id
+                JOIN arc_applications a ON a.tenant_id=c.tenant_id AND a.application_id=c.application_id
+                JOIN arc_principals p ON p.principal_id=c.principal_id
+                WHERE c.tenant_id=? AND c.application_id=? AND c.principal_id=?
+                  AND c.revoked_at IS NULL AND c.expires_at>? AND t.status='active'
+                  AND a.status='active' AND p.status='active'""",
+                (row["tenant_id"], row["application_id"], row["principal_id"], now)).fetchall()
+        capabilities: set[str] = set()
+        for item in rows:
+            try:
+                parsed = json.loads(item[0])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, list):
+                capabilities.update(x for x in parsed if isinstance(x, str))
+        return capabilities
+
+    def _effective_tool_policy(self, row: dict[str, Any],
+                               manifest: dict[str, Any]) -> tuple[set[str], set[str], set[str], set[str]]:
+        manifest_tools = set(manifest.get("allowed_tools", []))
+        application_capabilities = self._application_tool_capabilities(row)
+        application_grants = {
+            tool_id for tool_id in manifest_tools
+            if tool_id in application_capabilities
+        }
+        owner_policy = self.tool_grants.active_tool_ids(
+            self.identity.tenant_id, self.identity.application_id
+        )
+        worker_capabilities = set(self.identity.capabilities)
+        return manifest_tools, application_grants, owner_policy, worker_capabilities
 
     @staticmethod
     def _messages(payload: dict[str, Any], manifest: dict[str, Any]) -> list[dict[str, str]]:
@@ -83,8 +125,9 @@ class PlatformWorker:
             safe.append({"role": item["role"], "content": content})
         system = (
             "You are " + manifest["display_name"] + ". " + manifest["description"]
-            + " Follow the user's request, state uncertainty, and never claim tools or actions "
-            "were used unless a trusted tool result is supplied. No tools are available in this run."
+            + " Follow the user's request and state uncertainty. You may use only tools "
+            "explicitly supplied in this request. Never claim a tool or external action "
+            "was used unless its trusted tool result appears in the conversation."
         )
         return [{"role": "system", "content": system}] + safe
 
@@ -93,6 +136,119 @@ class PlatformWorker:
         if isinstance(response, dict):
             return response.get(key, default)
         return getattr(response, key, default)
+
+    @staticmethod
+    def _mapping(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if callable(getattr(value, "model_dump", None)):
+            result = value.model_dump()
+            return result if isinstance(result, dict) else {}
+        if callable(getattr(value, "dict", None)):
+            result = value.dict()
+            return result if isinstance(result, dict) else {}
+        return {}
+
+    @staticmethod
+    def _tool_call(call: Any) -> tuple[str, dict[str, Any]]:
+        call_data = PlatformWorker._mapping(call)
+        function = PlatformWorker._mapping(call_data.get("function"))
+        name = function.get("name")
+        arguments = function.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except ValueError as exc:
+                raise ValueError("Model returned invalid tool-call JSON") from exc
+        if not isinstance(name, str) or not isinstance(arguments, dict):
+            raise ValueError("Model returned an invalid tool call")
+        return name, arguments
+
+    def _model_with_tools(self, gateway: ModelGateway, model: str,
+                          messages: list[dict[str, Any]], execution_id: str,
+                          worker_id: str, initial_row: dict[str, Any],
+                          manifest: dict[str, Any]) -> tuple[str, dict[str, int]]:
+        usage: dict[str, int] = {}
+        max_tool_rounds = 4
+        for round_index in range(max_tool_rounds + 1):
+            self.identities.validate(self.identity, "execution.complete")
+            row, context = self._execution_context(execution_id, worker_id)
+            manifest_tools, app_grants, owner_policy, worker_capabilities = (
+                self._effective_tool_policy(row, context["manifest"])
+            )
+            schemas = self.tool_broker.schemas(
+                manifest_tools=manifest_tools,
+                application_grants=app_grants,
+                owner_policy=owner_policy,
+                worker_capabilities=worker_capabilities,
+            )
+            if manifest_tools and not schemas:
+                raise PermissionError("No declared agent tools remain authorized by all four permission boundaries")
+            response = gateway.chat(
+                model, messages, tools=schemas or None, temperature=0.2
+            )
+            for metric, key in (("input_tokens", "prompt_eval_count"),
+                                ("output_tokens", "eval_count")):
+                quantity = self._field(response, key)
+                if isinstance(quantity, int) and not isinstance(quantity, bool) and quantity >= 0:
+                    usage[metric] = usage.get(metric, 0) + quantity
+
+            message = self._field(response, "message", {})
+            content = self._field(message, "content", "")
+            if not isinstance(content, str):
+                content = ""
+            calls = self._field(message, "tool_calls", []) or []
+            if not calls:
+                if not content.strip():
+                    raise RuntimeError("model_empty_response")
+                return content, usage
+            if round_index >= max_tool_rounds:
+                raise RuntimeError("tool_call_round_limit_exceeded")
+
+            normalized_calls = []
+            for call in calls:
+                name, arguments = self._tool_call(call)
+                normalized_calls.append({
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
+                })
+            # The provider contract requires non-empty text, even for an assistant
+            # message whose only content is a tool-call list.
+            messages.append({
+                "role": "assistant",
+                "content": content if content.strip() else " ",
+                "tool_calls": normalized_calls,
+            })
+
+            for name, arguments in zip(
+                [self._tool_call(call)[0] for call in calls], 
+                [self._tool_call(call)[1] for call in calls],
+            ):
+                # Refresh every boundary immediately before each consequential tool call.
+                self.identities.validate(self.identity, "execution.complete")
+                latest_row, latest_context = self._execution_context(execution_id, worker_id)
+                manifest_tools, app_grants, owner_policy, worker_capabilities = (
+                    self._effective_tool_policy(latest_row, latest_context["manifest"])
+                )
+                result = self.tool_broker.execute(
+                    name, arguments,
+                    context=ToolContext(
+                        tenant_id=latest_row["tenant_id"],
+                        application_id=latest_row["application_id"],
+                        execution_id=execution_id,
+                        principal_id=latest_row["principal_id"],
+                    ),
+                    manifest_tools=manifest_tools,
+                    application_grants=app_grants,
+                    owner_policy=owner_policy,
+                    worker_capabilities=worker_capabilities,
+                )
+                messages.append({
+                    "role": "tool",
+                    "name": name,
+                    "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                })
+        raise RuntimeError("model_tool_loop_terminated_unexpectedly")
 
     def _heartbeat_loop(self, execution_id: str, lease_seconds: int,
                         stop: threading.Event, lost: threading.Event) -> None:
@@ -137,21 +293,13 @@ class PlatformWorker:
             row, context = self._execution_context(execution.execution_id, self.identity.worker_id)
             payload = json.loads(row["input_json"])
             messages = self._messages(payload, context["manifest"])
-            # Revalidate worker revocation and policy immediately before model invocation.
             self.identities.validate(self.identity, "execution.complete")
             gateway = ModelGateway(provider_id=context["route"]["provider_id"])
-            response = gateway.chat(context["route"]["model_id"], messages, temperature=0.2)
-            message = self._field(response, "message", {})
-            output_text = self._field(message, "content")
-            if not isinstance(output_text, str) or not output_text.strip():
-                raise RuntimeError("model_empty_response")
-            usage = {}
-            prompt_tokens = self._field(response, "prompt_eval_count")
-            output_tokens = self._field(response, "eval_count")
-            if isinstance(prompt_tokens, int) and prompt_tokens >= 0:
-                usage["input_tokens"] = prompt_tokens
-            if isinstance(output_tokens, int) and output_tokens >= 0:
-                usage["output_tokens"] = output_tokens
+            output_text, usage = self._model_with_tools(
+                gateway, context["route"]["model_id"], messages,
+                execution.execution_id, self.identity.worker_id,
+                row, context["manifest"],
+            )
             result = {
                 "content": output_text,
                 "agent_id": execution.agent_id,
@@ -166,8 +314,8 @@ class PlatformWorker:
                 execution.execution_id, self.identity.worker_id, result, usage
             ):
                 raise RuntimeError("execution_lease_lost")
-            return {"execution_id": execution.execution_id, "status": "succeeded", "output": result,
-                    "usage": usage}
+            return {"execution_id": execution.execution_id, "status": "succeeded",
+                    "output": result, "usage": usage}
         except Exception as exc:
             policy_failure = isinstance(exc, (PermissionError, ValueError))
             raw_code = str(exc).lower().replace(" ", "_")
@@ -195,8 +343,6 @@ class PlatformWorker:
                 if result is None:
                     stop_event.wait(poll_interval)
             except Exception:
-                # Failures are recorded against the execution; the daemon stays available
-                # for later work rather than terminating on one provider or payload error.
                 stop_event.wait(min(5.0, max(poll_interval, 0.5)))
 
 
