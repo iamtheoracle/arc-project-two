@@ -19,7 +19,8 @@ from core.platform_worker import PlatformWorker
 CAPABILITIES = [
     "agent.register", "agent.read", "agent.execute", "agent.execution.read",
     "model.route.manage", "model.route.use", "quota.manage", "usage.read", "reasoning",
-    "tool.calculate", "spark.memory.read", "spark.memory.write", "agent.execution.cancel",
+    "tool.calculate", "tool.document_search", "document.index", "document.search",
+    "spark.memory.read", "spark.memory.write", "agent.execution.cancel",
 ]
 
 
@@ -234,6 +235,63 @@ def test_worker_checks_cancellation_immediately_after_provider_returns(tmp_path,
     with pytest.raises(PermissionError, match="Execution lease"):
         worker.run_once()
     assert control.get_execution(identity, execution_id).status == "cancelled"
+
+
+def test_worker_document_search_uses_live_scoped_identity_and_source_attribution(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+    from core.document_retrieval import DocumentRetrievalStore
+
+    database, identities, identity, control, grants, _old_execution, _, worker_id, worker_token = provision(
+        tmp_path, tool=False
+    )
+    documents = DocumentRetrievalStore(database)
+    documents.index_text(
+        identity, "Oracle Arc runbook", "https://docs.example.test/runbook",
+        "Oracle Arc workers use authenticated execution identities and local Ollama inference.",
+    )
+    grants.grant(identity.tenant_id, identity.application_id, "tool.document_search", "owner-test")
+    manifest = {
+        "display_name": "Research",
+        "description": "A source-aware research agent",
+        "required_capabilities": ["reasoning"],
+        "allowed_tools": ["tool.document_search"],
+        "model_routes": ["local-default"],
+        "runtime": "oracle-arc-agent-v1",
+    }
+    control.register_agent(identity, "research", "1.0.1", manifest)
+    execution_id = control.submit_execution(
+        identity, "research", "1.0.1", "local-default",
+        {"prompt": "Find my runbook", "messages": [{"role": "user", "content": "Find my runbook"}]},
+        classification="private", region="local", max_attempts=2,
+    )
+    captured = {}
+
+    class SearchGateway:
+        def __init__(self, **_kwargs):
+            self.calls = 0
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            self.calls += 1
+            if self.calls == 1:
+                assert tools and tools[0]["function"]["name"] == "tool_document_search"
+                return {"message": {"content": "", "tool_calls": [{
+                    "id": "search-1",
+                    "function": {"name": "tool_document_search", "arguments": {"query": "authenticated execution"}},
+                }]}}
+            captured["tool_result"] = json.loads(messages[-1]["content"])
+            return {"message": {"content": "The runbook is available.", "tool_calls": []}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", SearchGateway)
+    worker = PlatformWorker(database, worker_token)
+    result = worker.run_once()
+    assert result["status"] == "succeeded"
+    assert captured["tool_result"]["results"][0]["source_uri"] == "https://docs.example.test/runbook"
+    assert "UNTRUSTED SOURCE DATA" in captured["tool_result"]["untrusted_context"]
+    assert result["output"]["content"] == "The runbook is available."
+    assert control.get_execution(identity, execution_id).status == "succeeded"
 
 
 def test_worker_executes_only_intersection_of_manifest_app_owner_and_worker_grants(tmp_path, monkeypatch):
