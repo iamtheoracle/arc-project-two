@@ -525,19 +525,34 @@ class PlatformControlPlane:
                 (status, error_code, now, execution_id))
             return True
 
-    def recover_expired_leases(self) -> dict[str, int]:
+    def recover_expired_leases(self, tenant_id: str | None = None,
+                               application_id: str | None = None) -> dict[str, int]:
+        if (tenant_id is None) != (application_id is None):
+            raise ValueError("Tenant and application scope must be supplied together")
         now = int(time.time())
         with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
-            expired = db.execute("""SELECT execution_id,attempt,max_attempts FROM arc_executions
-                WHERE status='running' AND lease_expires_at<=?""", (now,)).fetchall()
+            if tenant_id is None:
+                expired = db.execute("""SELECT execution_id,attempt,max_attempts FROM arc_executions
+                    WHERE status='running' AND lease_expires_at<=?""", (now,)).fetchall()
+            else:
+                expired = db.execute("""SELECT execution_id,attempt,max_attempts FROM arc_executions
+                    WHERE tenant_id=? AND application_id=? AND status='running'
+                    AND lease_expires_at<=?""", (tenant_id, application_id, now)).fetchall()
             counts = {"requeued": 0, "dead_letter": 0}
             for row in expired:
                 status = "queued" if row["attempt"] < row["max_attempts"] else "dead_letter"
-                db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
-                    lease_owner=NULL,lease_expires_at=NULL,updated_at=?
-                    WHERE execution_id=? AND status='running' AND lease_expires_at<=?""",
-                    (status, now, row["execution_id"], now))
+                if tenant_id is None:
+                    db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
+                        lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+                        WHERE execution_id=? AND status='running' AND lease_expires_at<=?""",
+                        (status, now, row["execution_id"], now))
+                else:
+                    db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
+                        lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+                        WHERE execution_id=? AND tenant_id=? AND application_id=?
+                        AND status='running' AND lease_expires_at<=?""",
+                        (status, now, row["execution_id"], tenant_id, application_id, now))
                 counts["requeued" if status == "queued" else "dead_letter"] += 1
             return counts
 
