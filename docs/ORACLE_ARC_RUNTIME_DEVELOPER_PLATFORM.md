@@ -78,16 +78,21 @@ putting its name in a manifest.
 - Worker secrets are random, returned once, and stored as SHA-256 verifiers.
 - A worker belongs to one tenant/application and cannot claim another application's
   tasks, even if it guesses an execution ID.
-- Worker operations re-check worker revocation, expiry and tenant/application
-  status.
-- A worker can claim only an active agent version whose runtime ID is in its
-  server-approved runtime set.
+- Worker operations re-check worker revocation, expiry, tenant/application status,
+  provisioning principal and active application membership.
+- Immediately before execution, and again during heartbeat, metering and completion,
+  the worker revalidates the exact submitting application credential, principal,
+  membership, policy version, required capabilities, tool grants and model-route
+  snapshot. Revocation or policy drift fences the task.
+- A worker can claim only an active agent version whose runtime ID is both
+  server-allowlisted and backed by a platform-installed handler.
 - Heartbeats, usage writes, completion and failure require the current unexpired
   lease and exact worker ownership.
 - Usage events have stable event IDs; identical retries are idempotent and
   conflicting reuse is rejected.
-- Retry attempts are bounded. Expired leases can be recovered by the control
-  plane; exhausted work moves to the dead-letter state.
+- Retry attempts are bounded and use capped exponential backoff. Expired leases
+  are recovered only within the worker's tenant/application scope; exhausted work
+  moves to the dead-letter state.
 - Cancelling a running task clears its lease, fencing a late worker completion.
 
 ## Example developer sequence
@@ -107,17 +112,35 @@ putting its name in a manifest.
    idempotent usage and completes or fails it.
 8. Read execution state and aggregate usage using the application credential.
 
+## Trusted runtime execution
+
+The repository includes a supervised polling runner:
+
+```bash
+ORACLE_ARC_DB_PATH=data/oracle_arc.sqlite3 \\
+ORACLE_ARC_WORKER_TOKEN='arcw1....' \\
+python -m core.platform_worker_runner
+```
+
+The installed `oracle-arc-agent-v1` runtime executes text-only workloads through
+the configured local Ollama model route. It validates the message payload through
+the shared model gateway, renews the lease while inference is running, records
+provider token counts where available, and completes or fails the execution.
+The first runtime refuses remote Ollama hosts and manifests that declare tools
+until reviewed tool adapters exist. Agent publication is also restricted to
+model routes supported by the installed runtime.
+
 ## Deliberate implementation boundary
 
-This tranche adds independent worker authentication and a worker-facing
-lease/usage/lifecycle API. It is a real execution-control surface, but it is not
-yet a general-purpose code hosting service or a fully wired provider runtime.
-The current worker service can securely claim, heartbeat, meter, complete and
-fail execution records. It does **not** yet invoke every configured provider or
-load arbitrary third-party agent code. Provider-specific runtime execution,
-tool sandboxing, worker process supervision, automatic recovery scheduling,
-distributed quota enforcement and production migration/restore procedures remain
-separate engineering gates.
+This is a working **first-party local text runtime**, not a general-purpose code
+hosting service or full third-party agent sandbox. Remote OpenRouter, Groq and
+Gemini execution is not yet wired into this runtime. Declared tool IDs and their
+permissions are validated and persisted, but the runtime refuses to invoke them
+until server-installed, sandboxed adapters and per-call authorization are
+implemented. There is no arbitrary developer code upload/import/execute path.
+Production worker isolation, supervised deployment manifests, distributed quota
+enforcement, database migration/restore drills, adversarial integration tests
+and CI verification remain separate engineering gates.
 
 No customer workload, remote provider egress, arbitrary code execution, production
-deployment or external side effect is enabled by this document.
+deployment or external side effect is enabled.
