@@ -149,3 +149,36 @@ def test_project_one_application_identity_and_owner_tool_governance_share_the_li
     })
     assert history.status_code==200
     assert history.json()["data"][0]["status"]=="revoked"
+
+
+def test_legacy_tenant_identity_schema_isolated_from_project_one_platform_schema(client,tmp_path):
+    platform_tenant=client.post("/v1/platform/tenants",headers=owner(),
+        json={"name":"Platform Tenant"})
+    assert platform_tenant.status_code==201
+    platform_app=client.post(
+        f"/v1/platform/tenants/{platform_tenant.json()['tenant_id']}/applications",
+        headers=owner(),json={"name":"Project One"}
+    )
+    assert platform_app.status_code==201
+    platform_credential=client.post(
+        f"/v1/platform/tenants/{platform_tenant.json()['tenant_id']}/applications/{platform_app.json()['application_id']}/credentials",
+        headers=owner(),json={"principal_id":"platform-user","capabilities":["agent.read"]}
+    )
+    assert platform_credential.status_code==201
+
+    # The legacy tenant API remains available but must not initialize incompatible
+    # arc_credentials / arc_principals layouts in the platform database.
+    legacy=client.post("/v1/tenants/provision",headers=owner(),json={
+        "tenant_name":"Legacy Tenant","application_name":"Legacy App",
+        "principal_id":"legacy-user","capabilities":["inference.chat"]
+    })
+    assert legacy.status_code==201,legacy.text
+    legacy_identity=client.get("/v1/tenants/identity",
+        headers={"Authorization":"Bearer "+legacy.json()["secret"]})
+    assert legacy_identity.status_code==200
+
+    platform_identity=client.get("/v1/platform/identity",
+        headers={"Authorization":"Bearer "+platform_credential.json()["credential"]})
+    assert platform_identity.status_code==200
+    assert platform_identity.json()["application_id"]==platform_app.json()["application_id"]
+    assert (tmp_path/"platform_tenant_identity.sqlite3").exists()
