@@ -2,7 +2,7 @@
 
 **Working branch:** `feat/oracle-arc-network-platform-architecture`  
 **Repository:** `iamtheoracle/arc-project-two`  
-**Latest recorded commit:** `a60db0fc33687f4586497e4ae8bb1390bb3c3979`  
+**Latest recorded commit:** `d3cec2d005bfeadabf4f4de1cc39fae74f95169d`  
 **State:** Active development; not merged or deployed.
 
 ## Completed in this working branch
@@ -242,3 +242,7 @@ This branch contains architecture documentation and focused security hardening. 
 - Relevant commits in this slice: `94ed2c26e36f660465ad1f0b8a062762f008f9ef`, `c14f3830afdd64d7af93104eb157eb64903d3fdf`, `3ea5457876e776e75ad15777ad86c896251589b2`, `97ce59d367d7c4b44f603794f617b3fc244fb640`, `9d2dd8541fa35dd75afc6b41b1987bc8e94e315d`, `deb69a8541447b5ae28826bdf944b70becf5c1e7`, `3cfcc6c0016df2edae1954fe1bcdad605624056d`, `a5c3edcdd8533c33d3186ad53d6b99a08bff3f46`, `a3d6e4a0b70d271380c92b9b7dc27a4bebf79f3c`, `a9f158dfb635ec2c691742d4ff066b99bd62e66d`, `15b83a5afc6290ce05fea596dfa581d0517bc4eb`, `cce9c9a28147da4fcb816f35a647ce68a8600d07`, `47c692c0c79e1265096dcc10e623ab2de2c56334` and `a60db0fc33687f4586497e4ae8bb1390bb3c3979`.
 - **Validation remains pending:** source tests have been extended but not executed in this session. No passing CI result is claimed. No provider credentials, remote egress, customer traffic or production deployment have been enabled.
 - Remaining major gates: sandboxed tool adapters and per-call authorization; execution timeout/cancellation that can interrupt in-flight provider calls; distributed queue/quota coordination; dead-letter inspection/replay; runtime isolation and deployment hardening; migrations/restore drills; full integration/adversarial tests.
+
+
+- Developer API coverage expanded in `tests/test_platform_routes.py`: a full authenticated API flow provisions an application, configures a local model route and quota, publishes an agent, registers a worker, submits an execution and reads usage; a second flow validates remote residency and classification restrictions. Commit: `8aa9108cfad23379783905e792df29637adb6dd3`.
+- Route selection now separately requires `model.route.use`, in addition to execution permission. Commit: `d3cec2d005bfeadabf4f4de1cc39fae74f95169d`.
