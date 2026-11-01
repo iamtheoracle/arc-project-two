@@ -10,12 +10,18 @@ def test_provider_uses_server_key_and_parses_chat_response():
     def handler(request):
         seen["authorization"] = request.headers["authorization"]
         seen["body"] = request.read().decode()
-        return httpx.Response(200, json={"choices": [{"message": {"content": "Hello from provider"}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Hello from provider"}}],
+                                          "usage": {"prompt_tokens": 11, "completion_tokens": 7}})
     client = httpx.Client(transport=httpx.MockTransport(handler))
     provider = OpenAICompatibleProvider(config, api_key="server-secret", model="test-model", client=client)
-    assert provider.chat({"messages": [{"role": "user", "content": "Hello"}]}) == "Hello from provider"
+    result = provider.chat({"model": "route-selected-model",
+                            "messages": [{"role": "user", "content": "Hello"}],
+                            "temperature": 0.8})
+    assert result == {"answer": "Hello from provider"}
     assert seen["authorization"] == "Bearer server-secret"
-    assert '"model":"test-model"' in seen["body"]
+    assert '"model":"route-selected-model"' in seen["body"]
+    assert '"temperature":0.8' in seen["body"]
+    assert result["input_tokens"] == 11 and result["output_tokens"] == 7
 
 
 def test_provider_refuses_missing_credentials():
@@ -32,7 +38,8 @@ def test_gemini_uses_api_key_header_not_bearer():
         return httpx.Response(200, json={"choices": [{"message": {"content": "Gemini response"}}]})
     client = httpx.Client(transport=httpx.MockTransport(handler))
     provider = OpenAICompatibleProvider(config, api_key="gemini-secret", client=client)
-    assert provider.chat({"messages": []}) == "Gemini response"
+    assert provider.chat({"model": "gemini-route-model",
+                           "messages": [{"role": "user", "content": "hello"}]}) == {"answer": "Gemini response"}
     assert seen["x-goog-api-key"] == "gemini-secret"
     assert "authorization" not in seen
 
