@@ -513,3 +513,62 @@ def cancel_platform_execution(execution_id: str, identity=Depends(require_applic
         return {"execution_id": execution_id, "status": "cancelled"}
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
+
+
+# Read-only console collections. Every query is constrained by the authenticated
+# tenant, application and principal; caller-supplied scope is never trusted.
+import sqlite3 as _sqlite3
+import json as _json
+
+@router.get("/agents")
+def list_platform_agents(identity=Depends(require_application)):
+    if "agent.read" not in identity.capabilities:
+        raise HTTPException(403,"Agent read capability is not granted")
+    cp=_control_plane()
+    with _sqlite3.connect(cp.database_path) as db:
+        db.row_factory=_sqlite3.Row
+        rows=db.execute("""SELECT tenant_id,application_id,agent_id,version,manifest_json,manifest_digest
+            FROM arc_agent_versions WHERE tenant_id=? AND application_id=? AND status='active'
+            ORDER BY agent_id,created_at DESC""",(identity.tenant_id,identity.application_id)).fetchall()
+    return {"data":[{"tenant_id":x["tenant_id"],"application_id":x["application_id"],
+        "agent_id":x["agent_id"],"version":x["version"],"manifest":_json.loads(x["manifest_json"]),
+        "manifest_digest":x["manifest_digest"]} for x in rows]}
+
+@router.get("/model-routes")
+def list_platform_model_routes(identity=Depends(require_application)):
+    if "model.route.manage" not in identity.capabilities and "model.route.use" not in identity.capabilities:
+        raise HTTPException(403,"Model route read capability is not granted")
+    cp=_control_plane()
+    with _sqlite3.connect(cp.database_path) as db:
+        db.row_factory=_sqlite3.Row
+        rows=db.execute("""SELECT route_id,provider_id,model_id,data_classifications_json,regions_json
+            FROM arc_model_routes WHERE tenant_id=? AND application_id=? AND enabled=1 ORDER BY route_id""",
+            (identity.tenant_id,identity.application_id)).fetchall()
+    return {"data":[{"route_id":x["route_id"],"provider_id":x["provider_id"],"model_id":x["model_id"],
+        "data_classifications":_json.loads(x["data_classifications_json"]),
+        "regions":_json.loads(x["regions_json"])} for x in rows]}
+
+@router.get("/quotas")
+def read_application_quota(identity=Depends(require_application)):
+    if "quota.read" not in identity.capabilities and "quota.manage" not in identity.capabilities:
+        raise HTTPException(403,"Quota read capability is not granted")
+    cp=_control_plane()
+    with _sqlite3.connect(cp.database_path) as db:
+        db.row_factory=_sqlite3.Row
+        row=db.execute("""SELECT window_seconds,max_executions,max_concurrent,max_input_bytes
+            FROM arc_app_quotas WHERE tenant_id=? AND application_id=?""",
+            (identity.tenant_id,identity.application_id)).fetchone()
+    return {"application_id":identity.application_id,"quota":dict(row) if row else None}
+
+@router.get("/executions")
+def list_platform_executions(limit:int=50,identity=Depends(require_application)):
+    if "agent.execution.read" not in identity.capabilities:
+        raise HTTPException(403,"Execution read capability is not granted")
+    if not 1<=limit<=100: raise HTTPException(422,"Limit must be between 1 and 100")
+    cp=_control_plane()
+    with _sqlite3.connect(cp.database_path) as db:
+        db.row_factory=_sqlite3.Row
+        rows=db.execute("""SELECT * FROM arc_executions WHERE tenant_id=? AND application_id=?
+            AND principal_id=? ORDER BY created_at DESC LIMIT ?""",
+            (identity.tenant_id,identity.application_id,identity.principal_id,limit)).fetchall()
+    return {"data":[asdict(cp._execution(x)) for x in rows]}
