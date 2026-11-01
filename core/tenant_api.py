@@ -218,6 +218,7 @@ import hmac as _hmac
 from fastapi import Query as _Query
 from pydantic import BaseModel as _BaseModel, Field as _Field
 from core.tool_grants import ToolGrantStore
+from core.platform_tool_registry import PLATFORM_TOOL_IDS
 
 owner_tools_router=APIRouter(prefix="/owner/tool-grants",tags=["owner-tool-governance"])
 
@@ -246,6 +247,8 @@ def list_owner_tool_grants(tenant_id:str|None=_Query(default=None,min_length=5,m
 
 @owner_tools_router.post("",status_code=201,dependencies=[Depends(_require_owner_tool_admin)])
 def create_owner_tool_grant(body:OwnerToolGrantCreate):
+    if body.tool_id not in PLATFORM_TOOL_IDS:
+        raise HTTPException(422,"Tool is not present in the trusted platform registry")
     actor="owner-control-plane"
     try:return _tool_grant_store().grant(body.tenant_id,body.application_id,body.tool_id,actor)
     except LookupError as exc:raise HTTPException(404,str(exc))
