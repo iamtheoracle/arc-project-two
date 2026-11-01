@@ -195,6 +195,8 @@ class PlatformControlPlane:
             any(not isinstance(x, str) or not _ID.fullmatch(x) for x in tools) or
             len(set(tools)) != len(tools)):
             raise ValueError("Agent tools must be a unique list of normalized tool IDs")
+        if not set(tools).issubset(identity.capabilities):
+            raise PermissionError("Application identity lacks one or more agent tool grants")
         installed_tools = default_tool_registry()
         for tool_id in tools:
             installed_tools.get(tool_id)
