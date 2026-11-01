@@ -133,6 +133,11 @@ def test_worker_executes_only_intersection_of_manifest_app_owner_and_worker_gran
     assert result["usage"] == {"input_tokens": 15, "output_tokens": 5}
     assert plugins.calls == [("calculate", {"expression": "6 * 7"})]
     assert control.get_execution(identity, execution_id).status == "succeeded"
+    audit = grants.invocation_audit(identity.tenant_id, identity.application_id)
+    assert len(audit) == 1
+    assert audit[0]["outcome"] == "succeeded"
+    assert audit[0]["execution_id"] == execution_id
+    assert audit[0]["worker_id"] == worker_id
 
 
 def test_worker_fails_closed_immediately_after_owner_tool_grant_revocation(tmp_path, monkeypatch):
@@ -276,27 +281,27 @@ def test_worker_rechecks_owner_grant_after_model_requests_tool(tmp_path, monkeyp
         database, worker_token,
         tool_broker=build_platform_tool_broker(plugins),
     )
-    original_active_ids = worker.tool_grants.active_tool_ids
-    checks = 0
+    grant_id = grants.list(identity.tenant_id, identity.application_id)[0]["grant_id"]
+    original_guard = worker.tool_grants.execution_guard
+    revoked = False
 
-    def revoke_between_model_selection_and_invocation(tenant_id, application_id):
-        nonlocal checks
-        checks += 1
-        if checks == 2:
-            active = worker.tool_grants.list(tenant_id, application_id)
-            grant_id = next(item["grant_id"] for item in active if item["status"] == "active")
-            assert worker.tool_grants.revoke(grant_id, "owner-race-test")
-        return original_active_ids(tenant_id, application_id)
+    def revoke_immediately_before_invocation(*args):
+        nonlocal revoked
+        if not revoked:
+            assert grants.revoke(grant_id, "owner-race-test")
+            revoked = True
+        return original_guard(*args)
 
-    monkeypatch.setattr(
-        worker.tool_grants, "active_tool_ids",
-        revoke_between_model_selection_and_invocation,
-    )
+    monkeypatch.setattr(worker.tool_grants, "execution_guard", revoke_immediately_before_invocation)
 
-    with pytest.raises(PermissionError, match="effective execution permission set"):
+    with pytest.raises(PermissionError, match="Owner tool grant is no longer active"):
         worker.run_once()
 
-    assert checks >= 2
+    assert revoked
+    audit = grants.invocation_audit(identity.tenant_id, identity.application_id)
+    assert len(audit) == 1 and audit[0]["outcome"] == "denied"
+    assert audit[0]["execution_id"] == execution_id
+    assert audit[0]["worker_id"] == worker_id
     assert plugins.calls == []
     assert control.get_execution(identity, execution_id).status in {"failed", "dead_letter"}
 
@@ -364,3 +369,27 @@ def test_owner_revocation_linearizes_with_an_in_flight_tool_call(tmp_path, monke
     with pytest.raises(PermissionError):
         worker_again.run_once()
     assert control.get_execution(identity, second_execution).status in {"failed", "dead_letter"}
+
+
+
+def test_tool_invocation_failure_is_durably_audited(tmp_path):
+    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(tmp_path)
+    with pytest.raises(RuntimeError, match="handler failed"):
+        with grants.execution_guard(identity.tenant_id, identity.application_id,
+                                    "tool.calculate", execution_id, worker_id):
+            raise RuntimeError("handler failed")
+    audit = grants.invocation_audit(identity.tenant_id, identity.application_id)
+    assert len(audit) == 1
+    assert audit[0]["outcome"] == "failed"
+    assert audit[0]["execution_id"] == execution_id
+
+
+def test_tool_invocation_audit_is_tenant_and_application_scoped(tmp_path):
+    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(tmp_path)
+    with grants.execution_guard(identity.tenant_id, identity.application_id,
+                                "tool.calculate", execution_id, worker_id):
+        pass
+    other_tenant = identities.create_tenant("Audit isolation tenant")
+    other_application = identities.create_application(other_tenant, "Other audit client")
+    assert grants.invocation_audit(other_tenant, other_application) == []
+    assert len(grants.invocation_audit(identity.tenant_id, identity.application_id)) == 1
