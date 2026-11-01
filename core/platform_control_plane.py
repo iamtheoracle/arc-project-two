@@ -103,6 +103,7 @@ class PlatformControlPlane:
               lease_owner TEXT, lease_expires_at INTEGER,
               idempotency_key TEXT,
               request_digest TEXT, credential_id TEXT, policy_version INTEGER,
+              route_id TEXT, classification TEXT, region TEXT,
               UNIQUE(tenant_id,application_id,idempotency_key)
             );
             CREATE INDEX IF NOT EXISTS arc_execution_claim
@@ -115,6 +116,12 @@ class PlatformControlPlane:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN credential_id TEXT")
             if "policy_version" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN policy_version INTEGER")
+            if "route_id" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN route_id TEXT")
+            if "classification" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN classification TEXT")
+            if "region" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN region TEXT")
             db.commit()
 
     def _connect(self):
@@ -377,12 +384,13 @@ class PlatformControlPlane:
                 db.execute("""INSERT INTO arc_executions
                     (execution_id,tenant_id,application_id,principal_id,agent_id,agent_version,
                      model_provider,model_id,status,attempt,max_attempts,input_json,created_at,
-                     updated_at,idempotency_key,request_digest,credential_id,policy_version)
-                    VALUES(?,?,?,?,?,?,?,?, 'queued',0,?,?,?,?,?,?,?,?)""",
+                     updated_at,idempotency_key,request_digest,credential_id,policy_version,
+                     route_id,classification,region)
+                    VALUES(?,?,?,?,?,?,?,?, 'queued',0,?,?,?,?,?,?,?,?,?,?,?)""",
                     (execution_id, identity.tenant_id, identity.application_id, identity.principal_id,
                      agent_id, version, route["provider_id"], route["model_id"], max_attempts,
                      input_json, now, now, idempotency_key, request_digest,
-                     identity.credential_id, identity.policy_version))
+                     identity.credential_id, identity.policy_version, route_id, classification, region))
             except sqlite3.IntegrityError:
                 if idempotency_key is None:
                     raise
