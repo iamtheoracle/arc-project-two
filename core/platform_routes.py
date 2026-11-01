@@ -345,6 +345,54 @@ def synthesize_platform_audio(body: AudioSynthesizeRequest, identity=Depends(req
         raise HTTPException(503, "Local speech synthesis is unavailable or failed")
 
 
+@router.post("/audio/sessions", status_code=201)
+def create_voice_session(identity=Depends(require_application)):
+    """Create a durable, principal-scoped voice session; raw audio is not retained."""
+    if "audio.capture" not in identity.capabilities:
+        raise HTTPException(403, "Audio capture capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    return VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).create(identity)
+
+
+@router.get("/audio/sessions/{session_id}")
+def get_voice_session(session_id: str, identity=Depends(require_application)):
+    if "audio.read" not in identity.capabilities:
+        raise HTTPException(403, "Audio session read capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    session = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    return session
+
+
+@router.get("/audio/sessions/{session_id}/events")
+def get_voice_session_events(session_id: str, after: int = 0, limit: int = 100,
+                              identity=Depends(require_application)):
+    if "audio.read" not in identity.capabilities:
+        raise HTTPException(403, "Audio session read capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    try:
+        events = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).events(
+            identity, session_id, after, limit)
+        return {"events": events, "count": len(events)}
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/cancel")
+def cancel_voice_session(session_id: str, identity=Depends(require_application)):
+    if "audio.cancel" not in identity.capabilities:
+        raise HTTPException(403, "Audio session cancellation capability is not granted")
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    try:
+        return VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).cancel(
+            identity, session_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
+
+
 @router.post("/orbits/process", status_code=200)
 def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_application)):
     """Run a verified media processor in the isolated ORBITS container."""
