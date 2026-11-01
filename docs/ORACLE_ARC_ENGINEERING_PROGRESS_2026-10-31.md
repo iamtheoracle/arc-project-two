@@ -194,3 +194,18 @@ This branch contains architecture documentation and focused security hardening. 
 - The API currently exposes submit/read/cancel and metering operations; worker claim/complete/fail/recovery remain internal control-plane methods and must be wired to a separately authenticated worker service before enabling workloads.
 - No customer workloads, third-party runtimes, external actions, production deployment or billing are enabled by this tranche.
 - Validation: changes and tests are committed to the working branch. No successful CI run or local test execution has been verified in this session; do not treat the tests as passing.
+
+
+## Runtime and developer platform — authenticated worker foundation
+
+- Added `core/platform_workers.py` with independent worker credentials, separate from application bearer credentials. Worker secrets are high-entropy, returned once, and stored as SHA-256 verifiers.
+- Worker identities are bound to exactly one tenant/application and an explicit server-approved runtime set. Registration requires `worker.register`; revocation requires `worker.manage`.
+- Agent publication now rejects runtime identifiers outside the server-side `ORACLE_ARC_TRUSTED_RUNTIME_IDS` allowlist (default: `oracle-arc-agent-v1`). A manifest cannot install or nominate arbitrary executable code.
+- Worker authentication and every worker operation revalidate revocation, expiry, tenant status and application status. Worker claim is tenant/application scoped and only claims active agent versions whose runtime is assigned to the worker.
+- Added worker API endpoints for registration, revocation, claim, heartbeat, usage metering, completion and failure. Worker lifecycle endpoints require the distinct worker bearer credential, not an application credential or caller-supplied worker ID.
+- Usage writes are now worker-lease-bound and idempotent using stable event IDs. Identical retries are harmless; reusing an event ID with different metric values is rejected. The former application-authenticated usage-write route was removed.
+- Added tests for independent credentials, cross-application claim isolation, runtime allowlisting, revocation, lease fencing and idempotent usage.
+- Added `docs/ORACLE_ARC_RUNTIME_DEVELOPER_PLATFORM.md` documenting the developer workflow, API contract, manifest shape and trust boundaries.
+- Commits in this tranche: `7172f6313e59ca61911ec67250514e538d92b123`, `0742185d3d7719b606a9982479a35fea933e88ff`, `d58e71d41c63ec1470095c82d7feb7cbb835850f`, `b8b9cfd2ab55306e85014681a22ef60f5827e982`, `f6222eef76325041e9bd286e304da2ae446f1d75`, `af205f58ffb1f6e3bfc1a5f3d22ea43961c59d20`, `428eec63b8af70415eed65604a3a9c0d29c7f5cb`, `c0db40ee271cbaa11a2db7304dccab446df4631d`, `b9edc125051ebf084c5e381f2bb904b317c237d6`, `dcf3b90743d027aa944ee7040d74910de4765a9e`, `583bbdb8663a89ced9fbb3d72af0c5ab2cf313e6`.
+- **Not yet complete:** the worker API provides secure execution leasing and lifecycle management, but no general-purpose trusted runtime runner has yet invoked configured model providers or sandboxed tool implementations. Provider/model route execution, trusted tool adapters, supervised worker process operation, automatic recovery scheduling, distributed quotas, adversarial integration tests, migrations/restore drills and CI verification remain pending.
+- Validation boundary: these changes are committed to the working branch. No local test run or successful CI run has been verified. No production deployment, customer workload, arbitrary code execution, remote provider egress or external side effect is enabled.
