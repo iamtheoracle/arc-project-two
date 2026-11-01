@@ -78,5 +78,6 @@ class PrivacyAwareModelGateway:
             result = {"answer": result}
         if not isinstance(result, dict) or not isinstance(result.get("answer"), str):
             raise RuntimeError("Remote provider returned an invalid normalized response")
-        return {**result, "provider": provider_id, "remote": True,
+        return {**result, "message": {"content": result["answer"]},
+                "provider": provider_id, "remote": True,
                 "execution_location": "remote"}
