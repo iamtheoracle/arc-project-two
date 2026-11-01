@@ -212,10 +212,14 @@ class PlatformControlPlane:
                     (identity.tenant_id, identity.application_id, route_id)).fetchone()
                 if route is None:
                     raise LookupError("Every agent model route must already exist and be enabled")
+                route_regions = set(json.loads(route["regions_json"]))
                 if (manifest["runtime"] == "oracle-arc-agent-v1"
-                        and (route["provider_id"] != "ollama"
-                             or "local" not in json.loads(route["regions_json"]))):
+                        and (route["provider_id"] != "ollama" or "local" not in route_regions)):
                     raise PermissionError("oracle-arc-agent-v1 supports local Ollama routes only")
+                if (manifest["runtime"] == "oracle-arc-remote-agent-v1"
+                        and (route["provider_id"] not in {"openrouter", "groq", "gemini"}
+                             or "unspecified" not in route_regions)):
+                    raise PermissionError("oracle-arc-remote-agent-v1 requires a remote provider route with unspecified residency")
             db.execute("""INSERT INTO arc_agent_versions
                 VALUES(?,?,?,?,?,?,'active',?)""",
                 (identity.tenant_id, identity.application_id, agent_id, version,
