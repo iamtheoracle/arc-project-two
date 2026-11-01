@@ -20,7 +20,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -35,6 +35,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
           podman info --format '{{.Host.Security.Rootless}}' | grep -qx true
+      - name: Install ClamAV and update malware signatures
+        run: |
+          sudo apt-get install -y clamav clamav-freshclam
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam --quiet
       - name: Build isolated plugin worker image
         run: podman build --pull=always -f Dockerfile.plugin-worker -t oracle-arc-plugin-worker:ci .
       - name: Build isolated ORBITS media worker image
