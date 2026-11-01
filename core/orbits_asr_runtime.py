@@ -19,8 +19,12 @@ def run_local_asr(data: bytes) -> dict[str, Any]:
         raise ValueError("ASR requires non-empty immutable audio bytes")
     model_dir = os.environ.get("ORACLE_ARC_ASR_MODEL_DIR", "").strip()
     image = os.environ.get("ORACLE_ARC_ASR_WORKER_IMAGE", "oracle-arc-asr-worker:local").strip()
-    if not model_dir or not Path(model_dir).is_absolute() or not Path(model_dir).is_dir():
-        raise RuntimeError("A separately installed local ASR model directory is required")
+    model_path = Path(model_dir).expanduser()
+    if (not model_dir or not model_path.is_absolute() or not model_path.is_dir()
+            or "," in str(model_path) or not (model_path / "config.json").is_file()
+            or not (model_path / "model.bin").is_file()):
+        raise RuntimeError("A complete separately installed local ASR model directory is required")
+    model_dir = str(model_path.resolve())
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,254}", image):
         raise RuntimeError("Invalid ASR worker image configuration")
     command = [
