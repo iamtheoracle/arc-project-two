@@ -39,8 +39,11 @@
 - Added byte-signature media detection for PNG, JPEG, GIF, WebP, WAV, MP3, OGG, PDF and plain text.
 - Upload metadata is bounded; detected type must match any declared MIME type.
 - Rejects active SVG/HTML/XML markup, binary archives, path-like filenames and unsupported formats.
-- Processor registration is restricted to platform-installed handlers explicitly marked as isolated. Developer manifests cannot register executable processors.
-- No OCR, speech-to-text, image understanding or other media processor is installed by this phase. The intake and registry are the security boundary, not a claim of completed multimodal inference.
+- Added a dedicated ORBITS worker image with PDF/text extraction (`pypdf`), image OCR (`Pillow` + Tesseract), and audio-container metadata inspection (`mutagen`).
+- All three handlers are platform-registered and invoke a separate rootless Podman container with no network, read-only root filesystem, dropped capabilities, no-new-privileges, non-root UID, memory/CPU/PID limits, bounded temporary storage and a 60-second wall-clock deadline. There is no in-process fallback.
+- The authenticated `/v1/platform/orbits/process` API requires `orbits.process`; extracted text can be indexed only when the same credential also has `document.index`.
+- Audio transcription is deliberately not claimed: audio inspection returns container/codec metadata and explicitly reports `transcription_status=not_installed`. Speech-to-text requires a separately installed and verified local ASR model/processor.
+- Image OCR and PDF extraction are real processing paths, but accuracy, multilingual OCR quality, encrypted/complex PDF handling and adversarial-file resilience still require validation against representative corpora.
 
 ### Deadlines, cancellation and provider timeouts
 
@@ -70,9 +73,9 @@ New retrieval and ORBITS tests cover:
 
 ## Still open
 
-1. Run the complete GitHub Actions suite and resolve every failure. Runs created for this branch are currently queued; no passing CI result is claimed.
-2. Wire a reviewed document ingestion/upload API to the text indexer. The retrieval service and worker search tool are implemented; a user-facing upload flow is not.
-3. Install actual isolated ORBITS processors for image, audio and document extraction. Do not advertise OCR, ASR or vision execution until those handlers and adversarial tests exist.
+1. Run the complete GitHub Actions suite, including the new real ORBITS container integration tests, and resolve every failure. No passing CI result is claimed until GitHub reports success for the latest commit.
+2. Complete production-grade document upload UX, ingestion quotas, malware scanning and retention policy. The authenticated text-ingestion/search/delete API and ORBITS PDF/image extraction-to-index path are now implemented.
+3. Add a separately packaged, locally hosted ASR processor and model before claiming audio transcription. Expand OCR/PDF tests with multilingual and adversarial corpora.
 4. Add process-level cancellation for providers and tools where supported; current worker cancellation fences results after synchronous calls return.
 5. Run cross-component adversarial tests, migration/restore drills and deployment tests.
 6. On the actual Ollama host, run `bash scripts/verify-local-ollama.sh`. It refuses non-loopback endpoints, pulls `qwen2.5:7b` (the current platform test route), checks model metadata and performs a real `/api/chat` inference. Then run the worker tool-call integration tests on that host. Model discovery is not installation or proof of a running model.
