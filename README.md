@@ -303,6 +303,9 @@ Application credentials can use the scoped document endpoints under `/v1/platfor
 - `POST /documents` indexes already-extracted text (requires `document.index`).
 - `GET /documents/search?query=...` searches only the authenticated principal/application scope (requires `document.search`).
 - `DELETE /documents/{document_id}` tombstones a document in that same scope (requires `document.delete`).
+- `POST /documents/upload` quarantines a PDF/plain-text file, requires a successful ClamAV scan, extracts it in the isolated worker, and indexes only scanner-clean text. It requires `orbits.process` and `document.index`.
+- `GET /documents/quarantine/{asset_id}/audit` returns scope-filtered quarantine events (requires `document.audit` or `document.delete`).
+- `DELETE /documents/quarantine/{asset_id}` removes quarantined bytes and writes a deletion audit event (requires `document.delete`).
 
 For binary input, build the separate isolated ORBITS worker image:
 
@@ -316,11 +319,14 @@ Set `ORACLE_ARC_ORBITS_WORKER_IMAGE=oracle-arc-orbits-worker:local` on the API h
 
 - `document.extract`: extracts text from PDF or UTF-8 plain text using `pypdf` for PDF files.
 - `image.ocr`: runs image OCR using Pillow and Tesseract.
-- `audio.inspect`: reads supported audio container/codec metadata using Mutagen. It does **not** transcribe speech; the response explicitly reports that transcription is not installed.
+- `audio.inspect`: reads supported audio container/codec metadata using Mutagen. This processor does not transcribe speech.
+- `audio.transcribe`: a separate, optional faster-whisper worker. It is registered only when a complete local model directory is provisioned. The worker mounts model files read-only, runs without network access, sets Hugging Face offline flags and has no remote fallback. See [local ASR setup](docs/LOCAL_ASR_MODEL_SETUP.md).
 
 Set `index_text: true` to index extracted PDF/plain-text or OCR text. This additionally requires `document.index`. The resulting document is stored with the authenticated tenant, application and principal scope. Audio metadata cannot be indexed as a transcript.
 
-The container is a processing boundary, not a guarantee of perfect extraction. Validate OCR accuracy, document parsing and media compatibility against representative and adversarial files before production use.
+Document uploads are stored under a private quarantine directory and scanned with ClamAV. Missing, timed-out or indeterminate scanner results fail closed. Both quarantined bytes and indexed extracted text have bounded retention; run `python scripts/expire-document-retention.py` periodically (for example, from a host scheduler) to enforce expiry even when no API traffic occurs. The default quarantine retention is seven days; indexed text defaults to one year unless a shorter per-upload value is supplied. The media upload request budget is separately bounded by `ORACLE_ARC_MEDIA_MAX_REQUEST_BYTES`.
+
+The container is a processing boundary, not a guarantee of perfect extraction. Validate OCR accuracy, document parsing, ASR quality and media compatibility against representative and adversarial files before production use. Real ASR inference and real target-host Ollama verification remain separate release gates; use `scripts/verify-local-asr.py` and `scripts/verify-local-runtime.py` after installing the model and configuring the host.
 
 ## Engineering acceptance standard
 
