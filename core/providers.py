@@ -53,7 +53,17 @@ class OpenAICompatibleProvider:
             raise ProviderError("Provider credentials are not configured")
         headers = {self.config.api_key_header: ("Bearer " if self.config.bearer else "") + self.api_key,
                    "Content-Type": "application/json"}
-        body = {"model": self.model, "messages": payload["messages"], "temperature": 0.4}
+        requested_model = payload.get("model", self.model)
+        if (not isinstance(requested_model, str) or not requested_model.strip()
+                or len(requested_model) > 256 or any(ord(ch) < 32 for ch in requested_model)):
+            raise ValueError("Invalid provider model identifier")
+        temperature = payload.get("temperature", 0.4)
+        if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
+            raise ValueError("Temperature must be between 0 and 2")
+        messages = payload.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("Provider request requires messages")
+        body = {"model": requested_model, "messages": messages, "temperature": float(temperature)}
         try:
             response = self.client.post(self.config.endpoint, headers=headers,
                                         json=body, timeout=self.timeout_seconds)
@@ -62,7 +72,15 @@ class OpenAICompatibleProvider:
             answer = data["choices"][0]["message"]["content"]
             if not isinstance(answer, str) or not answer.strip():
                 raise ProviderError("Provider returned an empty response")
-            return answer
+            usage = data.get("usage") if isinstance(data, dict) else None
+            result = {"answer": answer}
+            if isinstance(usage, dict):
+                for source, target in (("prompt_tokens", "input_tokens"),
+                                       ("completion_tokens", "output_tokens")):
+                    value = usage.get(source)
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                        result[target] = value
+            return result
         except ProviderError:
             raise
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
