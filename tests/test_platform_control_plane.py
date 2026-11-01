@@ -352,3 +352,33 @@ def test_first_runtime_rejects_remote_provider_route_at_publish_time(tmp_path):
     remote_manifest["model_routes"] = ["remote-route"]
     with pytest.raises(PermissionError, match="local Ollama"):
         cp.register_agent(identity, "remote-research", "1.0.0", remote_manifest)
+
+
+
+def test_remote_runtime_requires_remote_route_and_explicit_residency(tmp_path):
+    _, _, identity, cp = setup(tmp_path)
+    cp.configure_model_route(identity, "remote-route", "openrouter", "openai/gpt-4o-mini",
+                              ["public", "internal", "private"], ["unspecified"])
+    remote_manifest = manifest([])
+    remote_manifest["model_routes"] = ["remote-route"]
+    remote_manifest["runtime"] = "oracle-arc-remote-agent-v1"
+    registered = cp.register_agent(identity, "remote-research", "1.0.0", remote_manifest)
+    assert registered.manifest["runtime"] == "oracle-arc-remote-agent-v1"
+
+    invalid = dict(remote_manifest)
+    invalid["model_routes"] = ["local-default"]
+    configure(cp, identity)
+    with pytest.raises(PermissionError, match="remote provider route"):
+        cp.register_agent(identity, "remote-research-invalid", "1.0.0", invalid)
+
+
+def test_remote_runtime_fails_closed_without_operator_opt_in(monkeypatch):
+    from core.platform_runtime import RuntimeUnavailable, default_runtime_registry
+
+    monkeypatch.delenv("ORACLE_ARC_ENABLE_REMOTE_INFERENCE", raising=False)
+    with pytest.raises(RuntimeUnavailable, match="disabled by the platform operator"):
+        default_runtime_registry().execute(
+            "oracle-arc-remote-agent-v1",
+            {"model_provider": "openrouter", "region": "unspecified",
+             "classification": "public", "input_json": '{"messages":[{"role":"user","content":"hello"}]}'},
+            {"runtime": "oracle-arc-remote-agent-v1", "allowed_tools": []})
