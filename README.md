@@ -321,3 +321,7 @@ Set `ORACLE_ARC_ORBITS_WORKER_IMAGE=oracle-arc-orbits-worker:local` on the API h
 Set `index_text: true` to index extracted PDF/plain-text or OCR text. This additionally requires `document.index`. The resulting document is stored with the authenticated tenant, application and principal scope. Audio metadata cannot be indexed as a transcript.
 
 The container is a processing boundary, not a guarantee of perfect extraction. Validate OCR accuracy, document parsing and media compatibility against representative and adversarial files before production use.
+
+## Engineering acceptance standard
+
+All new features and releases must satisfy the [Oracle Arc engineering acceptance standard](docs/ENGINEERING_ACCEPTANCE_STANDARD.md). Passing an isolated unit test or discovering a model/processor is never treated as proof of production readiness.
