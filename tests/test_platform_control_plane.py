@@ -62,7 +62,7 @@ def test_agent_versions_are_immutable_and_application_scoped(tmp_path):
 def test_agent_manifest_cannot_grant_its_own_tools(tmp_path):
     path, ids, identity, cp = setup(tmp_path)
     bad = manifest(["admin.root"])
-    with pytest.raises(PermissionError, match="tool grants"):
+    with pytest.raises(PermissionError, match="owner grant"):
         configure(cp, identity)
         cp.register_agent(identity, "research", "1.0.0", bad)
         cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
