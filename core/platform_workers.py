@@ -31,7 +31,8 @@ class WorkerService:
     def __init__(self, database_path: str):
         self.database_path = str(database_path)
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with self._db() as db:
+        db = self._db()
+        try:
             db.execute("""
               CREATE TABLE IF NOT EXISTS arc_workers(
                 worker_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
@@ -44,6 +45,9 @@ class WorkerService:
             """)
             db.execute("""CREATE INDEX IF NOT EXISTS arc_workers_scope
               ON arc_workers(tenant_id,application_id,status)""")
+            db.commit()
+        finally:
+            db.close()
 
     def _db(self):
         db = sqlite3.connect(self.database_path, timeout=15)
@@ -230,18 +234,24 @@ class WorkerService:
                     selected = row
                     break
             if selected is None:
+                db.commit()
                 return None
             cur = db.execute("""UPDATE arc_executions SET status='running',attempt=attempt+1,
               lease_owner=?,lease_expires_at=?,updated_at=?
               WHERE execution_id=? AND status='queued'""",
               (worker.worker_id, now + lease_seconds, now, selected["execution_id"]))
             if cur.rowcount != 1:
+                db.commit()
                 return None
             claimed = db.execute("SELECT * FROM arc_executions WHERE execution_id=?",
                                  (selected["execution_id"],)).fetchone()
-            return {key: claimed[key] for key in claimed.keys()}
-        finally:
+            result = {key: claimed[key] for key in claimed.keys()}
             db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
+        finally:
             db.close()
 
     def execution_manifest(self, worker: WorkerIdentity, execution_id: str) -> dict:
