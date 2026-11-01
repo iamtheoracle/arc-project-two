@@ -7,6 +7,7 @@ intersection of manifest, application, owner-policy and worker grants.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Callable, Mapping
 
 
@@ -25,6 +26,7 @@ class ToolDefinition:
     description: str
     parameters: Mapping[str, Any]
     handler: Callable[[ToolContext, dict[str, Any]], Any]
+    function_name: str | None = None
 
 
 class ScopedToolBroker:
@@ -35,6 +37,9 @@ class ScopedToolBroker:
                 raise ValueError("Only reviewed ToolDefinition entries can be registered")
             if not tool.tool_id or not tool.capability or not callable(tool.handler):
                 raise ValueError("Tool registration is incomplete")
+            function_name = tool.function_name or tool.tool_id
+            if not isinstance(function_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", function_name):
+                raise ValueError("Tool function names must use provider-safe characters")
             if tool.tool_id in self._tools:
                 raise ValueError("Duplicate tool registration")
             self._validate_schema_definition(tool.parameters)
@@ -93,12 +98,18 @@ class ScopedToolBroker:
                 if "maximum" in spec and value > spec["maximum"]:
                     raise ValueError("Tool numeric argument exceeds its limit")
 
+    def resolve_tool_id(self, function_name: str) -> str | None:
+        for tool in self._tools.values():
+            if (tool.function_name or tool.tool_id) == function_name:
+                return tool.tool_id
+        return None
+
     def schemas(self, *, manifest_tools: set[str], application_grants: set[str],
                 owner_policy: set[str], worker_capabilities: set[str]) -> list[dict[str, Any]]:
         allowed = manifest_tools & application_grants & owner_policy
         return [
             {"type": "function", "function": {
-                "name": tool.tool_id, "description": tool.description,
+                "name": tool.function_name or tool.tool_id, "description": tool.description,
                 "parameters": dict(tool.parameters),
             }}
             for tool in self._tools.values()
