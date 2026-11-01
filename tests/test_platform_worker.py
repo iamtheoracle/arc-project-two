@@ -96,7 +96,8 @@ class FakeGateway:
                 "eval_count": 2,
             }
         assert messages[-1]["role"] == "tool"
-        assert messages[-1]["tool_call_id"] == "call_calc_1"
+        assert "tool_call_id" not in messages[-1]
+        assert messages[-2]["tool_calls"][0]["id"] == "call_calc_1"
         assert json.loads(messages[-1]["content"]) == {"result": "Result: 42"}
         return {
             "message": {"content": "The answer is 42.", "tool_calls": []},
