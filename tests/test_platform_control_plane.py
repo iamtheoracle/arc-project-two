@@ -273,3 +273,30 @@ def test_worker_policy_failure_is_not_retried(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         worker.run_once(lease_seconds=30)
     assert cp.get_execution(identity, eid).status == "failed"
+
+
+def test_expired_lease_recovery_is_application_scoped(tmp_path):
+    path, ids, identity_a, cp = setup(tmp_path)
+    configure(cp, identity_a)
+    cp.register_agent(identity_a, "research", "1.0.0", manifest())
+    execution_a = cp.submit_execution(identity_a, "research", "1.0.0", "local-default", {})
+    issued_b = ids.provision("Tenant B", "APP", "principal-b", CAPS)
+    identity_b = ids.authenticate(issued_b["secret"])
+    configure(cp, identity_b)
+    cp.register_agent(identity_b, "research", "1.0.0", manifest())
+    execution_b = cp.submit_execution(identity_b, "research", "1.0.0", "local-default", {})
+    cp.claim_execution("wrk_a", 5, identity_a.tenant_id, identity_a.application_id)
+    cp.claim_execution("wrk_b", 5, identity_b.tenant_id, identity_b.application_id)
+    with cp._session() as db:
+        db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id IN (?,?)",
+                   (int(time.time()) - 1, execution_a, execution_b))
+    assert cp.recover_expired_leases(identity_a.tenant_id, identity_a.application_id) == {
+        "requeued": 1, "dead_letter": 0
+    }
+    with cp._session() as db:
+        status_a = db.execute("SELECT status FROM arc_executions WHERE execution_id=?",
+                              (execution_a,)).fetchone()["status"]
+        status_b = db.execute("SELECT status FROM arc_executions WHERE execution_id=?",
+                              (execution_b,)).fetchone()["status"]
+    assert status_a == "queued"
+    assert status_b == "running"
