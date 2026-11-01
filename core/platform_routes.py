@@ -235,6 +235,8 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
     """Run a verified media processor in the isolated ORBITS container."""
     if "orbits.process" not in identity.capabilities:
         raise HTTPException(403, "ORBITS processing capability is not granted")
+    if body.index_text and body.processor_id == "audio.inspect":
+        raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
     try:
         raw = base64.b64decode(body.data_base64, validate=True)
         asset = validate_asset(raw, body.filename, body.mime_type)
