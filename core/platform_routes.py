@@ -367,6 +367,18 @@ def read_platform_execution(execution_id: str, identity=Depends(require_applicat
 
 
 # Usage is written by the authenticated worker that owns the active lease.
+@router.get("/executions/{execution_id}/tool-invocations")
+def read_tool_invocation_audit(execution_id: str, limit: int = 100,
+                               identity=Depends(require_application)):
+    try:
+        return {"execution_id": execution_id,
+                "invocations": _workers().list_tool_invocations(identity, execution_id, limit)}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
 @router.get("/usage")
 def read_platform_usage(since: int = 0, identity=Depends(require_application)):
     try:
