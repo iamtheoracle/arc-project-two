@@ -58,6 +58,6 @@ This standard governs architecture, implementation, testing and release decision
 
 - ORACLE emits bounded structured decision traces; it does not persist private chain-of-thought.
 - SPARK enforces credential-scoped memory and explicit cross-application grants.
-- ORBITS currently provides isolated PDF/plain-text extraction, image OCR and audio metadata inspection. Speech-to-text is not installed and must not be claimed.
+- ORBITS provides isolated PDF/plain-text extraction, image OCR and audio metadata inspection. A separate offline faster-whisper worker and pinned-model provisioning path are implemented; speech-to-text is not advertised until a complete local model is installed. Real transcription remains unverified until a target-host audio integration test passes.
 - Document ingestion/search is permission-scoped and source-attributed. Retrieved passages remain untrusted.
 - Production readiness remains blocked until the latest complete CI suite and real-host Ollama/ORBITS verification have passed.
