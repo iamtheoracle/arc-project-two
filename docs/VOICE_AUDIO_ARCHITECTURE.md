@@ -95,7 +95,7 @@ Do not expose raw worker endpoints to browsers. Clients call the authenticated A
 ## Implementation phases
 
 1. **Harden current audio foundation:** correct format detection and codec validation, test malformed/oversized inputs, ensure ASR manifest validation covers every required model asset, and add real container integration coverage.
-2. **Local TTS foundation:** provision a pinned model, build an isolated TTS worker, validate generated WAV/PCM output, add cancellation/timeouts and test fail-closed behavior.
+2. **Local TTS foundation:** implemented initial Piper worker, pinned model provisioning, capability-scoped API and WAV integrity validation. Remaining: real model/runtime integration, measured latency/quality, explicit cancellation propagation and audio artifact delivery/playback.
 3. **Durable voice sessions:** implement scoped session/turn state, idempotent cancellation, event replay and retention/deletion.
 4. **End-to-end voice turn:** microphone capture -> validated upload -> local ASR -> authenticated ORACLE conversation -> local TTS -> client playback.
 5. **Streaming and interruption:** add VAD, partial transcription, chunked synthesis, reconnect and playback interruption only after phase 4 is stable.
@@ -114,4 +114,4 @@ Do not expose raw worker endpoints to browsers. Clients call the authenticated A
 
 ## Current verified boundary
 
-The repository currently contains audio metadata inspection and an optional offline faster-whisper ASR worker/provisioning path. The ASR worker has not yet been verified with a real installed model on the target host. There is no complete TTS worker, durable voice-session lifecycle, microphone client, streaming VAD/turn-taking or end-to-end spoken conversation yet. These are explicit remaining implementation tasks, not completed features.
+The repository now contains audio metadata inspection, a separately provisioned offline faster-whisper ASR worker, and an initial separately provisioned offline Piper TTS worker with a capability-scoped synthesis API. TTS validates model revision/checksums and generated WAV digest/metadata, but has not been run with a real voice model on the target host. ASR also remains unverified with a real installed model on the target host. Durable voice sessions, persistent event replay, microphone client, streaming VAD/turn-taking, playback UX and end-to-end spoken conversation are not implemented yet. These are explicit remaining tasks, not completed features.
