@@ -99,3 +99,53 @@ def test_concierge_plan_is_allowed_but_execution_fails_closed_without_provider(c
     confirm=client.post(f"/v1/platform/concierge/workflows/{plan.json()['workflow_id']}/confirm",
         headers=headers,json={"action_fingerprint":plan.json()["action_fingerprint"]})
     assert confirm.status_code==503
+
+
+def test_project_one_application_identity_and_owner_tool_governance_share_the_live_platform(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"MY REALM"}).json()["tenant_id"]
+    application=client.post(f"/v1/platform/tenants/{tenant}/applications",
+        headers=owner(),json={"name":"Project One Console"}).json()["application_id"]
+    issued=client.post(f"/v1/platform/tenants/{tenant}/applications/{application}/credentials",
+        headers=owner(),json={"principal_id":"arc-console-owner","capabilities":[
+            "agent.read","agent.register","agent.execute","agent.execution.read",
+            "model.route.manage","model.route.use","quota.read","quota.manage",
+            "usage.read","reasoning"
+        ]})
+    assert issued.status_code==201
+    app_headers={"Authorization":"Bearer "+issued.json()["credential"]}
+
+    # Owner governance must remain separate: an application bearer cannot list or mutate grants.
+    grants_path="/v1/tenants/owner/tool-grants"
+    assert client.get(grants_path,headers=app_headers).status_code==401
+    granted=client.post(grants_path,headers=owner(),json={
+        "tenant_id":tenant,"application_id":application,"tool_id":"tool.search"
+    })
+    assert granted.status_code==201,granted.text
+    grant_id=granted.json()["grant_id"]
+
+    route=client.put("/v1/platform/model-routes/local-default",headers=app_headers,json={
+        "route_id":"local-default","provider_id":"ollama","model_id":"qwen2.5:7b",
+        "data_classifications":["private"],"regions":["local"]
+    })
+    assert route.status_code==200,route.text
+    manifest={
+        "display_name":"Research","description":"Tenant-scoped research agent",
+        "required_capabilities":["reasoning"],"allowed_tools":["tool.search"],
+        "model_routes":["local-default"],"runtime":"oracle-arc-agent-v1"
+    }
+    registered=client.post("/v1/platform/agents/versions",headers=app_headers,json={
+        "agent_id":"research","version":"1.0.0","manifest":manifest
+    })
+    assert registered.status_code==201,registered.text
+
+    revoked=client.delete(f"{grants_path}/{grant_id}",headers=owner())
+    assert revoked.status_code==200 and revoked.json()["revoked"] is True
+    blocked=client.post("/v1/platform/agents/versions",headers=app_headers,json={
+        "agent_id":"research","version":"1.1.0","manifest":manifest
+    })
+    assert blocked.status_code==403
+    history=client.get(grants_path,headers=owner(),params={
+        "tenant_id":tenant,"application_id":application
+    })
+    assert history.status_code==200
+    assert history.json()["data"][0]["status"]=="revoked"
