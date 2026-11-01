@@ -164,6 +164,36 @@ class WorkerService:
         finally:
             db.close()
 
+    @staticmethod
+    def _execution_authorized(db, execution, manifest) -> bool:
+        """Revalidate the exact submitting credential and grants immediately before execution."""
+        credential_id = execution["credential_id"]
+        if not credential_id or execution["policy_version"] is None:
+            return False
+        row = db.execute("""SELECT c.capabilities_json,c.expires_at,c.revoked_at,
+              a.policy_version,a.status AS app_status,t.status AS tenant_status,
+              p.status AS principal_status,m.status AS membership_status
+            FROM arc_credentials c
+            JOIN arc_applications a ON a.tenant_id=c.tenant_id AND a.application_id=c.application_id
+            JOIN arc_tenants t ON t.tenant_id=c.tenant_id
+            JOIN arc_principals p ON p.principal_id=c.principal_id
+            JOIN arc_app_memberships m ON m.tenant_id=c.tenant_id
+              AND m.application_id=c.application_id AND m.principal_id=c.principal_id
+            WHERE c.credential_id=? AND c.tenant_id=? AND c.application_id=?
+              AND c.principal_id=?""",
+            (credential_id, execution["tenant_id"], execution["application_id"],
+             execution["principal_id"])).fetchone()
+        if row is None or row["revoked_at"] is not None or row["expires_at"] <= int(time.time()):
+            return False
+        if (row["tenant_status"] != "active" or row["app_status"] != "active"
+                or row["principal_status"] != "active" or row["membership_status"] != "active"
+                or row["policy_version"] != execution["policy_version"]):
+            return False
+        capabilities = set(json.loads(row["capabilities_json"]))
+        required = (set(manifest.get("required_capabilities", []))
+                    | set(manifest.get("allowed_tools", [])) | {"agent.execute"})
+        return required.issubset(capabilities)
+
     def claim(self, worker: WorkerIdentity, lease_seconds: int = 60):
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) or not 5 <= lease_seconds <= 900:
             raise ValueError("Lease must be between 5 and 900 seconds")
@@ -172,7 +202,7 @@ class WorkerService:
         db = self._db()
         try:
             db.execute("BEGIN IMMEDIATE")
-            rows = db.execute("""SELECT e.* FROM arc_executions e
+            rows = db.execute("""SELECT e.*,a.manifest_json FROM arc_executions e
               JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
                 AND a.application_id=e.application_id AND a.agent_id=e.agent_id
                 AND a.version=e.agent_version AND a.status='active'
@@ -181,9 +211,13 @@ class WorkerService:
               (worker.tenant_id, worker.application_id)).fetchall()
             selected = None
             for row in rows:
-                manifest = json.loads(db.execute("""SELECT manifest_json FROM arc_agent_versions
-                  WHERE tenant_id=? AND application_id=? AND agent_id=? AND version=?""",
-                  (row["tenant_id"], row["application_id"], row["agent_id"], row["agent_version"])).fetchone()[0])
+                manifest = json.loads(row["manifest_json"])
+                if not self._execution_authorized(db, row, manifest):
+                    db.execute("""UPDATE arc_executions SET status='failed',
+                      error_code='application_authorization_revoked',updated_at=?
+                      WHERE execution_id=? AND status='queued'""",
+                      (now, row["execution_id"]))
+                    continue
                 if manifest.get("runtime") in worker.runtime_ids:
                     selected = row
                     break
@@ -207,7 +241,7 @@ class WorkerService:
         self._reauthorize(worker)
         db = self._db()
         try:
-            row = db.execute("""SELECT a.manifest_json FROM arc_executions e
+            row = db.execute("""SELECT e.*,a.manifest_json FROM arc_executions e
               JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
                 AND a.application_id=e.application_id AND a.agent_id=e.agent_id
                 AND a.version=e.agent_version
@@ -216,8 +250,8 @@ class WorkerService:
                 AND a.status='active'""",
               (execution_id, worker.tenant_id, worker.application_id,
                worker.worker_id, int(time.time()))).fetchone()
-            if row is None:
-                raise PermissionError("No active execution lease is owned by this worker")
+            if row is None or not self._execution_authorized(db, row, json.loads(row["manifest_json"])):
+                raise PermissionError("No currently authorized execution lease is owned by this worker")
             return json.loads(row["manifest_json"])
         finally:
             db.close()
