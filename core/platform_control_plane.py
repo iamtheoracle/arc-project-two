@@ -493,8 +493,9 @@ class PlatformControlPlane:
         now = int(time.time())
         with self._session() as db:
             cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?
+                lease_owner=NULL,lease_expires_at=NULL,error_code='cancelled_by_principal'
                 WHERE execution_id=? AND tenant_id=? AND application_id=? AND principal_id=?
-                AND status='queued'""",
+                AND status IN ('queued','running')""",
                 (now, execution_id, identity.tenant_id, identity.application_id, identity.principal_id))
             return cur.rowcount == 1
 
