@@ -132,3 +132,40 @@ def test_execution_visibility_and_usage_are_app_scoped(tmp_path):
         cp.get_execution(b, eid)
     with pytest.raises(LookupError):
         cp.record_usage(b, eid, "tokens", 10)
+
+
+def test_idempotency_key_rejects_different_payload(tmp_path):
+    _, _, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    first = cp.submit_execution(identity, "research", "1.0.0", "local-default",
+                                {"query": "first"}, idempotency_key="same-key")
+    with pytest.raises(ValueError, match="different request payload"):
+        cp.submit_execution(identity, "research", "1.0.0", "local-default",
+                            {"query": "different"}, idempotency_key="same-key")
+    assert cp.get_execution(identity, first).input_json == '{"query":"first"}'
+
+
+def test_worker_heartbeat_extends_only_current_unexpired_lease(tmp_path):
+    _, _, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
+    claim = cp.claim_execution("worker-a", lease_seconds=5)
+    assert claim.execution_id == eid
+    assert cp.heartbeat_execution(eid, "worker-a", lease_seconds=60)
+    assert not cp.heartbeat_execution(eid, "worker-b", lease_seconds=60)
+
+
+def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
+    _, ids, identity, cp = setup(tmp_path)
+    issued = ids.provision("Tenant A", "APP", "principal-cancel",
+                           CAPS + ["agent.execution.cancel"])
+    identity = ids.authenticate(issued["secret"])
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
+    cp.claim_execution("worker-a", lease_seconds=60)
+    assert cp.cancel_execution(identity, eid)
+    assert not cp.complete_execution(eid, "worker-a", {"answer": "late"})
+    assert cp.get_execution(identity, eid).status == "cancelled"
