@@ -72,5 +72,7 @@ class PrivacyAwareModelGateway:
         if "unspecified" not in policy.allowed_regions:
             raise PermissionError("Remote provider region is not verified against policy")
         adapter = self.remote_providers[provider_id]
-        answer = adapter.chat({"messages": messages})
-        return {"message": {"content": answer}, "provider": provider_id, "remote": True}
+        result = adapter.chat({"model": model, "messages": messages,
+                               "temperature": temperature})
+        return {**result, "provider": provider_id, "remote": True,
+                "execution_location": "remote"}
