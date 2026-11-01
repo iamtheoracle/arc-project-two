@@ -185,8 +185,6 @@ class PlatformWorker:
                 owner_policy=owner_policy,
                 worker_capabilities=worker_capabilities,
             )
-            if manifest_tools and not schemas:
-                raise PermissionError("No declared agent tools remain authorized by all four permission boundaries")
             if len(messages) > 100:
                 raise ValueError("execution_message_history_limit_exceeded")
             response = gateway.chat(
