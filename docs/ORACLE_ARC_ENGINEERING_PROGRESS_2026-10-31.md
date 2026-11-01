@@ -274,3 +274,5 @@ This branch contains architecture documentation and focused security hardening. 
 - Added tests for allowed, unknown-tool and revoked-credential denials, plus the authenticated audit read route.
 - Commits: `b440c119b2559e89b4a1220f74a8d2c78932f087`, `0f922bbf6c7ba5322753ecf43b3f28c54ec2b720`, `64f42e8b8ee292d4809ebaa5c35d730abab30618`, `a114a910550f472e40391e96bf656c6d1783e3f4`, `70e26991d319c16cbe38a30df6f5268e9acd37ef`.
 - Verification remains pending. No test suite has been run in this editing session; GitHub Actions state must be checked separately. No real local Ollama model execution has been demonstrated.
+
+- Audit test determinism follow-up: `87bd782a41c43dd0b3e1b7ff1df65b78a624bc64` removes dependence on ordering when multiple audit events share the same second-level timestamp.
