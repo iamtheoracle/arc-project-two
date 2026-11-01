@@ -578,11 +578,13 @@ def list_platform_executions(limit:int=50,identity=Depends(require_application))
     return {"data":[asdict(cp._execution(x)) for x in rows]}
 
 @router.get("/executions/events")
-async def stream_platform_execution_events(after: int = 0,
+async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
         authorization: str | None = Header(default=None)):
     """Stream durable event-log updates; every reconnect revalidates the bearer credential."""
     if not isinstance(after, int) or after < 0:
         raise HTTPException(422, "Event cursor must be a non-negative integer")
+    if not isinstance(duration_seconds, int) or not 1 <= duration_seconds <= 50:
+        raise HTTPException(422, "Stream duration must be between 1 and 50 seconds")
     identity = require_application(authorization)
     if "agent.execution.read" not in identity.capabilities:
         raise HTTPException(403, "Execution read capability is not granted")
@@ -599,7 +601,7 @@ async def stream_platform_execution_events(after: int = 0,
         yield "retry: 2000\n\n"
         # Netlify and common reverse proxies impose bounded response lifetimes.
         # The client reconnects using the last durable event ID.
-        while time.monotonic() - started < 50:
+        while time.monotonic() - started < duration_seconds:
             if time.monotonic() - last_auth_check >= 10:
                 try:
                     live_identity = _store().authenticate(token)
