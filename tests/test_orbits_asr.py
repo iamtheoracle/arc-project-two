@@ -18,6 +18,7 @@ def test_asr_runtime_mounts_model_read_only_and_disables_network(monkeypatch, tm
     model.mkdir()
     (model / "config.json").write_text("{}")
     (model / "model.bin").write_bytes(b"local-model")
+    (model / "oracle-arc-model-manifest.json").write_text("{}")
     monkeypatch.setenv("ORACLE_ARC_ASR_MODEL_DIR", str(model))
     monkeypatch.setenv("ORACLE_ARC_ASR_WORKER_IMAGE", "oracle-arc-asr-worker:test")
     seen = {}
@@ -50,6 +51,7 @@ def test_asr_runtime_rejects_malformed_worker_output(monkeypatch, tmp_path):
     model.mkdir()
     (model / "config.json").write_text("{}")
     (model / "model.bin").write_bytes(b"local-model")
+    (model / "oracle-arc-model-manifest.json").write_text("{}")
     monkeypatch.setenv("ORACLE_ARC_ASR_MODEL_DIR", str(model))
 
     class Completed:
@@ -75,6 +77,7 @@ def test_asr_registry_is_not_advertised_until_model_is_installed(monkeypatch, tm
     model.mkdir()
     (model / "config.json").write_text("{}")
     (model / "model.bin").write_bytes(b"local-model")
+    (model / "oracle-arc-model-manifest.json").write_text("{}")
     monkeypatch.setenv("ORACLE_ARC_ASR_MODEL_DIR", str(model))
     import core.orbits_asr_runtime as asr_runtime
     monkeypatch.setattr(asr_runtime, "run_local_asr", lambda data: {
