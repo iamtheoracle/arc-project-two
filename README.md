@@ -292,3 +292,6 @@ The worker re-reads application capabilities and owner grants before each tool c
 
 
 Remote provider egress is deliberately fail-closed: OpenRouter, Groq and Gemini routes may be configured only for `public` data until a provider-specific contract, region and data-egress policy is approved. Ollama remains the local route for private data. The OpenAI-compatible adapters preserve tool-call IDs and usage accounting; tool function names are normalized to provider-safe names and resolved back to immutable internal tool IDs.
+
+
+See [the deployment runbook](docs/DEPLOYMENT_RUNBOOK.md) for the current single-host API/worker topology, persistent SQLite constraints, rootless Podman isolation, environment configuration and go-live checklist. Production deployment is not complete until that runbook is executed against a real host.
