@@ -136,12 +136,17 @@ class WorkerService:
     def authenticate_from_identity(self, worker: WorkerIdentity) -> WorkerIdentity:
         db = self._db()
         try:
-            row = db.execute("""SELECT * FROM arc_workers WHERE worker_id=?
-              AND tenant_id=? AND application_id=? AND status='active' AND revoked_at IS NULL""",
+            row = db.execute("""SELECT w.*,t.status AS tenant_status,a.status AS app_status
+              FROM arc_workers w
+              JOIN arc_tenants t ON t.tenant_id=w.tenant_id
+              JOIN arc_applications a ON a.tenant_id=w.tenant_id AND a.application_id=w.application_id
+              WHERE w.worker_id=? AND w.tenant_id=? AND w.application_id=?
+                AND w.status='active' AND w.revoked_at IS NULL""",
               (worker.worker_id, worker.tenant_id, worker.application_id)).fetchone()
         finally:
             db.close()
-        if row is None or row["expires_at"] <= int(time.time()):
+        if (row is None or row["expires_at"] <= int(time.time())
+                or row["tenant_status"] != "active" or row["app_status"] != "active"):
             raise PermissionError("Worker identity is revoked, expired or disabled")
         return WorkerIdentity(row["worker_id"], row["tenant_id"], row["application_id"],
                               tuple(json.loads(row["runtime_ids_json"])), row["expires_at"])
