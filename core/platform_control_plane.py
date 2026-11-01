@@ -102,7 +102,7 @@ class PlatformControlPlane:
               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
               lease_owner TEXT, lease_expires_at INTEGER,
               idempotency_key TEXT,
-              request_digest TEXT,
+              request_digest TEXT, credential_id TEXT, policy_version INTEGER,
               UNIQUE(tenant_id,application_id,idempotency_key)
             );
             CREATE INDEX IF NOT EXISTS arc_execution_claim
@@ -111,6 +111,10 @@ class PlatformControlPlane:
             columns = {row[1] for row in db.execute("PRAGMA table_info(arc_executions)")}
             if "request_digest" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN request_digest TEXT")
+            if "credential_id" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN credential_id TEXT")
+            if "policy_version" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN policy_version INTEGER")
             db.commit()
 
     def _connect(self):
@@ -337,7 +341,13 @@ class PlatformControlPlane:
                 raise PermissionError("Model route is not approved for this data classification")
             if region not in json.loads(route["regions_json"]):
                 raise PermissionError("Model route is not approved for this execution region")
-            request_digest = hashlib.sha256(input_json.encode("utf-8")).hexdigest()
+            request_fingerprint = {
+                "agent_id": agent_id, "version": version, "route_id": route_id,
+                "payload": payload, "classification": classification,
+                "region": region, "max_attempts": max_attempts,
+            }
+            request_digest = hashlib.sha256(
+                self._json(request_fingerprint).encode("utf-8")).hexdigest()
             if idempotency_key is not None:
                 existing = db.execute("""SELECT execution_id,request_digest FROM arc_executions
                     WHERE tenant_id=? AND application_id=? AND idempotency_key=?""",
@@ -368,11 +378,12 @@ class PlatformControlPlane:
                 db.execute("""INSERT INTO arc_executions
                     (execution_id,tenant_id,application_id,principal_id,agent_id,agent_version,
                      model_provider,model_id,status,attempt,max_attempts,input_json,created_at,
-                     updated_at,idempotency_key,request_digest)
-                    VALUES(?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?)""",
+                     updated_at,idempotency_key,request_digest,credential_id,policy_version)
+                    VALUES(?,?,?,?,?,?,?,?, 'queued',0,?,?,?,?,?,?,?,?)""",
                     (execution_id, identity.tenant_id, identity.application_id, identity.principal_id,
                      agent_id, version, route["provider_id"], route["model_id"], max_attempts,
-                     input_json, now, now, idempotency_key, request_digest))
+                     input_json, now, now, idempotency_key, request_digest,
+                     identity.credential_id, identity.policy_version))
             except sqlite3.IntegrityError:
                 if idempotency_key is None:
                     raise
