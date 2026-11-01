@@ -51,6 +51,11 @@ class Execution:
     output_json: str | None
     error_code: str | None
     lease_expires_at: int | None
+    route_id: str | None
+    classification: str | None
+    region: str | None
+    created_at: int
+    updated_at: int
 
 
 class PlatformControlPlane:
