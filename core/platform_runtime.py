@@ -119,6 +119,7 @@ def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any],
             raise RuntimeError("Model exceeded the maximum tool-use turns")
         assistant_message = {"role": "assistant", "content": getattr(message, "content", "") or "",
                              "tool_calls": []}
+        tool_messages = []
         for call in calls:
             function = getattr(call, "function", None)
             if function is None and isinstance(call, dict):
@@ -137,10 +138,11 @@ def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any],
                 classification=execution.get("classification", "private"))
             assistant_message["tool_calls"].append({
                 "type": "function", "function": {"name": name, "arguments": arguments}})
-            messages.append(assistant_message)
-            messages.append({"role": "tool", "content": json.dumps(tool_result, separators=(",", ":"))})
-            if len(messages) > 110:
-                raise ValueError("Tool execution exceeded the conversation message limit")
+            tool_messages.append({"role": "tool", "content": json.dumps(tool_result, separators=(",", ":"))})
+        messages.append(assistant_message)
+        messages.extend(tool_messages)
+        if len(messages) > 110:
+            raise ValueError("Tool execution exceeded the conversation message limit")
     if not isinstance(answer, str) or not answer.strip():
         raise RuntimeError("Model provider returned no text content")
     result: dict[str, Any] = {"answer": answer}
