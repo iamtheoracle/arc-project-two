@@ -216,9 +216,14 @@ def test_worker_enforces_execution_deadline_after_bounded_provider_wait(tmp_path
     )
     monkeypatch.setenv("ORACLE_ARC_EXECUTION_TIMEOUT_SECONDS", "1")
 
+    observed = {}
+
     class SlowGateway:
         def __init__(self, **_kwargs):
             pass
+
+        def set_timeout_seconds(self, seconds):
+            observed["timeout"] = seconds
 
         def chat(self, model, messages, tools=None, temperature=0.2):
             time.sleep(1.05)
@@ -232,6 +237,7 @@ def test_worker_enforces_execution_deadline_after_bounded_provider_wait(tmp_path
     with pytest.raises(TimeoutError, match="execution_deadline_exceeded"):
         worker.run_once()
     assert control.get_execution(identity, execution_id).status == "queued"
+    assert 0 < observed["timeout"] <= 1
 
 
 def test_worker_checks_cancellation_immediately_after_provider_returns(tmp_path, monkeypatch):
