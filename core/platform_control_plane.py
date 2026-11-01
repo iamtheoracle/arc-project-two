@@ -332,7 +332,7 @@ class PlatformControlPlane:
             raise PermissionError("Application identity lacks agent-required capabilities")
         if not set(manifest["allowed_tools"]).issubset(set(identity.capabilities)):
             raise PermissionError("Application identity lacks one or more agent tool grants")
-        return route
+        return route, manifest
 
     def submit_execution(self, identity: RequestIdentity, agent_id: str, version: str,
                          route_id: str, payload: dict[str, Any],
@@ -353,7 +353,10 @@ class PlatformControlPlane:
         now = int(time.time())
         with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
-            route = self._route_for_agent(db, identity, agent_id, version, route_id)
+            route, agent_manifest = self._route_for_agent(db, identity, agent_id, version, route_id)
+            if (agent_manifest["runtime"] == "oracle-arc-agent-v1"
+                    and region != "local"):
+                raise PermissionError("oracle-arc-agent-v1 accepts local execution regions only")
             if classification not in json.loads(route["data_classifications_json"]):
                 raise PermissionError("Model route is not approved for this data classification")
             if region not in json.loads(route["regions_json"]):
