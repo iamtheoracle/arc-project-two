@@ -81,7 +81,7 @@ def test_quota_idempotency_usage_and_execution_lifecycle(tmp_path):
                                  {"query": "hello"}, idempotency_key="request-1")
     assert cp.submit_execution(identity, "research", "1.0.0", "local-default",
                                {"query": "hello"}, idempotency_key="request-1") == first
-    claimed = cp.claim_execution("worker-a", lease_seconds=5)
+    claimed = cp.claim_execution("worker-a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert claimed.execution_id == first and claimed.status == "running"
     assert cp.complete_execution(first, "worker-a", {"answer": "done"})
     assert cp.get_execution(identity, first).status == "succeeded"
@@ -101,7 +101,7 @@ def test_expired_worker_lease_recovers_and_dead_letters(tmp_path):
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
                    (int(time.time()) - 1, eid))
     assert cp.recover_expired_leases() == {"requeued": 1, "dead_letter": 0}
-    retry = cp.claim_execution("worker-b", lease_seconds=5)
+    retry = cp.claim_execution("worker-b", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert retry.attempt == 2
     with cp._session() as db:
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
@@ -165,7 +165,45 @@ def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
-    cp.claim_execution("worker-a", lease_seconds=60)
+    cp.claim_execution("worker-a", lease_seconds=60, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert cp.cancel_execution(identity, eid)
     assert not cp.complete_execution(eid, "worker-a", {"answer": "late"})
     assert cp.get_execution(identity, eid).status == "cancelled"
+
+
+def test_worker_credentials_are_independent_scoped_and_revocable(tmp_path):
+    from core.worker_identity import WorkerIdentityStore
+    path, ids, identity, cp = setup(tmp_path)
+    workers = WorkerIdentityStore(path)
+    worker_id, token = workers.issue(identity.tenant_id, identity.application_id,
+                                      ["execution.claim", "execution.complete"], 3600)
+    authenticated = workers.authenticate(token)
+    assert authenticated.worker_id == worker_id
+    assert authenticated.application_id == identity.application_id
+    workers.validate(authenticated, "execution.claim")
+    with pytest.raises(PermissionError):
+        workers.validate(authenticated, "execution.fail")
+    assert workers.revoke(worker_id)
+    with pytest.raises(PermissionError):
+        workers.authenticate(token)
+
+
+def test_worker_claim_cannot_cross_application_scope(tmp_path):
+    from core.worker_identity import WorkerIdentityStore
+    path, ids, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
+    other = ids.provision("Tenant B", "APP", "principal-b", CAPS)
+    other_identity = ids.authenticate(other["secret"])
+    workers = WorkerIdentityStore(path)
+    worker_id, _ = workers.issue(other_identity.tenant_id, other_identity.application_id,
+                                 ["execution.claim"], 3600)
+    assert cp.claim_execution(worker_id, 5, other_identity.tenant_id,
+                              other_identity.application_id) is None
+
+
+def test_worker_claim_requires_authenticated_application_scope(tmp_path):
+    _, _, identity, cp = setup(tmp_path)
+    with pytest.raises(PermissionError, match="application scope"):
+        cp.claim_execution("wrk_fake", 5)
