@@ -20,7 +20,7 @@ Place the API behind a TLS reverse proxy. Expose only the required public API ro
 
 ## Worker process
 
-Run a separate worker process as a dedicated unprivileged Linux user with rootless Podman installed and configured. Build and verify the plugin-worker image using the repository's existing plugin-worker build instructions. Do not grant the API process access to the Podman socket.
+Run a separate worker process as a dedicated unprivileged Linux user with rootless Podman installed and configured. Build the calculator worker image with `sh scripts/build-plugin-worker.sh` and verify the resulting image ID before issuing worker credentials. The image runs `core/plugin_worker.py` as UID/GID 65534 with no network, read-only root filesystem, no Linux capabilities, no-new-privileges, CPU/memory/PID/file limits and bounded arithmetic. Do not grant the API process access to the Podman socket.
 
 Set:
 - `ORACLE_ARC_DB_PATH`: exactly the same local database path used by the API.
