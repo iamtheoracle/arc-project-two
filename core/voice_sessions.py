@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 import time
 import uuid
 from pathlib import Path
@@ -44,11 +45,20 @@ class VoiceSessionStore:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.initialize()
 
+    @contextmanager
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")
         db.execute("PRAGMA busy_timeout=10000")
-        return db
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def initialize(self):
         with self._db() as db:
