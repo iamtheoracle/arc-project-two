@@ -93,6 +93,57 @@ def test_document_ingestion_api_requires_document_capability_and_rejects_unsafe_
     assert unsafe.status_code==422
 
 
+def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,monkeypatch):
+    import base64
+    import core.platform_routes as routes
+    from core.orbits import build_default_orbits_registry
+
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"ORBITS tenant"}).json()["tenant_id"]
+    app_id=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),
+                       json={"name":"ORBITS app"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),json={"principal_id":"student-1","capabilities":[
+            "orbits.process","document.index","document.search"
+        ]}).json()["credential"]
+    headers={"Authorization":"Bearer "+token}
+    registry=build_default_orbits_registry(
+        runner=lambda processor_id,data: {
+            "media_type":"image","format":"image-ocr","width":20,"height":10,
+            "text":"The campus handbook explains course registration deadlines."
+        }
+    )
+    monkeypatch.setattr(routes,"build_default_orbits_registry",lambda:registry)
+    raw=b"\x89PNG\r\n\x1a\nmock-image"
+    response=client.post("/v1/platform/orbits/process",headers=headers,json={
+        "processor_id":"image.ocr","filename":"handbook.png","mime_type":"image/png",
+        "data_base64":base64.b64encode(raw).decode("ascii"),"index_text":True,
+        "title":"Campus handbook","source_uri":"arc://uploads/campus-handbook",
+    })
+    assert response.status_code==200
+    assert response.json()["indexed"] is True
+    assert response.json()["result"]["text"].startswith("The campus handbook")
+    found=client.get("/v1/platform/documents/search",headers=headers,
+                     params={"query":"registration deadlines"})
+    assert found.status_code==200
+    assert found.json()["count"]==1
+    assert found.json()["data"][0]["source_uri"]=="arc://uploads/campus-handbook"
+
+
+def test_orbits_api_denies_processing_without_explicit_capability(client):
+    import base64
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"No ORBITS tenant"}).json()["tenant_id"]
+    app_id=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),
+                       json={"name":"No ORBITS app"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),json={"principal_id":"student-2","capabilities":["document.index"]}).json()["credential"]
+    response=client.post("/v1/platform/orbits/process",headers={"Authorization":"Bearer "+token},json={
+        "processor_id":"image.ocr","filename":"x.png","data_base64":base64.b64encode(
+            b"\x89PNG\r\n\x1a\nmock"
+        ).decode("ascii")
+    })
+    assert response.status_code==403
+
+
 def test_platform_control_plane_requires_owner_and_app_routes_require_app_token(client):
     assert client.post("/v1/platform/tenants",json={"name":"No auth"}).status_code==401
     assert client.get("/v1/platform/identity").status_code==401
