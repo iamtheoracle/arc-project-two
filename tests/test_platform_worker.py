@@ -260,3 +260,39 @@ def test_worker_emits_openai_compatible_tool_message_contract_for_remote_provide
     assert result["status"] == "succeeded"
     assert result["output"]["content"] == "The answer is 42."
     assert plugins.calls == [("calculate", {"expression": "6 * 7"})]
+
+
+
+def test_worker_rechecks_owner_grant_after_model_requests_tool(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(tmp_path)
+    plugins = FakePlugins()
+    monkeypatch.setattr(worker_module, "ModelGateway", FakeGateway)
+    worker = PlatformWorker(
+        database, worker_token,
+        tool_broker=build_platform_tool_broker(plugins),
+    )
+    original_active_ids = worker.tool_grants.active_tool_ids
+    checks = 0
+
+    def revoke_between_model_selection_and_invocation(tenant_id, application_id):
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            active = worker.tool_grants.list(tenant_id, application_id)
+            grant_id = next(item["grant_id"] for item in active if item["status"] == "active")
+            assert worker.tool_grants.revoke(grant_id, "owner-race-test")
+        return original_active_ids(tenant_id, application_id)
+
+    monkeypatch.setattr(
+        worker.tool_grants, "active_tool_ids",
+        revoke_between_model_selection_and_invocation,
+    )
+
+    with pytest.raises(PermissionError, match="effective execution permission set"):
+        worker.run_once()
+
+    assert checks >= 2
+    assert plugins.calls == []
+    assert control.get_execution(identity, execution_id).status in {"failed", "dead_letter"}
