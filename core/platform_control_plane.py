@@ -187,8 +187,14 @@ class PlatformControlPlane:
             raise ValueError("Agent must reference one or more valid model route IDs")
         if not set(caps).issubset(identity.capabilities):
             raise PermissionError("Application identity lacks one or more agent-required capabilities")
-        if not set(tools).issubset(identity.capabilities):
-            raise PermissionError("Application identity lacks one or more agent tool grants")
+        # Tool permissions are owner-managed records, not self-asserted app token
+        # capabilities. Re-read live grants at registration so a revoked tool cannot
+        # be reintroduced by publishing another manifest version.
+        from .tool_grants import ToolGrantStore
+        active_tool_grants = ToolGrantStore(self.database_path).active_tool_ids(
+            identity.tenant_id, identity.application_id)
+        if not set(tools).issubset(active_tool_grants):
+            raise PermissionError("Agent manifest references a tool without an active owner grant")
         canonical = self._json(manifest)
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         with self._session() as db:
