@@ -1,6 +1,6 @@
 # Oracle Arc execution integration phase — 2026-11-01
 
-**Branch:** \`feat/arc-owner-tool-grants-and-console-api\`  
+**Branch:** `feat/arc-owner-tool-grants-and-console-api`  
 **Status:** implementation committed; CI verification pending  
 **Scope:** authenticated SPARK context, bounded ORACLE policy, secure document search, ORBITS media intake, execution fencing.
 
@@ -8,19 +8,19 @@
 
 ### SPARK: authenticated memory context
 
-- Execution records now persist the exact submitting \`credential_id\` and \`policy_version\`.
+- Execution records now persist the exact submitting `credential_id` and `policy_version`.
 - Additive migrations add those columns to existing databases. Legacy queued executions without an attributable credential fail closed rather than inheriting another credential.
 - Worker execution context revalidates that exact credential, principal, tenant, application, application policy version, and active statuses.
 - Tool capability resolution now reads only the exact submitting credential; it no longer unions capabilities from every credential belonging to the same principal.
-- SPARK memory is opt-in per execution through \`spark_memory: { enabled: true, categories: [...] }\`.
-- Memory retrieval is bound to the authenticated principal + tenant + application. Sensitive memory requires \`spark.memory.sensitive\`. Cross-application sharing is not implicitly included in worker prompts.
+- SPARK memory is opt-in per execution through `spark_memory: { enabled: true, categories: [...] }`.
+- Memory retrieval is bound to the authenticated principal + tenant + application. Sensitive memory requires `spark.memory.sensitive`. Cross-application sharing is not implicitly included in worker prompts.
 - Retrieved memory is explicitly framed as untrusted data. Trace metadata contains memory IDs and categories, not memory contents.
 
 ### ORACLE: bounded, auditable reasoning policy
 
 - The worker now applies the existing request assessment and reliability policy to each execution.
 - The model receives a four-phase decision procedure: identify outcome/constraints, check evidence/permissions/uncertainty, select authorized actions, validate and communicate limitations.
-- The persisted execution result includes a structured \`reasoning_trace\` with task class, risk level, required checks and the bounded procedure.
+- The persisted execution result includes a structured `reasoning_trace` with task class, risk level, required checks and the bounded procedure.
 - Private chain-of-thought is not captured or persisted.
 
 ### Secure document retrieval
@@ -31,7 +31,7 @@
 - Sensitive documents require a separate read grant.
 - Retrieval results carry source IDs, source URIs and SHA-256 digests.
 - Retrieved passages are serialized as JSON and clearly marked as untrusted source data.
-- Installed \`tool.document_search\` in the trusted worker registry. It requires the immutable agent manifest, the application credential capability, the owner tool grant and the worker capability. The handler re-resolves the exact submitting credential before retrieval.
+- Installed `tool.document_search` in the trusted worker registry. It requires the immutable agent manifest, the application credential capability, the owner tool grant and the worker capability. The handler re-resolves the exact submitting credential before retrieval.
 - Raw search queries are not written to the audit table; only a query digest and result count are retained.
 
 ### ORBITS: controlled media intake
@@ -47,10 +47,10 @@
 
 ### Deadlines, cancellation and provider timeouts
 
-- Worker executions use \`ORACLE_ARC_EXECUTION_TIMEOUT_SECONDS\` (default 300 seconds; accepted range 1–3600).
+- Worker executions use `ORACLE_ARC_EXECUTION_TIMEOUT_SECONDS` (default 300 seconds; accepted range 1–3600).
 - Deadline checks run before model rounds, after provider responses, before tool calls and before completion.
 - The worker revalidates the execution lease and authenticated identity after provider inference; a cancelled or revoked execution is fenced from tool execution and completion.
-- Existing Ollama provider timeout remains bounded by \`ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS\` (default 120 seconds; max 900). Remote HTTP adapters use their configured bounded HTTP timeout (default 30 seconds).
+- Existing Ollama provider timeout remains bounded by `ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS` (default 120 seconds; max 900). Remote HTTP adapters use their configured bounded HTTP timeout (default 30 seconds).
 - Cancellation cannot forcibly interrupt a synchronous provider request already in flight; the provider timeout bounds how long that request can remain blocked. A cancellation is enforced immediately when control returns to the worker.
 - Existing lease recovery, retry, dead-letter and concurrent-claim protections remain in place.
 
