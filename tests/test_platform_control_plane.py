@@ -319,6 +319,29 @@ def test_first_runtime_refuses_remote_ollama_egress(monkeypatch):
 
 
 
+
+def test_tool_call_authorization_is_bound_to_live_worker_lease_and_app_credential(tmp_path):
+    from core.platform_workers import WorkerService
+
+    path, _, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "calculator", "1.0.0", manifest(["math.calculate"]))
+    execution_id = cp.submit_execution(
+        identity, "calculator", "1.0.0", "local-default",
+        {"messages": [{"role": "user", "content": "calculate 2+2"}]})
+    workers = WorkerService(path)
+    worker = workers.authenticate(workers.register(identity, ["oracle-arc-agent-v1"])["credential"])
+    claimed = workers.claim(worker, lease_seconds=30)
+    assert claimed["execution_id"] == execution_id
+    assert workers.authorize_tool_call(worker, execution_id, "math.calculate") is True
+    assert workers.authorize_tool_call(worker, execution_id, "math.unknown") is False
+
+    with cp._session() as db:
+        db.execute("UPDATE arc_credentials SET revoked_at=? WHERE credential_id=?",
+                   (int(time.time()), identity.credential_id))
+    assert workers.authorize_tool_call(worker, execution_id, "math.calculate") is False
+
+
 def test_worker_runner_executes_installed_handler_and_records_usage(tmp_path):
     from core.platform_workers import WorkerService
     from core.platform_worker_runner import run_once
