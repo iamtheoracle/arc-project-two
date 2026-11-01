@@ -8,6 +8,8 @@ on:
       - 'feat/oracle-arc-personal-core'
       - 'feat/oracle-arc-network-platform-architecture'
       - 'feat/arc-secure-worker-execution-runtime'
+      - 'feat/arc-connected-execution-pipeline'
+      - 'feat/arc-owner-tool-grants-and-console-api'
 permissions:
   contents: read
 jobs:
