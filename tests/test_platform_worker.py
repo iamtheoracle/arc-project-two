@@ -277,6 +277,12 @@ def test_worker_fails_closed_when_application_principal_credential_is_revoked(tm
     import core.platform_worker as worker_module
 
     database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(tmp_path)
+    # A second live credential for the same principal must not replace the exact
+    # credential that submitted this execution after that credential is revoked.
+    identities.issue_credential(
+        identity.tenant_id, identity.application_id, identity.principal_id,
+        CAPABILITIES, ttl_seconds=3600,
+    )
     assert identities.revoke_credential(identity.credential_id)
     monkeypatch.setattr(worker_module, "ModelGateway", FakeGateway)
     worker = PlatformWorker(database, worker_token, tool_broker=build_platform_tool_broker(FakePlugins()))
