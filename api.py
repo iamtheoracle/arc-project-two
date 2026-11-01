@@ -11,6 +11,8 @@ from collections import defaultdict, deque
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from urllib.parse import urlsplit
 from starlette.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -130,6 +132,28 @@ def require_chat_capacity():
 
 app = FastAPI(title="Oracle Arc", version="0.1.2", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(RequestGuardMiddleware)
+
+# Browser access is opt-in and restricted to exact trusted origins. Credentials are
+# passed as scoped application bearer tokens; ambient cookies are never enabled.
+_CORS_ORIGINS = [value.strip().rstrip("/") for value in
+                 os.environ.get("ORACLE_ARC_CORS_ORIGINS", "").split(",") if value.strip()]
+for _origin in _CORS_ORIGINS:
+    _parsed_origin = urlsplit(_origin)
+    if (_parsed_origin.scheme not in {"https", "http"} or not _parsed_origin.netloc
+            or _parsed_origin.path or _parsed_origin.query or _parsed_origin.fragment
+            or (_parsed_origin.scheme == "http" and _parsed_origin.hostname not in {"localhost", "127.0.0.1"})):
+        raise RuntimeError("ORACLE_ARC_CORS_ORIGINS must contain exact HTTPS origins (HTTP only for localhost).")
+if "*" in _CORS_ORIGINS:
+    raise RuntimeError("Wildcard CORS origins are forbidden.")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["X-Request-ID"],
+    max_age=600,
+)
 app.include_router(platform_router)
 _store: ArcStore | None = None
 _agent_registry_cache = None
