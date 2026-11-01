@@ -150,10 +150,11 @@ class PlatformWorker:
         return {}
 
     @staticmethod
-    def _tool_call(call: Any) -> tuple[str, dict[str, Any]]:
+    def _tool_call(call: Any) -> tuple[str, dict[str, Any], str | None]:
         call_data = PlatformWorker._mapping(call)
         function = PlatformWorker._mapping(call_data.get("function"))
         name = function.get("name")
+        call_id = call_data.get("id")
         arguments = function.get("arguments", {})
         if isinstance(arguments, str):
             try:
@@ -162,7 +163,9 @@ class PlatformWorker:
                 raise ValueError("Model returned invalid tool-call JSON") from exc
         if not isinstance(name, str) or not isinstance(arguments, dict):
             raise ValueError("Model returned an invalid tool call")
-        return name, arguments
+        if call_id is not None and (not isinstance(call_id, str) or len(call_id) > 128):
+            raise ValueError("Model returned an invalid tool-call identifier")
+        return name, arguments, call_id
 
     def _model_with_tools(self, gateway: ModelGateway, model: str,
                           messages: list[dict[str, Any]], execution_id: str,
@@ -214,11 +217,14 @@ class PlatformWorker:
                 raise ValueError("execution_tool_call_limit_exceeded")
             parsed_calls = [self._tool_call(call) for call in calls]
             normalized_calls = []
-            for name, arguments in parsed_calls:
-                normalized_calls.append({
+            for name, arguments, call_id in parsed_calls:
+                normalized = {
                     "type": "function",
                     "function": {"name": name, "arguments": arguments},
-                })
+                }
+                if call_id:
+                    normalized["id"] = call_id
+                normalized_calls.append(normalized)
             # The provider contract requires non-empty text, even for an assistant
             # message whose only content is a tool-call list.
             messages.append({
@@ -227,7 +233,7 @@ class PlatformWorker:
                 "tool_calls": normalized_calls,
             })
 
-            for name, arguments in parsed_calls:
+            for name, arguments, call_id in parsed_calls:
                 # Refresh every boundary immediately before each consequential tool call.
                 self.identities.validate(self.identity, "execution.complete")
                 latest_row, latest_context = self._execution_context(execution_id, worker_id)
@@ -247,11 +253,14 @@ class PlatformWorker:
                     owner_policy=owner_policy,
                     worker_capabilities=worker_capabilities,
                 )
-                messages.append({
+                tool_message = {
                     "role": "tool",
                     "name": name,
                     "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-                })
+                }
+                if call_id:
+                    tool_message["tool_call_id"] = call_id
+                messages.append(tool_message)
         raise RuntimeError("model_tool_loop_terminated_unexpectedly")
 
     def _heartbeat_loop(self, execution_id: str, lease_seconds: int,
