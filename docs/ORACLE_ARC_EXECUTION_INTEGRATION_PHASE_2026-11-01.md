@@ -75,7 +75,7 @@ New retrieval and ORBITS tests cover:
 3. Install actual isolated ORBITS processors for image, audio and document extraction. Do not advertise OCR, ASR or vision execution until those handlers and adversarial tests exist.
 4. Add process-level cancellation for providers and tools where supported; current worker cancellation fences results after synchronous calls return.
 5. Run cross-component adversarial tests, migration/restore drills and deployment tests.
-6. Verify a real local Ollama endpoint, pull the selected model and run inference/tool-call tests on the target host. Model discovery is not installation or proof of a running model.
+6. Verify a real local Ollama endpoint, pull `qwen2.5:7b` (the current platform test route), and run inference/tool-call tests on the target host. Model discovery is not installation or proof of a running model.
 
 ## Inference policy
 
