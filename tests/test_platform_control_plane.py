@@ -246,8 +246,9 @@ def test_worker_executes_model_and_commits_usage_atomically(tmp_path, monkeypatc
         def __init__(self, provider_id):
             assert provider_id == "ollama"
 
-        def chat(self, model, messages, temperature):
+        def chat(self, model, messages, tools=None, temperature=0.2):
             assert model == "qwen2.5:7b"
+            assert tools is None
             assert messages[-1]["content"] == "Explain the task"
             return SimpleNamespace(
                 message=SimpleNamespace(content="Completed result"),
