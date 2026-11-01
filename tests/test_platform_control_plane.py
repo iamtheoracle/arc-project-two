@@ -81,9 +81,9 @@ def test_quota_idempotency_usage_and_execution_lifecycle(tmp_path):
                                  {"query": "hello"}, idempotency_key="request-1")
     assert cp.submit_execution(identity, "research", "1.0.0", "local-default",
                                {"query": "hello"}, idempotency_key="request-1") == first
-    claimed = cp.claim_execution("worker-a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
+    claimed = cp.claim_execution("wrk_worker_a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert claimed.execution_id == first and claimed.status == "running"
-    assert cp.complete_execution(first, "worker-a", {"answer": "done"})
+    assert cp.complete_execution(first, "wrk_worker_a", {"answer": "done"})
     assert cp.get_execution(identity, first).status == "succeeded"
     cp.record_usage(identity, first, "input_tokens", 12)
     cp.record_usage(identity, first, "output_tokens", 8)
@@ -95,13 +95,13 @@ def test_expired_worker_lease_recovers_and_dead_letters(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {}, max_attempts=2)
-    claim = cp.claim_execution("worker-a", lease_seconds=5)
+    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5)
     assert claim.execution_id == eid
     with cp._session() as db:
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
                    (int(time.time()) - 1, eid))
     assert cp.recover_expired_leases() == {"requeued": 1, "dead_letter": 0}
-    retry = cp.claim_execution("worker-b", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
+    retry = cp.claim_execution("wrk_worker_b", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert retry.attempt == 2
     with cp._session() as db:
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
@@ -151,10 +151,10 @@ def test_worker_heartbeat_extends_only_current_unexpired_lease(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
-    claim = cp.claim_execution("worker-a", lease_seconds=5)
+    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5)
     assert claim.execution_id == eid
-    assert cp.heartbeat_execution(eid, "worker-a", lease_seconds=60)
-    assert not cp.heartbeat_execution(eid, "worker-b", lease_seconds=60)
+    assert cp.heartbeat_execution(eid, "wrk_worker_a", lease_seconds=60)
+    assert not cp.heartbeat_execution(eid, "wrk_worker_b", lease_seconds=60)
 
 
 def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
@@ -165,9 +165,9 @@ def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
-    cp.claim_execution("worker-a", lease_seconds=60, tenant_id=identity.tenant_id, application_id=identity.application_id)
+    cp.claim_execution("wrk_worker_a", lease_seconds=60, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert cp.cancel_execution(identity, eid)
-    assert not cp.complete_execution(eid, "worker-a", {"answer": "late"})
+    assert not cp.complete_execution(eid, "wrk_worker_a", {"answer": "late"})
     assert cp.get_execution(identity, eid).status == "cancelled"
 
 
