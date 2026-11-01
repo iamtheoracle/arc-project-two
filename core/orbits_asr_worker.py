@@ -4,6 +4,8 @@ from __future__ import annotations
 import base64
 import io
 import json
+import hashlib
+import re
 import os
 import sys
 
@@ -21,8 +23,25 @@ def execute(payload: dict) -> dict:
         raise ValueError("Audio is empty or exceeds the 25 MB limit")
     model_path = "/models/active"
     required = ("config.json", "model.bin")
-    if not all(os.path.isfile(os.path.join(model_path, name)) for name in required):
-        raise RuntimeError("Installed local ASR model is incomplete")
+    manifest_path = os.path.join(model_path, "oracle-arc-model-manifest.json")
+    if not all(os.path.isfile(os.path.join(model_path, name)) for name in required) or not os.path.isfile(manifest_path):
+        raise RuntimeError("Installed local ASR model or integrity manifest is incomplete")
+    with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+        manifest = json.load(manifest_file)
+    if (not isinstance(manifest, dict) or not isinstance(manifest.get("repo_id"), str)
+            or not re.fullmatch(r"[0-9a-fA-F]{40}", str(manifest.get("revision", "")))
+            or not isinstance(manifest.get("sha256"), dict)):
+        raise RuntimeError("Installed local ASR model manifest is invalid")
+    for name in required:
+        expected = manifest["sha256"].get(name)
+        if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise RuntimeError("Installed local ASR model checksum is missing")
+        digest = hashlib.sha256()
+        with open(os.path.join(model_path, name), "rb") as model_file:
+            for chunk in iter(lambda: model_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected:
+            raise RuntimeError("Installed local ASR model checksum mismatch")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     from faster_whisper import WhisperModel
