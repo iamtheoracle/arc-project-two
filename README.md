@@ -337,7 +337,7 @@ All new features and releases must satisfy the [Oracle Arc engineering acceptanc
 
 Voice and audio are a first-class Oracle Arc capability. The current ORBITS audio foundation provides metadata inspection and an optional offline faster-whisper transcription worker; it does not yet provide a complete spoken conversation experience.
 
-The implementation contract and remaining phases are documented in [Voice and Audio Architecture](docs/VOICE_AUDIO_ARCHITECTURE.md). The planned end-to-end path is:
+The implementation contract and remaining phases are documented in [Voice and Audio Architecture](docs/VOICE_AUDIO_ARCHITECTURE.md). An initial local Piper TTS worker, pinned-model provisioning script and capability-scoped synthesis API are now present. See [Local TTS model setup](docs/LOCAL_TTS_MODEL_SETUP.md). TTS still requires a real model install and target-host verification; it is not yet a complete conversational voice feature. The planned end-to-end path is:
 
 1. User-initiated microphone capture with visible recording state and bounded audio intake.
 2. Local speech detection and transcription through the separately provisioned ASR worker.
@@ -346,4 +346,4 @@ The implementation contract and remaining phases are documented in [Voice and Au
 5. Validated audio playback with stop, cancel and interruption handling.
 6. Durable, scoped voice-session events, retention controls and deletion.
 
-Local processing is the default. No silent remote audio fallback is permitted. TTS, microphone capture, durable voice sessions, live streaming/VAD and end-to-end voice conversation are not implemented yet and must not be represented as available. Real ASR inference also remains unverified until the pinned model is installed and exercised on the target host.
+Local processing is the default. No silent remote audio fallback is permitted. The TTS engine foundation and API are implemented but real inference remains unverified. Microphone capture, durable voice sessions, live streaming/VAD, playback UX and end-to-end voice conversation are not implemented yet and must not be represented as available. Real ASR inference also remains unverified until the pinned model is installed and exercised on the target host.
