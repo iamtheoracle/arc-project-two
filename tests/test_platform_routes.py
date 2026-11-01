@@ -157,6 +157,10 @@ def test_developer_runtime_api_registers_routes_agents_workers_and_queues(client
     read = client.get(f"/v1/platform/executions/{execution_id}", headers=headers)
     assert read.status_code == 200
     assert read.json()["route_id"] == "local-default"
+    audit = client.get(
+        f"/v1/platform/executions/{execution_id}/tool-invocations", headers=headers)
+    assert audit.status_code == 200
+    assert audit.json() == {"execution_id": execution_id, "invocations": []}
     assert client.get("/v1/platform/usage", headers=headers).status_code == 200
 
 
