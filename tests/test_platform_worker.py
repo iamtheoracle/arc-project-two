@@ -16,7 +16,7 @@ from core.platform_worker import PlatformWorker
 
 CAPABILITIES = [
     "agent.register", "agent.read", "agent.execute", "agent.execution.read",
-    "model.route.manage", "model.route.use", "usage.read", "reasoning",
+    "model.route.manage", "model.route.use", "quota.manage", "usage.read", "reasoning",
     "tool.calculate",
 ]
 
@@ -35,6 +35,8 @@ def provision(tmp_path, tool=True):
     control.configure_model_route(
         identity, "local-default", "ollama", "qwen2.5:7b", ["private"], ["local"]
     )
+    control.set_quota(identity, window_seconds=60, max_executions=10,
+                      max_concurrent=2, max_input_bytes=65536)
     grants = ToolGrantStore(database)
     if tool:
         grants.grant(tenant, application, "tool.calculate", "owner-test")
