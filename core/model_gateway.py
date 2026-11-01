@@ -182,12 +182,16 @@ class ModelGateway:
 
     def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None) -> None:
         self._owns_registry = registry is None
+        self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
         self.registry = registry or ProviderRegistry()
         if registry is None:
-            self.registry.register(OllamaProvider(host=host))
-            for config in REMOTE_PROVIDER_CONFIGS:
-                self.registry.register(OpenAICompatibleModelAdapter(config))
-        self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
+            if self.provider_id == "ollama":
+                self.registry.register(OllamaProvider(host=host))
+            else:
+                config = next((item for item in REMOTE_PROVIDER_CONFIGS
+                               if item.provider_id == self.provider_id), None)
+                if config is not None:
+                    self.registry.register(OpenAICompatibleModelAdapter(config))
         # Fail closed: no silent fallback from a requested remote provider to local or vice versa.
         self.provider = self.registry.get(self.provider_id)
 
