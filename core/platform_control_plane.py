@@ -385,17 +385,48 @@ class PlatformControlPlane:
     def _execution(row) -> Execution:
         return Execution(**{key: row[key] for key in Execution.__dataclass_fields__})
 
-    def claim_execution(self, worker_id: str, lease_seconds: int = 60) -> Execution | None:
-        if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id) > 128:
-            raise ValueError("Worker ID is required")
+    @staticmethod
+    def _route_id_for_execution(db, execution):
+        manifest_row = db.execute("""SELECT manifest_json FROM arc_agent_versions
+            WHERE tenant_id=? AND application_id=? AND agent_id=? AND version=?""",
+            (execution["tenant_id"],execution["application_id"],
+             execution["agent_id"],execution["agent_version"])).fetchone()
+        if manifest_row is None:
+            return ""
+        manifest=json.loads(manifest_row["manifest_json"])
+        # The submitted route is persisted on the execution to make the choice immutable.
+        return execution["route_id"] if "route_id" in execution.keys() else (
+            manifest["model_routes"][0] if len(manifest["model_routes"]) == 1 else ""
+        )
+
+    def claim_execution(self, worker_id: str, lease_seconds: int = 60,
+                        tenant_id: str | None = None,
+                        application_id: str | None = None) -> Execution | None:
+        if not isinstance(worker_id, str) or not worker_id.startswith("wrk_") or len(worker_id) > 128:
+            raise ValueError("Authenticated worker ID is required")
+        if not tenant_id or not application_id:
+            raise PermissionError("Worker application scope is required")
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) or not 5 <= lease_seconds <= 900:
             raise ValueError("Lease must be between 5 and 900 seconds")
         now = int(time.time())
         with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("""SELECT * FROM arc_executions
-                WHERE status='queued' ORDER BY created_at,execution_id LIMIT 1""").fetchone()
+                WHERE status='queued' AND tenant_id=? AND application_id=?
+                ORDER BY created_at,execution_id LIMIT 1""",
+                (tenant_id, application_id)).fetchone()
             if row is None:
+                return None
+            agent = db.execute("""SELECT manifest_json,status FROM arc_agent_versions
+                WHERE tenant_id=? AND application_id=? AND agent_id=? AND version=?""",
+                (tenant_id,application_id,row["agent_id"],row["agent_version"])).fetchone()
+            route = db.execute("""SELECT enabled,provider_id,model_id FROM arc_model_routes
+                WHERE tenant_id=? AND application_id=? AND route_id=?""",
+                (tenant_id,application_id, self._route_id_for_execution(db,row))).fetchone()
+            if agent is None or agent["status"] != "active" or route is None or not route["enabled"]:
+                db.execute("""UPDATE arc_executions SET status='dead_letter',
+                    error_code='agent_or_model_route_disabled',updated_at=?
+                    WHERE execution_id=? AND status='queued'""",(now,row["execution_id"]))
                 return None
             cur = db.execute("""UPDATE arc_executions SET status='running',attempt=attempt+1,
                 lease_owner=?,lease_expires_at=?,updated_at=?
