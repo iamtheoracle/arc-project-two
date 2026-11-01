@@ -240,6 +240,43 @@ class WorkerService:
         finally:
             db.close()
 
+    def record_usage(self, worker: WorkerIdentity, execution_id: str,
+                     event_id: str, metric: str, quantity: int) -> bool:
+        self._reauthorize(worker)
+        import re
+        if not isinstance(event_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", event_id):
+            raise ValueError("Usage event ID must be a stable non-sensitive identifier")
+        if not isinstance(metric, str) or not re.fullmatch(r"[a-z][a-z0-9._-]{1,63}", metric):
+            raise ValueError("Invalid usage metric")
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or not 0 <= quantity <= 2**63 - 1:
+            raise ValueError("Usage quantity must be a non-negative integer")
+        now = int(time.time())
+        usage_id = "use_" + hashlib.sha256(
+            (worker.worker_id + ":" + execution_id + ":" + event_id).encode()).hexdigest()
+        db = self._db()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            execution = db.execute("""SELECT 1 FROM arc_executions
+              WHERE execution_id=? AND tenant_id=? AND application_id=? AND status='running'
+              AND lease_owner=? AND lease_expires_at>?""",
+              (execution_id, worker.tenant_id, worker.application_id, worker.worker_id, now)).fetchone()
+            if execution is None:
+                raise PermissionError("Usage can only be recorded against the worker's active execution lease")
+            existing = db.execute("SELECT metric,quantity FROM arc_usage_ledger WHERE usage_id=?",
+                                  (usage_id,)).fetchone()
+            if existing is not None:
+                if existing["metric"] != metric or existing["quantity"] != quantity:
+                    raise ValueError("Usage event ID was reused with different values")
+                return False
+            db.execute("""INSERT INTO arc_usage_ledger
+              (usage_id,tenant_id,application_id,execution_id,metric,quantity,recorded_at)
+              VALUES(?,?,?,?,?,?,?)""",
+              (usage_id, worker.tenant_id, worker.application_id, execution_id, metric, quantity, now))
+            db.commit()
+            return True
+        finally:
+            db.close()
+
     def fail(self, worker: WorkerIdentity, execution_id: str,
              error_code: str, retryable: bool = True) -> bool:
         self._reauthorize(worker)
