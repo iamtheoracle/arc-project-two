@@ -399,3 +399,97 @@ def cancel_platform_execution(execution_id: str, identity=Depends(require_applic
         return {"execution_id": execution_id, "status": "cancelled"}
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
+
+
+# Independently authenticated runtime workers. Application credentials may provision
+# workers, but worker operations require a distinct, revocable worker credential.
+from core.platform_workers import WorkerService
+
+def _workers() -> WorkerService:
+    return WorkerService(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+
+def require_worker(authorization: str | None = Header(default=None)):
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(401, "Worker credential required")
+    try:
+        return _workers().authenticate(token)
+    except PermissionError as exc:
+        raise HTTPException(401, str(exc))
+
+class WorkerCreate(BaseModel):
+    runtime_ids: list[str] = Field(min_length=1, max_length=20)
+    ttl_seconds: int = Field(default=86400, ge=300, le=31536000)
+
+class WorkerHeartbeat(BaseModel):
+    lease_seconds: int = Field(default=60, ge=5, le=900)
+
+class WorkerComplete(BaseModel):
+    output: dict[str, Any] = Field(default_factory=dict)
+
+class WorkerFailure(BaseModel):
+    error_code: str = Field(min_length=1, max_length=80)
+    retryable: bool = True
+
+@router.post("/workers", status_code=201)
+def register_platform_worker(body: WorkerCreate, identity=Depends(require_application)):
+    try:
+        return _workers().register(identity, body.runtime_ids, body.ttl_seconds)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+@router.delete("/workers/{worker_id}")
+def revoke_platform_worker(worker_id: str, identity=Depends(require_application)):
+    try:
+        if not _workers().revoke(identity, worker_id):
+            raise HTTPException(404, "Active worker not found in this application")
+        return {"worker_id": worker_id, "status": "revoked"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+
+@router.post("/worker/claim", status_code=200)
+def claim_platform_work(body: WorkerHeartbeat = WorkerHeartbeat(),
+                        worker=Depends(require_worker)):
+    try:
+        execution = _workers().claim(worker, body.lease_seconds)
+        return {"execution": execution, "status": "idle" if execution is None else "claimed"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+@router.post("/worker/executions/{execution_id}/heartbeat")
+def heartbeat_platform_work(execution_id: str, body: WorkerHeartbeat,
+                            worker=Depends(require_worker)):
+    try:
+        if not _workers().heartbeat(worker, execution_id, body.lease_seconds):
+            raise HTTPException(409, "Lease is expired, cancelled, or not owned by this worker")
+        return {"execution_id": execution_id, "lease_extended": True}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+
+@router.post("/worker/executions/{execution_id}/complete")
+def complete_platform_work(execution_id: str, body: WorkerComplete,
+                           worker=Depends(require_worker)):
+    try:
+        if not _workers().complete(worker, execution_id, body.output):
+            raise HTTPException(409, "Execution lease is expired or not owned by this worker")
+        return {"execution_id": execution_id, "status": "succeeded"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+@router.post("/worker/executions/{execution_id}/fail")
+def fail_platform_work(execution_id: str, body: WorkerFailure,
+                       worker=Depends(require_worker)):
+    try:
+        if not _workers().fail(worker, execution_id, body.error_code, body.retryable):
+            raise HTTPException(409, "Execution lease is expired or not owned by this worker")
+        return {"execution_id": execution_id, "status": "failure_recorded"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
