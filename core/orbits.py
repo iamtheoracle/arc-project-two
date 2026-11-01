@@ -111,6 +111,30 @@ def validate_asset(data: bytes, filename: str, declared_mime: str | None = None)
     )
 
 
+def build_default_orbits_registry(runner=None) -> "OrbitProcessorRegistry":
+    """Register only platform-owned processors backed by the isolated Podman runner."""
+    from core.orbits_runtime import run_isolated_orbits_processor
+
+    isolated_runner = runner or run_isolated_orbits_processor
+    registry = OrbitProcessorRegistry()
+    registry.register(
+        "document.extract", "document", _LIMITS["document"],
+        lambda asset, data: isolated_runner("document.extract", data),
+        isolated=True,
+    )
+    registry.register(
+        "image.ocr", "image", _LIMITS["image"],
+        lambda asset, data: isolated_runner("image.ocr", data),
+        isolated=True,
+    )
+    registry.register(
+        "audio.inspect", "audio", _LIMITS["audio"],
+        lambda asset, data: isolated_runner("audio.inspect", data),
+        isolated=True,
+    )
+    return registry
+
+
 class OrbitProcessorRegistry:
     """Registry for code-installed processors; developer manifests cannot add handlers."""
 
