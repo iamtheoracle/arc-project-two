@@ -190,7 +190,10 @@ def test_worker_credentials_are_independent_scoped_and_revocable(tmp_path):
     execution_id = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
     claim = workers.claim(worker, lease_seconds=5)
     assert claim["execution_id"] == execution_id
-    assert claim["lease_owner"] == worker.worker_id
+    assert "lease_owner" not in claim
+    assert "credential_id" not in claim
+    assert "policy_version" not in claim
+    assert claim["route_id"] == "local-default"
     assert workers.heartbeat(worker, execution_id, 60)
     assert workers.record_usage(worker, execution_id, "evt-1", "input_tokens", 15)
     assert not workers.record_usage(worker, execution_id, "evt-1", "input_tokens", 15)
