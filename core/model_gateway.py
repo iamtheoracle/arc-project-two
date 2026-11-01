@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 import ollama
 from .inference_contract import validate_inference_request
+from .providers import PROVIDERS as REMOTE_PROVIDER_CONFIGS, OpenAICompatibleProvider, ProviderConfig
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,35 @@ class OllamaProvider:
         return self._client.chat(**kwargs, stream=True) if stream else self._client.chat(**kwargs)
 
 
+class OpenAICompatibleModelAdapter:
+    """Fixed-endpoint remote adapter with the same validated tool-call contract as Ollama."""
+
+    def __init__(self, config: ProviderConfig) -> None:
+        self.config = config
+        self.client = OpenAICompatibleProvider(config)
+        self.manifest = ProviderManifest(
+            provider_id=config.provider_id,
+            display_name=config.provider_id.replace("-", " ").title(),
+            execution_location="remote",
+            capabilities=ModelCapabilities(tool_calling=True, streaming=False),
+            description="Fixed HTTPS provider endpoint; API credentials are read server-side.",
+        )
+
+    def chat(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+        temperature: float = 0.7,
+    ) -> Any:
+        if stream:
+            raise ValueError("Streaming is not enabled for this remote provider adapter.")
+        return self.client.chat_response(
+            {"messages": messages}, tools=tools, temperature=temperature, model=model
+        )
+
+
 class ModelGateway:
     """Routes validated model requests through an explicitly registered provider."""
 
@@ -154,6 +184,8 @@ class ModelGateway:
         self.registry = registry or ProviderRegistry()
         if registry is None:
             self.registry.register(OllamaProvider(host=host))
+            for config in REMOTE_PROVIDER_CONFIGS:
+                self.registry.register(OpenAICompatibleModelAdapter(config))
         self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
         # Fail closed: no silent fallback from a requested remote provider to local or vice versa.
         self.provider = self.registry.get(self.provider_id)
