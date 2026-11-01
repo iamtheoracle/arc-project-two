@@ -168,6 +168,7 @@ def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
     cp.claim_execution("wrk_worker_a", lease_seconds=60, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert cp.cancel_execution(identity, eid)
     assert not cp.complete_execution(eid, "wrk_worker_a", {"answer": "late"})
+    assert not cp.fail_execution(eid, "wrk_worker_a", "late_worker_failure", retryable=False)
     assert cp.get_execution(identity, eid).status == "cancelled"
 
 
