@@ -45,6 +45,54 @@ def test_owner_provisions_scoped_application_credential_and_spark_memory(client)
     assert client.get("/v1/memories",headers=app_headers).status_code==401
 
 
+def test_authenticated_document_ingestion_search_and_delete_api(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Docs tenant"}).json()["tenant_id"]
+    app_id=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),
+                       json={"name":"Docs app"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),json={"principal_id":"student-1","capabilities":[
+            "document.index","document.search","document.delete"
+        ]}).json()["credential"]
+    headers={"Authorization":"Bearer "+token}
+    ingested=client.post("/v1/platform/documents",headers=headers,json={
+        "title":"Course handbook","source_uri":"arc://uploads/handbook-1",
+        "content":"The university handbook explains course registration and examination rules.",
+        "classification":"private",
+    })
+    assert ingested.status_code==201
+    document_id=ingested.json()["document_id"]
+    searched=client.get("/v1/platform/documents/search",headers=headers,
+                        params={"query":"course registration"})
+    assert searched.status_code==200
+    assert searched.json()["count"]==1
+    assert searched.json()["data"][0]["document_id"]==document_id
+    assert searched.json()["data"][0]["source_uri"]=="arc://uploads/handbook-1"
+    deleted=client.delete(f"/v1/platform/documents/{document_id}",headers=headers)
+    assert deleted.status_code==200
+    assert client.get("/v1/platform/documents/search",headers=headers,
+                      params={"query":"course registration"}).json()["count"]==0
+
+
+def test_document_ingestion_api_requires_document_capability_and_rejects_unsafe_source(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"No docs tenant"}).json()["tenant_id"]
+    app_id=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),
+                       json={"name":"No docs app"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),json={"principal_id":"student-2","capabilities":["document.search"]}).json()["credential"]
+    headers={"Authorization":"Bearer "+token}
+    denied=client.post("/v1/platform/documents",headers=headers,json={
+        "title":"Private note","source_uri":"https://example.test/note","content":"some extracted text",
+    })
+    assert denied.status_code==403
+    unsafe=client.post("/v1/platform/documents",headers={
+        "Authorization":"Bearer "+client.post(
+            f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+            headers=owner(),json={"principal_id":"student-3","capabilities":["document.index"]}
+        ).json()["credential"]
+    },json={"title":"Unsafe","source_uri":"file:///etc/passwd","content":"not allowed"})
+    assert unsafe.status_code==422
+
+
 def test_platform_control_plane_requires_owner_and_app_routes_require_app_token(client):
     assert client.post("/v1/platform/tenants",json={"name":"No auth"}).status_code==401
     assert client.get("/v1/platform/identity").status_code==401
