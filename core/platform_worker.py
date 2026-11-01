@@ -215,12 +215,18 @@ class PlatformWorker:
             total_tool_calls += len(calls)
             if total_tool_calls > 16:
                 raise ValueError("execution_tool_call_limit_exceeded")
-            parsed_calls = [self._tool_call(call) for call in calls]
+            parsed_calls = []
+            for call in calls:
+                function_name, arguments, call_id = self._tool_call(call)
+                tool_id = self.tool_broker.resolve_tool_id(function_name)
+                if tool_id is None:
+                    raise PermissionError("Model requested a function outside the trusted tool registry")
+                parsed_calls.append((function_name, tool_id, arguments, call_id))
             normalized_calls = []
-            for name, arguments, call_id in parsed_calls:
+            for function_name, tool_id, arguments, call_id in parsed_calls:
                 normalized = {
                     "type": "function",
-                    "function": {"name": name, "arguments": arguments},
+                    "function": {"name": function_name, "arguments": arguments},
                 }
                 if call_id:
                     normalized["id"] = call_id
@@ -233,7 +239,7 @@ class PlatformWorker:
                 "tool_calls": normalized_calls,
             })
 
-            for name, arguments, call_id in parsed_calls:
+            for function_name, tool_id, arguments, call_id in parsed_calls:
                 # Refresh every boundary immediately before each consequential tool call.
                 self.identities.validate(self.identity, "execution.complete")
                 latest_row, latest_context = self._execution_context(execution_id, worker_id)
@@ -241,7 +247,7 @@ class PlatformWorker:
                     self._effective_tool_policy(latest_row, latest_context["manifest"])
                 )
                 result = self.tool_broker.execute(
-                    name, arguments,
+                    tool_id, arguments,
                     context=ToolContext(
                         tenant_id=latest_row["tenant_id"],
                         application_id=latest_row["application_id"],
@@ -255,7 +261,7 @@ class PlatformWorker:
                 )
                 tool_message = {
                     "role": "tool",
-                    "name": name,
+                    "name": function_name,
                     "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
                 }
                 if call_id:
