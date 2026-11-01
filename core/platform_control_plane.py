@@ -101,11 +101,15 @@ class PlatformControlPlane:
               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
               lease_owner TEXT, lease_expires_at INTEGER,
               idempotency_key TEXT,
+              request_digest TEXT,
               UNIQUE(tenant_id,application_id,idempotency_key)
             );
             CREATE INDEX IF NOT EXISTS arc_execution_claim
               ON arc_executions(status,created_at);
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(arc_executions)")}
+            if "request_digest" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN request_digest TEXT")
             db.commit()
 
     def _connect(self):
@@ -328,11 +332,14 @@ class PlatformControlPlane:
                 raise PermissionError("Model route is not approved for this data classification")
             if region not in json.loads(route["regions_json"]):
                 raise PermissionError("Model route is not approved for this execution region")
+            request_digest = hashlib.sha256(input_json.encode("utf-8")).hexdigest()
             if idempotency_key is not None:
-                existing = db.execute("""SELECT execution_id FROM arc_executions
+                existing = db.execute("""SELECT execution_id,request_digest FROM arc_executions
                     WHERE tenant_id=? AND application_id=? AND idempotency_key=?""",
                     (identity.tenant_id, identity.application_id, idempotency_key)).fetchone()
                 if existing is not None:
+                    if existing["request_digest"] != request_digest:
+                        raise ValueError("Idempotency key was already used with a different request payload")
                     return existing["execution_id"]
             quota = db.execute("""SELECT * FROM arc_app_quotas
                 WHERE tenant_id=? AND application_id=?""",
@@ -356,19 +363,21 @@ class PlatformControlPlane:
                 db.execute("""INSERT INTO arc_executions
                     (execution_id,tenant_id,application_id,principal_id,agent_id,agent_version,
                      model_provider,model_id,status,attempt,max_attempts,input_json,created_at,
-                     updated_at,idempotency_key)
-                    VALUES(?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?)""",
+                     updated_at,idempotency_key,request_digest)
+                    VALUES(?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?)""",
                     (execution_id, identity.tenant_id, identity.application_id, identity.principal_id,
                      agent_id, version, route["provider_id"], route["model_id"], max_attempts,
-                     input_json, now, now, idempotency_key))
+                     input_json, now, now, idempotency_key, request_digest))
             except sqlite3.IntegrityError:
                 if idempotency_key is None:
                     raise
-                existing = db.execute("""SELECT execution_id FROM arc_executions
+                existing = db.execute("""SELECT execution_id,request_digest FROM arc_executions
                     WHERE tenant_id=? AND application_id=? AND idempotency_key=?""",
                     (identity.tenant_id, identity.application_id, idempotency_key)).fetchone()
                 if existing is None:
                     raise
+                if existing["request_digest"] != request_digest:
+                    raise ValueError("Idempotency key was already used with a different request payload")
                 return existing["execution_id"]
         return execution_id
 
@@ -397,6 +406,19 @@ class PlatformControlPlane:
             claimed = db.execute("SELECT * FROM arc_executions WHERE execution_id=?",
                                  (row["execution_id"],)).fetchone()
             return self._execution(claimed)
+
+    def heartbeat_execution(self, execution_id: str, worker_id: str,
+                            lease_seconds: int = 60) -> bool:
+        if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id) > 128:
+            raise ValueError("Worker ID is required")
+        if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) or not 5 <= lease_seconds <= 900:
+            raise ValueError("Lease must be between 5 and 900 seconds")
+        now = int(time.time())
+        with self._session() as db:
+            cur = db.execute("""UPDATE arc_executions SET lease_expires_at=?,updated_at=?
+                WHERE execution_id=? AND status='running' AND lease_owner=? AND lease_expires_at>?""",
+                (now + lease_seconds, now, execution_id, worker_id, now))
+            return cur.rowcount == 1
 
     def complete_execution(self, execution_id: str, worker_id: str,
                            output: dict[str, Any]) -> bool:
@@ -460,8 +482,9 @@ class PlatformControlPlane:
         now = int(time.time())
         with self._session() as db:
             cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?
+                lease_owner=NULL,lease_expires_at=NULL,error_code='cancelled_by_principal'
                 WHERE execution_id=? AND tenant_id=? AND application_id=? AND principal_id=?
-                AND status='queued'""",
+                AND status IN ('queued','running')""",
                 (now, execution_id, identity.tenant_id, identity.application_id, identity.principal_id))
             return cur.rowcount == 1
 
