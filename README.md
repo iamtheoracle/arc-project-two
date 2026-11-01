@@ -238,3 +238,22 @@ Staging an artifact does not authorize activation. A second owner decision is st
 - `POST /v1/integrations/{integration_id}/activate?version=...&manifest_digest=...` currently fails closed with HTTP 409 because no reviewed integration-specific isolated runtime adapter is configured. It rechecks the live signed manifest, installation approval, activation approval and staged artifact digest on every attempt, then records the blocked attempt. Approval alone never starts code or grants permissions.
 
 This separation is intentional: activation remains unavailable until the per-integration runtime adapter, permission broker, sandbox policy, health checks and rollback path have passed review and tests.
+
+
+### Connected platform execution pipeline
+
+The platform execution queue now has a dedicated worker runtime entrypoint:
+
+```bash
+export ORACLE_ARC_DB_PATH=data/oracle_arc.sqlite3
+export ORACLE_ARC_WORKER_TOKEN='one-time-issued-worker-id.secret'
+python -m core.platform_worker
+```
+
+The worker credential must be issued by the owner-authenticated worker provisioning endpoint and should be stored only in the worker service's secret manager/environment. It is bound to one tenant/application and can be revoked. Grant only `execution.claim`, `execution.complete`, and, for long-running inference, `execution.heartbeat`. Do not put the credential in source control, browser code, job payloads or logs.
+
+The worker polls the application-scoped queue, claims a leased execution, rechecks the active agent version and pinned model route, verifies classification and region, and invokes the configured model gateway. Heartbeats renew an active lease during long model calls. Successful completion and provider-reported input/output token usage are committed together; late or cancelled results cannot overwrite a terminal execution. Policy and input-validation failures are not automatically retried. Other worker/provider failures use the queue's bounded retry/dead-letter policy.
+
+The current execution runner supports text-only prompts/messages and the configured Ollama adapter. Agent manifests that declare tools are rejected by this runner until a scoped tool broker is implemented. Provider token counts are recorded only when the provider returns them; no fabricated estimates are written. This does not yet provide billing-grade pricing, cross-host queue coordination, or automatic production deployment.
+
+For a single-host setup, API and worker must use the same protected SQLite database file and compatible model/provider configuration. For multi-host workers, migrate the control plane and queue to a shared transactional database before scaling. Start with a non-production tenant and test cancellation, worker revocation, provider timeouts, lease expiry and restart recovery before accepting real workloads.

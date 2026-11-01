@@ -43,6 +43,9 @@ class Execution:
     agent_version: str
     model_provider: str
     model_id: str
+    route_id: str | None
+    classification: str
+    region: str
     status: str
     attempt: int
     max_attempts: int
@@ -94,6 +97,7 @@ class PlatformControlPlane:
               application_id TEXT NOT NULL, principal_id TEXT NOT NULL,
               agent_id TEXT NOT NULL, agent_version TEXT NOT NULL,
               model_provider TEXT NOT NULL, model_id TEXT NOT NULL, route_id TEXT,
+              classification TEXT NOT NULL DEFAULT 'private', region TEXT NOT NULL DEFAULT 'local',
               status TEXT NOT NULL CHECK(status IN
                 ('queued','running','succeeded','failed','cancelled','dead_letter')),
               attempt INTEGER NOT NULL, max_attempts INTEGER NOT NULL,
@@ -112,6 +116,10 @@ class PlatformControlPlane:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN request_digest TEXT")
             if "route_id" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN route_id TEXT")
+            if "classification" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN classification TEXT NOT NULL DEFAULT 'private'")
+            if "region" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN region TEXT NOT NULL DEFAULT 'local'")
             db.commit()
 
     def _connect(self):
@@ -364,11 +372,11 @@ class PlatformControlPlane:
             try:
                 db.execute("""INSERT INTO arc_executions
                     (execution_id,tenant_id,application_id,principal_id,agent_id,agent_version,
-                     model_provider,model_id,route_id,status,attempt,max_attempts,input_json,created_at,
+                     model_provider,model_id,route_id,classification,region,status,attempt,max_attempts,input_json,created_at,
                      updated_at,idempotency_key,request_digest)
-                    VALUES(?,?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?)""",
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?)""",
                     (execution_id, identity.tenant_id, identity.application_id, identity.principal_id,
-                     agent_id, version, route["provider_id"], route["model_id"], route_id, max_attempts,
+                     agent_id, version, route["provider_id"], route["model_id"], route_id, classification, region, max_attempts,
                      input_json, now, now, idempotency_key, request_digest))
             except sqlite3.IntegrityError:
                 if idempotency_key is None:
@@ -465,12 +473,49 @@ class PlatformControlPlane:
                 (self._json(output), now, execution_id, worker_id, now))
             return cur.rowcount == 1
 
+    def complete_execution_with_usage(self, execution_id: str, worker_id: str,
+                                       output: dict[str, Any],
+                                       usage: dict[str, int]) -> bool:
+        """Fence completion and append trusted provider usage in one transaction."""
+        if not isinstance(output, dict) or not isinstance(usage, dict):
+            raise ValueError("Output and usage must be objects")
+        allowed = {"input_tokens", "output_tokens"}
+        if not set(usage).issubset(allowed):
+            raise ValueError("Unsupported provider usage metric")
+        for metric, quantity in usage.items():
+            if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity < 0:
+                raise ValueError("Usage quantities must be non-negative integers")
+        now = int(time.time())
+        with self._session() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cur = db.execute("""UPDATE arc_executions SET status='succeeded',output_json=?,
+                updated_at=?,lease_owner=NULL,lease_expires_at=NULL
+                WHERE execution_id=? AND status='running' AND lease_owner=?
+                AND lease_expires_at>?""",
+                (self._json(output), now, execution_id, worker_id, now))
+            if cur.rowcount != 1:
+                return False
+            owner = db.execute("""SELECT tenant_id,application_id FROM arc_executions
+                WHERE execution_id=?""", (execution_id,)).fetchone()
+            for metric, quantity in usage.items():
+                usage_id = "use_" + hashlib.sha256(
+                    (execution_id + ":" + metric).encode("utf-8")).hexdigest()
+                db.execute("""INSERT OR IGNORE INTO arc_usage_ledger
+                    (usage_id,tenant_id,application_id,execution_id,metric,quantity,recorded_at)
+                    VALUES(?,?,?,?,?,?,?)""",
+                    (usage_id, owner["tenant_id"], owner["application_id"],
+                     execution_id, metric, quantity, now))
+            return True
+
     def fail_execution(self, execution_id: str, worker_id: str,
                        error_code: str, retryable: bool = True) -> bool:
         if not isinstance(error_code, str) or not re.fullmatch(r"[a-z0-9_.-]{1,80}", error_code):
             raise ValueError("Error code must be a normalized non-sensitive code")
         now = int(time.time())
         with self._session() as db:
+            # Serialize the state read and transition. Cancellation, lease recovery and
+            # worker failure must never overwrite one another's terminal state.
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute("""SELECT attempt,max_attempts FROM arc_executions
                 WHERE execution_id=? AND status='running' AND lease_owner=?
                 AND lease_expires_at>?""", (execution_id, worker_id, now)).fetchone()
@@ -478,24 +523,41 @@ class PlatformControlPlane:
                 return False
             status = "queued" if retryable and row["attempt"] < row["max_attempts"] else (
                 "dead_letter" if retryable else "failed")
-            db.execute("""UPDATE arc_executions SET status=?,error_code=?,updated_at=?,
-                lease_owner=NULL,lease_expires_at=NULL WHERE execution_id=?""",
-                (status, error_code, now, execution_id))
-            return True
+            cur = db.execute("""UPDATE arc_executions SET status=?,error_code=?,updated_at=?,
+                lease_owner=NULL,lease_expires_at=NULL
+                WHERE execution_id=? AND status='running' AND lease_owner=?
+                AND lease_expires_at>?""",
+                (status, error_code, now, execution_id, worker_id, now))
+            return cur.rowcount == 1
 
-    def recover_expired_leases(self) -> dict[str, int]:
+    def recover_expired_leases(self, tenant_id: str | None = None,
+                               application_id: str | None = None) -> dict[str, int]:
+        if (tenant_id is None) != (application_id is None):
+            raise ValueError("Tenant and application scope must be supplied together")
         now = int(time.time())
         with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
-            expired = db.execute("""SELECT execution_id,attempt,max_attempts FROM arc_executions
-                WHERE status='running' AND lease_expires_at<=?""", (now,)).fetchall()
+            if tenant_id is None:
+                expired = db.execute("""SELECT execution_id,attempt,max_attempts FROM arc_executions
+                    WHERE status='running' AND lease_expires_at<=?""", (now,)).fetchall()
+            else:
+                expired = db.execute("""SELECT execution_id,attempt,max_attempts FROM arc_executions
+                    WHERE tenant_id=? AND application_id=? AND status='running'
+                    AND lease_expires_at<=?""", (tenant_id, application_id, now)).fetchall()
             counts = {"requeued": 0, "dead_letter": 0}
             for row in expired:
                 status = "queued" if row["attempt"] < row["max_attempts"] else "dead_letter"
-                db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
-                    lease_owner=NULL,lease_expires_at=NULL,updated_at=?
-                    WHERE execution_id=? AND status='running' AND lease_expires_at<=?""",
-                    (status, now, row["execution_id"], now))
+                if tenant_id is None:
+                    db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
+                        lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+                        WHERE execution_id=? AND status='running' AND lease_expires_at<=?""",
+                        (status, now, row["execution_id"], now))
+                else:
+                    db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
+                        lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+                        WHERE execution_id=? AND tenant_id=? AND application_id=?
+                        AND status='running' AND lease_expires_at<=?""",
+                        (status, now, row["execution_id"], tenant_id, application_id, now))
                 counts["requeued" if status == "queued" else "dead_letter"] += 1
             return counts
 
