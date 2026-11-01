@@ -338,3 +338,14 @@ def test_worker_runner_executes_installed_handler_and_records_usage(tmp_path):
     assert result.status == "succeeded"
     assert '"answer":"runtime completed"' in result.output_json
     assert cp.usage_summary(identity, 0) == {"input_tokens": 7, "output_tokens": 3}
+
+
+
+def test_first_runtime_rejects_remote_provider_route_at_publish_time(tmp_path):
+    _, _, identity, cp = setup(tmp_path)
+    cp.configure_model_route(identity, "remote-route", "openrouter", "openai/gpt-4o-mini",
+                              ["public"], ["remote"])
+    remote_manifest = manifest()
+    remote_manifest["model_routes"] = ["remote-route"]
+    with pytest.raises(PermissionError, match="local Ollama"):
+        cp.register_agent(identity, "remote-research", "1.0.0", remote_manifest)
