@@ -77,6 +77,8 @@ class OpenAICompatibleProvider:
             if (not isinstance(content, str) or not content.strip()) and not tool_calls:
                 raise ProviderError("Provider returned an empty response")
             usage = data.get("usage") or {}
+            if not isinstance(usage, dict):
+                usage = {}
             return {
                 "message": message,
                 "prompt_eval_count": int(usage.get("prompt_tokens", 0) or 0),
