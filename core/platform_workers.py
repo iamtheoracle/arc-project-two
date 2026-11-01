@@ -243,8 +243,9 @@ class WorkerService:
                 AND a.application_id=e.application_id AND a.agent_id=e.agent_id
                 AND a.version=e.agent_version AND a.status='active'
               WHERE e.tenant_id=? AND e.application_id=? AND e.status='queued'
+                AND e.available_at<=?
               ORDER BY e.created_at,e.execution_id""",
-              (worker.tenant_id, worker.application_id)).fetchall()
+              (worker.tenant_id, worker.application_id, now)).fetchall()
             selected = None
             for row in rows:
                 manifest = json.loads(row["manifest_json"])
@@ -416,10 +417,11 @@ class WorkerService:
             counts = {"requeued": 0, "dead_letter": 0}
             for row in expired:
                 status = "queued" if row["attempt"] < row["max_attempts"] else "dead_letter"
+                delay = min(300, 5 * (2 ** max(0, row["attempt"] - 1))) if status == "queued" else 0
                 db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
-                  lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+                  available_at=?,lease_owner=NULL,lease_expires_at=NULL,updated_at=?
                   WHERE execution_id=? AND status='running' AND lease_expires_at<=?""",
-                  (status, now, row["execution_id"], now))
+                  (status, now + delay, now, row["execution_id"], now))
                 counts["requeued" if status == "queued" else "dead_letter"] += 1
             db.commit()
             return counts
@@ -444,9 +446,10 @@ class WorkerService:
                 return False
             status = "queued" if retryable and row["attempt"] < row["max_attempts"] else (
                 "dead_letter" if retryable else "failed")
+            delay = min(300, 5 * (2 ** max(0, row["attempt"] - 1))) if status == "queued" else 0
             db.execute("""UPDATE arc_executions SET status=?,error_code=?,updated_at=?,
-              lease_owner=NULL,lease_expires_at=NULL WHERE execution_id=?""",
-              (status, error_code, now, execution_id))
+              available_at=?,lease_owner=NULL,lease_expires_at=NULL WHERE execution_id=?""",
+              (status, error_code, now, now + delay, execution_id))
             db.commit()
             return True
         finally:
