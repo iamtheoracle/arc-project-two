@@ -50,6 +50,21 @@ class ToolGrantStore:
    if tenant_id and application_id:rows=db.execute("SELECT * FROM arc_application_tool_grants WHERE tenant_id=? AND application_id=? ORDER BY created_at DESC",(tenant_id,application_id)).fetchall()
    else:rows=db.execute("SELECT * FROM arc_application_tool_grants ORDER BY created_at DESC LIMIT 500").fetchall()
    return [self._record(r) for r in rows]
+ @contextmanager
+ def execution_guard(self,tenant_id,application_id,tool_id):
+  """Linearize tool execution against owner revocation.
+
+  A short SQLite write reservation is held for the bounded tool invocation. A concurrent
+  revoke either commits before this guard (and blocks the call) or waits until the current
+  in-flight call finishes; after revoke returns, no later call can pass this guard.
+  """
+  with self._session() as db:
+   db.execute("BEGIN IMMEDIATE")
+   active=db.execute("""SELECT 1 FROM arc_application_tool_grants
+    WHERE tenant_id=? AND application_id=? AND tool_id=? AND revoked_at IS NULL""",
+    (tenant_id,application_id,tool_id)).fetchone()
+   if not active:raise PermissionError("Owner tool grant is no longer active")
+   yield
  def active_tool_ids(self,tenant_id,application_id):
   with self._session() as db:
    return {r["tool_id"] for r in db.execute("SELECT tool_id FROM arc_application_tool_grants WHERE tenant_id=? AND application_id=? AND revoked_at IS NULL",(tenant_id,application_id)).fetchall()}
