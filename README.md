@@ -272,4 +272,20 @@ Project One connects to the application-scoped control-plane API on this service
 
 The legacy `/v1/tenants` customer API uses an older identity schema. It is deliberately isolated in `ORACLE_ARC_TENANT_IDENTITY_DB_PATH` (default: `data/oracle_arc_tenant_identity.sqlite3`). The Project One `/v1/platform` identity and execution control plane uses `ORACLE_ARC_DB_PATH`. Do not point both settings at the same SQLite file: their identity table layouts are not compatible. The owner tool-grant store remains on the platform database so grants are bound to Project One applications created by the platform owner-provisioning API.
 
-Project One browser credentials are application-scoped and must be held only in memory or a trusted BFF. CORS is optional and exact-origin only; prefer the same-origin BFF for production owner actions. Tool grants are governance records, not proof that agent tool execution is enabled: the platform worker continues to deny tool-bearing agent manifests until the scoped broker is integrated and tested in the worker runtime.
+Project One browser credentials are application-scoped and must be held only in memory or a trusted BFF. CORS is optional and exact-origin only; prefer the same-origin BFF for production owner actions. The scoped broker is now wired into the platform worker model-call loop. The initial trusted registry exposes only `tool.calculate`, executed through the existing isolated rootless-Podman plugin worker. A tool is visible and callable only when the agent manifest, the active application-principal credential, the active owner grant, and the worker credential all authorize it. Other tool IDs remain unavailable until a reviewed handler is registered server-side and covered by isolation tests. Worker credentials that need calculator access must explicitly include `tool.calculate`; application credentials must independently include the same capability.
+
+
+### Durable execution event stream
+
+`GET /v1/platform/executions/events?after=<event_id>&duration_seconds=50` returns an authenticated Server-Sent Events stream. Lifecycle events are written by SQLite triggers to `arc_execution_events`, so reconnecting with the last event ID replays updates without relying on in-memory process state. The stream is scoped to the authenticated tenant, application and principal, revalidates the application credential periodically, sends keepalives, and closes after a bounded lifetime so clients can reconnect. Project One uses fetch-based streaming because native browser EventSource cannot attach its in-memory bearer credential.
+
+### Worker tool permissions
+
+For a calculator-enabled agent, all four independent grants are required:
+
+1. Agent manifest `allowed_tools` contains `tool.calculate`.
+2. At least one active application credential for the execution principal contains capability `tool.calculate`.
+3. The owner has an active `tool.calculate` grant for the same tenant/application.
+4. The worker credential was issued with `tool.calculate` in addition to execution lifecycle capabilities.
+
+The worker re-reads application capabilities and owner grants before each tool call and revalidates the worker credential. Tool schemas are generated from the trusted server registry; model output cannot add tools or handlers.
