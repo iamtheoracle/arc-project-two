@@ -31,5 +31,6 @@ def build_platform_tool_broker(plugin_registry: PluginRegistry | None = None) ->
                 "additionalProperties": False,
             },
             handler=calculate,
+            function_name="tool_calculate",
         ),
     ])
