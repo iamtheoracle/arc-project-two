@@ -7,15 +7,17 @@ import math
 import operator
 import sys
 
-try:
-    import resource
-    resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (1048576, 1048576))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
-    if hasattr(resource, "RLIMIT_AS"):
-        resource.setrlimit(resource.RLIMIT_AS, (268435456, 268435456))
-except (ImportError, AttributeError, OSError, ValueError):
-    pass
+def apply_resource_limits():
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (1048576, 1048576))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
+        if hasattr(resource, "RLIMIT_AS"):
+            resource.setrlimit(resource.RLIMIT_AS, (268435456, 268435456))
+    except (ImportError, AttributeError, OSError, ValueError):
+        pass
+
 
 OPS = {
     ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
@@ -88,6 +90,7 @@ def execute_payload(payload):
 
 
 def main():
+    apply_resource_limits()
     raw = sys.stdin.read(MAX_INPUT_BYTES + 1)
     if len(raw.encode("utf-8")) > MAX_INPUT_BYTES:
         raise ValueError("Worker input exceeds the maximum length")
