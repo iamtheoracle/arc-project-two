@@ -13,6 +13,13 @@ class ToolGrantStore:
     tool_id TEXT NOT NULL,granted_by TEXT NOT NULL,created_at INTEGER NOT NULL,
     revoked_at INTEGER,revoked_by TEXT);
    CREATE INDEX IF NOT EXISTS arc_tool_grants_scope ON arc_application_tool_grants(tenant_id,application_id,revoked_at);
+   CREATE TABLE IF NOT EXISTS arc_tool_invocation_audit(
+    invocation_id TEXT PRIMARY KEY,grant_id TEXT,tenant_id TEXT NOT NULL,
+    application_id TEXT NOT NULL,tool_id TEXT NOT NULL,execution_id TEXT NOT NULL,
+    worker_id TEXT NOT NULL,outcome TEXT NOT NULL CHECK(outcome IN ('denied','failed','succeeded')),
+    occurred_at INTEGER NOT NULL);
+   CREATE INDEX IF NOT EXISTS arc_tool_invocation_scope
+    ON arc_tool_invocation_audit(tenant_id,application_id,occurred_at);
    CREATE TABLE IF NOT EXISTS arc_tool_grant_audit(
     audit_id TEXT PRIMARY KEY,grant_id TEXT NOT NULL,tenant_id TEXT NOT NULL,
     application_id TEXT NOT NULL,tool_id TEXT NOT NULL,action TEXT NOT NULL,
@@ -51,20 +58,47 @@ class ToolGrantStore:
    else:rows=db.execute("SELECT * FROM arc_application_tool_grants ORDER BY created_at DESC LIMIT 500").fetchall()
    return [self._record(r) for r in rows]
  @contextmanager
- def execution_guard(self,tenant_id,application_id,tool_id):
-  """Linearize tool execution against owner revocation.
+ def execution_guard(self,tenant_id,application_id,tool_id,execution_id,worker_id):
+  """Serialize a bounded tool call against revocation and persist its outcome.
 
-  A short SQLite write reservation is held for the bounded tool invocation. A concurrent
-  revoke either commits before this guard (and blocks the call) or waits until the current
-  in-flight call finishes; after revoke returns, no later call can pass this guard.
+  Only identifiers and outcome are recorded: never tool arguments, results or secrets.
   """
   with self._session() as db:
    db.execute("BEGIN IMMEDIATE")
-   active=db.execute("""SELECT 1 FROM arc_application_tool_grants
-    WHERE tenant_id=? AND application_id=? AND tool_id=? AND revoked_at IS NULL""",
-    (tenant_id,application_id,tool_id)).fetchone()
-   if not active:raise PermissionError("Owner tool grant is no longer active")
-   yield
+   grant=db.execute("""SELECT grant_id FROM arc_application_tool_grants
+    WHERE tenant_id=? AND application_id=? AND tool_id=? AND revoked_at IS NULL
+    ORDER BY created_at DESC LIMIT 1""",(tenant_id,application_id,tool_id)).fetchone()
+   if not grant:
+    prior=db.execute("""SELECT grant_id FROM arc_application_tool_grants
+     WHERE tenant_id=? AND application_id=? AND tool_id=?
+     ORDER BY created_at DESC LIMIT 1""",(tenant_id,application_id,tool_id)).fetchone()
+    db.execute("INSERT INTO arc_tool_invocation_audit VALUES(?,?,?,?,?,?,?,?,?)",
+     ("tia_"+uuid.uuid4().hex,prior["grant_id"] if prior else None,tenant_id,
+      application_id,tool_id,execution_id,worker_id,"denied",int(time.time())))
+    db.commit()
+    raise PermissionError("Owner tool grant is no longer active")
+   try:
+    yield
+   except Exception:
+    db.execute("INSERT INTO arc_tool_invocation_audit VALUES(?,?,?,?,?,?,?,?,?)",
+     ("tia_"+uuid.uuid4().hex,grant["grant_id"],tenant_id,application_id,
+      tool_id,execution_id,worker_id,"failed",int(time.time())))
+    db.commit()
+    raise
+   else:
+    db.execute("INSERT INTO arc_tool_invocation_audit VALUES(?,?,?,?,?,?,?,?,?)",
+     ("tia_"+uuid.uuid4().hex,grant["grant_id"],tenant_id,application_id,
+      tool_id,execution_id,worker_id,"succeeded",int(time.time())))
+ @staticmethod
+ def _audit_record(row): return dict(row)
+ def invocation_audit(self,tenant_id,application_id,limit=500):
+  if not isinstance(limit,int) or isinstance(limit,bool) or not 1<=limit<=1000:
+   raise ValueError("limit must be between 1 and 1000")
+  with self._session() as db:
+   rows=db.execute("""SELECT * FROM arc_tool_invocation_audit
+    WHERE tenant_id=? AND application_id=? ORDER BY occurred_at DESC LIMIT ?""",
+    (tenant_id,application_id,limit)).fetchall()
+   return [self._audit_record(r) for r in rows]
  def active_tool_ids(self,tenant_id,application_id):
   with self._session() as db:
    return {r["tool_id"] for r in db.execute("SELECT tool_id FROM arc_application_tool_grants WHERE tenant_id=? AND application_id=? AND revoked_at IS NULL",(tenant_id,application_id)).fetchall()}
