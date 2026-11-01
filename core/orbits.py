@@ -80,7 +80,7 @@ def _detect(data: bytes) -> tuple[str, str]:
         try:
             decoded_sample = sample.decode("utf-8-sig")
             if re.match(
-                r"(?is)^\\s*(?:<!--.*?-->\\s*)*(?:<\\s*(?:svg|html|script|iframe|object|embed)\\b|<!doctype\\b|<\\?xml\\b)",
+                r"(?is)^\s*(?:<!--.*?-->\s*)*(?:<\s*(?:svg|html|script|iframe|object|embed)\b|<!doctype\b|<\?xml\b)",
                 decoded_sample,
             ):
                 raise OrbitAssetRejected("Active markup and binary archive formats are not accepted as plain text")
