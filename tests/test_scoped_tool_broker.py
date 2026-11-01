@@ -73,3 +73,25 @@ def test_unregistered_tools_and_unsafe_schemas_fail_closed():
             {"type": "object", "properties": {}, "additionalProperties": True},
             lambda _context, _arguments: None,
         )])
+
+
+def test_provider_safe_function_name_maps_back_to_internal_tool_id():
+    broker = make_broker([])
+    schemas = broker.schemas(
+        manifest_tools={"tool.lookup"}, application_grants={"tool.lookup"},
+        owner_policy={"tool.lookup"}, worker_capabilities={"tool.lookup"},
+    )
+    assert schemas[0]["function"]["name"] == "tool_lookup"
+    assert broker.resolve_tool_id("tool_lookup") == "tool.lookup"
+    assert broker.resolve_tool_id("tool.unknown") is None
+
+
+def test_duplicate_provider_function_names_are_rejected():
+    def handler(_context, _arguments):
+        return None
+    schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+    with pytest.raises(ValueError, match="Duplicate provider tool function name"):
+        ScopedToolBroker([
+            ToolDefinition("tool.a", "tool.a", "A", schema, handler),
+            ToolDefinition("tool_a", "tool_a", "B", schema, handler),
+        ])
