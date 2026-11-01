@@ -393,7 +393,10 @@ def cancel_platform_execution(execution_id: str, identity=Depends(require_applic
 from core.platform_workers import WorkerService
 
 def _workers() -> WorkerService:
-    return WorkerService(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    # Ensure execution tables and additive migrations exist before any worker API call.
+    database = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+    _control_plane()
+    return WorkerService(database)
 
 def require_worker(authorization: str | None = Header(default=None)):
     scheme, _, token = (authorization or "").partition(" ")
