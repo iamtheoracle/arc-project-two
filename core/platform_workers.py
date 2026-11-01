@@ -195,7 +195,23 @@ class WorkerService:
         capabilities = set(json.loads(row["capabilities_json"]))
         required = (set(manifest.get("required_capabilities", []))
                     | set(manifest.get("allowed_tools", [])) | {"agent.execute"})
-        return required.issubset(capabilities)
+        if not required.issubset(capabilities):
+            return False
+        if execution["route_id"] not in manifest.get("model_routes", []):
+            return False
+        route = db.execute("""SELECT provider_id,model_id,data_classifications_json,
+              regions_json,enabled FROM arc_model_routes
+              WHERE tenant_id=? AND application_id=? AND route_id=?""",
+            (execution["tenant_id"], execution["application_id"], execution["route_id"])).fetchone()
+        if route is None or route["enabled"] != 1:
+            return False
+        if route["provider_id"] != execution["model_provider"] or route["model_id"] != execution["model_id"]:
+            return False
+        if execution["classification"] not in json.loads(route["data_classifications_json"]):
+            return False
+        if execution["region"] not in json.loads(route["regions_json"]):
+            return False
+        return True
 
     def claim(self, worker: WorkerIdentity, lease_seconds: int = 60):
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) or not 5 <= lease_seconds <= 900:
