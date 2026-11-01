@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -135,6 +136,16 @@ def build_default_orbits_registry(runner=None) -> "OrbitProcessorRegistry":
         lambda asset, data: isolated_runner("audio.inspect", data),
         isolated=True,
     )
+    # ASR is a separate, opt-in worker. Do not advertise it until a separately
+    # provisioned local model directory is present on this host.
+    model_dir = os.environ.get("ORACLE_ARC_ASR_MODEL_DIR", "").strip()
+    if model_dir and os.path.isabs(model_dir) and os.path.isdir(model_dir):
+        from core.orbits_asr_runtime import run_local_asr
+        registry.register(
+            "audio.transcribe", "audio", _LIMITS["audio"],
+            lambda asset, data: run_local_asr(data),
+            isolated=True,
+        )
     return registry
 
 
