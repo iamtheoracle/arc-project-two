@@ -49,6 +49,8 @@ def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any]) -
     """Minimal text runtime. Tools remain unavailable until trusted tool adapters exist."""
     if execution.get("model_provider") != "ollama":
         raise RuntimeUnavailable("This installed runtime currently supports Ollama routes only")
+    if manifest.get("allowed_tools"):
+        raise RuntimeUnavailable("This runtime has no approved tool adapters installed")
     try:
         payload = json.loads(execution["input_json"])
     except (KeyError, TypeError, ValueError) as exc:
