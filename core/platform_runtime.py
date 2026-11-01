@@ -6,6 +6,7 @@ runtime identifier; they never provide executable source or import paths.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Callable
 
 
@@ -16,6 +17,10 @@ class RuntimeUnavailable(RuntimeError):
 class TrustedRuntimeRegistry:
     def __init__(self):
         self._handlers: dict[str, Callable] = {}
+
+    @property
+    def runtime_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self._handlers))
 
     def register(self, runtime_id: str, handler: Callable) -> None:
         if not isinstance(runtime_id, str) or not runtime_id.strip() or len(runtime_id) > 128:
@@ -82,3 +87,10 @@ def default_runtime_registry() -> TrustedRuntimeRegistry:
     registry = TrustedRuntimeRegistry()
     registry.register("oracle-arc-agent-v1", _ollama_agent_runtime)
     return registry
+
+
+def trusted_runtime_ids() -> set[str]:
+    """Intersection of operator configuration and code-installed handlers."""
+    configured = {x.strip() for x in os.environ.get(
+        "ORACLE_ARC_TRUSTED_RUNTIME_IDS", "oracle-arc-agent-v1").split(",") if x.strip()}
+    return configured.intersection(default_runtime_registry().runtime_ids)
