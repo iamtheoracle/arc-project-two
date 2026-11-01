@@ -139,7 +139,9 @@ def build_default_orbits_registry(runner=None) -> "OrbitProcessorRegistry":
     # ASR is a separate, opt-in worker. Do not advertise it until a separately
     # provisioned local model directory is present on this host.
     model_dir = os.environ.get("ORACLE_ARC_ASR_MODEL_DIR", "").strip()
-    if model_dir and os.path.isabs(model_dir) and os.path.isdir(model_dir):
+    if (model_dir and os.path.isabs(model_dir) and os.path.isdir(model_dir)
+            and os.path.isfile(os.path.join(model_dir, "config.json"))
+            and os.path.isfile(os.path.join(model_dir, "model.bin"))):
         from core.orbits_asr_runtime import run_local_asr
         registry.register(
             "audio.transcribe", "audio", _LIMITS["audio"],
