@@ -39,6 +39,7 @@ def run_once(workers: WorkerService, worker, runtimes, lease_seconds: int = 900)
         manifest = workers.execution_manifest(worker, execution["execution_id"])
         result = runtimes.execute(manifest["runtime"], execution, manifest)
         if lost_lease.is_set():
+            workers.fail(worker, execution["execution_id"], "execution_fenced", retryable=False)
             return True
         for metric in ("input_tokens", "output_tokens"):
             quantity = result.get(metric)
