@@ -19,7 +19,7 @@ from core.platform_worker import PlatformWorker
 CAPABILITIES = [
     "agent.register", "agent.read", "agent.execute", "agent.execution.read",
     "model.route.manage", "model.route.use", "quota.manage", "usage.read", "reasoning",
-    "tool.calculate", "spark.memory.read", "spark.memory.write",
+    "tool.calculate", "spark.memory.read", "spark.memory.write", "agent.execution.cancel",
 ]
 
 
@@ -205,6 +205,35 @@ def test_spark_memory_is_opt_in_and_permission_checked(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         worker.run_once()
     assert control.get_execution(identity, execution_id).status in {"failed", "dead_letter"}
+
+
+def test_worker_checks_cancellation_immediately_after_provider_returns(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(
+        tmp_path, tool=False
+    )
+
+    class CancellingGateway:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            assert control.cancel_execution(identity, execution_id)
+            return {
+                "message": {"content": "This response must be discarded.", "tool_calls": []},
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            }
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", CancellingGateway)
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    with pytest.raises(PermissionError, match="Execution lease"):
+        worker.run_once()
+    assert control.get_execution(identity, execution_id).status == "cancelled"
 
 
 def test_worker_executes_only_intersection_of_manifest_app_owner_and_worker_grants(tmp_path, monkeypatch):
