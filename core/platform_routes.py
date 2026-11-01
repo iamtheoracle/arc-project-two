@@ -366,20 +366,7 @@ def read_platform_execution(execution_id: str, identity=Depends(require_applicat
         raise HTTPException(404, str(exc))
 
 
-@router.post("/executions/{execution_id}/usage", status_code=201)
-def record_platform_usage(execution_id: str, metric: str, quantity: int,
-                          identity=Depends(require_application)):
-    try:
-        _control_plane().record_usage(identity, execution_id, metric, quantity)
-        return {"execution_id": execution_id, "metric": metric, "quantity": quantity}
-    except PermissionError as exc:
-        raise HTTPException(403, str(exc))
-    except LookupError as exc:
-        raise HTTPException(404, str(exc))
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-
-
+# Usage is written by the authenticated worker that owns the active lease.
 @router.get("/usage")
 def read_platform_usage(since: int = 0, identity=Depends(require_application)):
     try:
@@ -489,6 +476,24 @@ def fail_platform_work(execution_id: str, body: WorkerFailure,
         if not _workers().fail(worker, execution_id, body.error_code, body.retryable):
             raise HTTPException(409, "Execution lease is expired or not owned by this worker")
         return {"execution_id": execution_id, "status": "failure_recorded"}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+class WorkerUsage(BaseModel):
+    event_id: str = Field(min_length=1, max_length=128)
+    metric: str = Field(min_length=1, max_length=64)
+    quantity: int = Field(ge=0, le=2**63 - 1)
+
+@router.post("/worker/executions/{execution_id}/usage", status_code=201)
+def record_worker_usage(execution_id: str, body: WorkerUsage,
+                        worker=Depends(require_worker)):
+    try:
+        created = _workers().record_usage(worker, execution_id, body.event_id,
+                                          body.metric, body.quantity)
+        return {"execution_id": execution_id, "recorded": created,
+                "idempotent_replay": not created}
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
     except ValueError as exc:
