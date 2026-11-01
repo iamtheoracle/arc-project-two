@@ -193,3 +193,28 @@ class PlatformWorker:
                 # Failures are recorded against the execution; the daemon stays available
                 # for later work rather than terminating on one provider or payload error.
                 stop_event.wait(min(5.0, max(poll_interval, 0.5)))
+
+
+def main() -> None:
+    import os
+    import signal
+
+    database_path = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+    token = os.environ.get("ORACLE_ARC_WORKER_TOKEN")
+    if not token:
+        raise SystemExit("ORACLE_ARC_WORKER_TOKEN must be set in the worker service environment")
+    poll_interval = float(os.environ.get("ORACLE_ARC_WORKER_POLL_SECONDS", "1"))
+    lease_seconds = int(os.environ.get("ORACLE_ARC_WORKER_LEASE_SECONDS", "120"))
+    worker = PlatformWorker(database_path, token)
+    stop = threading.Event()
+
+    def request_stop(_signum, _frame):
+        stop.set()
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+    worker.run_forever(stop, poll_interval=poll_interval, lease_seconds=lease_seconds)
+
+
+if __name__ == "__main__":
+    main()
