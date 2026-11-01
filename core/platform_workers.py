@@ -211,6 +211,9 @@ class WorkerService:
             return False
         if execution["region"] not in json.loads(route["regions_json"]):
             return False
+        if manifest.get("runtime") == "oracle-arc-agent-v1":
+            if route["provider_id"] != "ollama" or execution["region"] != "local":
+                return False
         return True
 
     def claim(self, worker: WorkerIdentity, lease_seconds: int = 60):
