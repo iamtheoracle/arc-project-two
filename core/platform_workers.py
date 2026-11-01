@@ -242,7 +242,7 @@ class WorkerService:
                 manifest = json.loads(row["manifest_json"])
                 if not self._execution_authorized(db, row, manifest):
                     db.execute("""UPDATE arc_executions SET status='failed',
-                      error_code='application_authorization_revoked',updated_at=?
+                      error_code='execution_policy_rejected',updated_at=?
                       WHERE execution_id=? AND status='queued'""",
                       (now, row["execution_id"]))
                     continue
