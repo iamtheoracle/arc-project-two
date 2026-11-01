@@ -4,11 +4,19 @@ from core.orbits import validate_asset
 from core.orbits_quarantine import (
     DocumentQuarantineStore, MalwareDetected, MalwareScannerUnavailable,
 )
-from core.tenant_security import RequestIdentity
+from core.tenant_security import TenantSecurityStore
 
 
-def identity(tenant="tenant-a", app="app-a", principal="principal-a"):
-    return RequestIdentity("cred-a", tenant, app, principal, frozenset({"orbits.process"}), 1)
+def identity(database_path, principal="principal-a"):
+    security = TenantSecurityStore(str(database_path))
+    tenant = security.create_tenant("Tenant " + principal)
+    app = security.create_application(tenant, "Application")
+    token = security.issue_credential(
+        tenant, app, principal,
+        ["orbits.process", "document.index", "document.delete", "document.audit"],
+        ttl_seconds=3600,
+    )
+    return security.authenticate(token)
 
 
 def test_quarantine_requires_clean_scan_before_reporting_success(tmp_path):
@@ -17,7 +25,7 @@ def test_quarantine_requires_clean_scan_before_reporting_success(tmp_path):
         str(tmp_path / "db.sqlite3"), str(tmp_path / "quarantine"),
         scanner=lambda path: "ClamAV clean signature",
     )
-    result = store.ingest(identity(), asset, b"safe document text", retention_seconds=120)
+    result = store.ingest(identity(tmp_path / "db.sqlite3"), asset, b"safe document text", retention_seconds=120)
     assert result["status"] == "clean"
     assert (tmp_path / "quarantine" / (asset.asset_id + ".bin")).exists()
     actions = [x["action"] for x in store.audit(identity(), asset.asset_id)]
@@ -69,6 +77,6 @@ def test_quarantine_is_scoped_and_explicit_delete_is_audited(tmp_path):
         scanner=lambda path: "clean",
     )
     store.ingest(identity(), asset, data)
-    assert store.delete(identity("tenant-b"), asset.asset_id) is False
+    assert store.delete(identity(tmp_path / "db.sqlite3", "other-principal"), asset.asset_id) is False
     assert store.delete(identity(), asset.asset_id) is True
     assert store.audit(identity(), asset.asset_id)[-1]["action"] == "owner_requested_bytes_deleted"
