@@ -207,6 +207,8 @@ def test_worker_cannot_claim_another_application_or_unapproved_runtime(tmp_path)
     cp.register_agent(identity_a, "research", "1.0.0", manifest())
     issued_b = ids.provision("Tenant B", "APP", "principal-b", CAPS)
     identity_b = ids.authenticate(issued_b["secret"])
+    configure(cp, identity_b)
+    cp.register_agent(identity_b, "research", "1.0.0", manifest())
     workers = WorkerService(path)
     worker_b = workers.register(identity_b, ["oracle-arc-agent-v1"])["credential"]
     execution_id = cp.submit_execution(identity_a, "research", "1.0.0", "local-default", {})
