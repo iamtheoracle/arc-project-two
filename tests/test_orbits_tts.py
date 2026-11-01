@@ -29,6 +29,22 @@ def _model_dir(tmp_path):
     return model
 
 
+def _valid_tts_result():
+    audio_buffer = io.BytesIO()
+    with wave.open(audio_buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(22050)
+        wav_file.writeframes(b"\\x00\\x00" * 2205)
+    audio = audio_buffer.getvalue()
+    return {
+        "synthesis_status": "completed", "inference_location": "local",
+        "format": "audio/wav", "audio_base64": base64.b64encode(audio).decode(),
+        "sha256": hashlib.sha256(audio).hexdigest(), "sample_rate_hz": 22050,
+        "channels": 1, "size_bytes": len(audio),
+    }
+
+
 def _fake_piper(monkeypatch):
     class FakeVoice:
         @staticmethod
@@ -95,10 +111,7 @@ def test_tts_runtime_uses_isolated_read_only_offline_container(monkeypatch, tmp_
 
     class Completed:
         returncode = 0
-        stdout = json.dumps({"result": {
-            "synthesis_status": "completed", "inference_location": "local",
-            "format": "audio/wav", "audio_base64": "UklGRg==", "sha256": "a" * 64,
-        }})
+        stdout = json.dumps({"result": _valid_tts_result()})
 
     def fake_run(command, **kwargs):
         seen["command"] = command
