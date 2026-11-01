@@ -189,6 +189,10 @@ def test_worker_credentials_are_independent_scoped_and_revocable(tmp_path):
     assert claim["execution_id"] == execution_id
     assert claim["lease_owner"] == worker.worker_id
     assert workers.heartbeat(worker, execution_id, 60)
+    assert workers.record_usage(worker, execution_id, "evt-1", "input_tokens", 15)
+    assert not workers.record_usage(worker, execution_id, "evt-1", "input_tokens", 15)
+    with pytest.raises(ValueError, match="different values"):
+        workers.record_usage(worker, execution_id, "evt-1", "input_tokens", 16)
     assert workers.complete(worker, execution_id, {"answer": "done"})
     assert cp.get_execution(identity, execution_id).status == "succeeded"
 
@@ -220,11 +224,10 @@ def test_worker_cannot_claim_another_application_or_unapproved_runtime(tmp_path)
 def test_worker_lease_cannot_complete_after_expiry_or_cancellation(tmp_path):
     from core.platform_workers import WorkerService
 
-    path, _, identity, cp = setup(tmp_path)
+    path, ids, identity, cp = setup(tmp_path)
     identity_caps = list(identity.capabilities) + ["agent.execution.cancel"]
-    # Issue a second application identity with cancellation and worker permissions.
-    _, ids, _, _ = setup(tmp_path)
-    issued = ids.provision("Tenant A", "APP", "principal-expiry", identity_caps)
+    # Issue a distinct principal and app in the same durable identity database.
+    issued = ids.provision("Tenant A expiry", "APP expiry", "principal-expiry", identity_caps)
     identity = ids.authenticate(issued["secret"])
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
