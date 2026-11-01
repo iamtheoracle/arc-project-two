@@ -3,7 +3,11 @@ on:
   push:
     branches: [main, 'feat/oracle-arc-personal-core', 'feat/human-understanding-adaptive-intelligence', 'feat/oracle-arc-network-platform-architecture']
   pull_request:
-    branches: [main, 'feat/oracle-arc-personal-core']
+    branches:
+      - main
+      - 'feat/oracle-arc-personal-core'
+      - 'feat/oracle-arc-network-platform-architecture'
+      - 'feat/arc-secure-worker-execution-runtime'
 permissions:
   contents: read
 jobs:
