@@ -208,3 +208,41 @@ def test_remote_agent_api_requires_explicit_residency_and_classification(client)
         "classification": "private", "region": "unspecified",
     })
     assert accepted.status_code == 202
+
+
+def test_local_model_discovery_requires_explicit_read_capability(client, monkeypatch):
+    from core import platform_routes
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Discovery Tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Discovery App"}).json()["application_id"]
+
+    def issue(capabilities):
+        return client.post(
+            f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+            headers=owner(), json={"principal_id": "discovery-user",
+                                   "capabilities": capabilities}).json()["credential"]
+
+    denied = {"Authorization": "Bearer " + issue(["agent.read"])}
+    assert client.get("/v1/platform/models/discovered", headers=denied).status_code == 403
+    allowed = {"Authorization": "Bearer " + issue(["model.route.read"])}
+
+    class FakeDiscovery:
+        def __init__(self, host):
+            assert host == "http://127.0.0.1:11434"
+
+        def public_inventory(self, limit):
+            assert limit == 10
+            return [{"model_id": "test-model", "capabilities": {"text": True}}]
+
+        def health(self):
+            from core.model_discovery import ProviderHealth
+            return ProviderHealth("ollama", True, "ready", "test-version")
+
+    monkeypatch.setattr(platform_routes, "LocalOllamaDiscovery", FakeDiscovery)
+    inventory = client.get("/v1/platform/models/discovered?limit=10", headers=allowed)
+    assert inventory.status_code == 200
+    assert inventory.json()["models"][0]["model_id"] == "test-model"
+    health = client.get("/v1/platform/providers/ollama/health", headers=allowed)
+    assert health.status_code == 200
+    assert health.json()["healthy"] is True
