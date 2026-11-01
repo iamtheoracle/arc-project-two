@@ -155,6 +155,7 @@ class PlatformWorker:
             "policy": "oracle-arc-reasoning-v1",
             "task_type": profile.task_type,
             "risk_level": profile.risk_level,
+            "response_requirements": list(profile.response_requirements),
             "checks": {
                 "current_evidence": profile.needs_current_evidence,
                 "calculation": profile.needs_calculation_check,
