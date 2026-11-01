@@ -19,6 +19,7 @@ from core.concierge_runtime import ConciergeWorkflowStore, ConciergeError
 from core.tenant_security import TenantSecurityStore, AuthorizationError
 from core.platform_control_plane import PlatformControlPlane
 from core.worker_identity import WorkerIdentityStore, WorkerIdentity
+from core.document_retrieval import DocumentRetrievalStore
 
 router=APIRouter(prefix="/v1/platform",tags=["platform-identity"])
 _CONCIERGE_EXECUTORS: dict[str, Callable] = {}
@@ -68,6 +69,12 @@ class CredentialCreate(BaseModel):
 class MemoryCreate(BaseModel):
     content:str=Field(min_length=1,max_length=20000)
     category:str="preference"
+
+class DocumentIngest(BaseModel):
+    title:str=Field(min_length=1,max_length=240)
+    source_uri:str=Field(min_length=1,max_length=2048)
+    content:str=Field(min_length=1,max_length=100000)
+    classification:str="private"
 
 class TaskCreate(BaseModel):
     agent_id:str=Field(min_length=1,max_length=64)
@@ -170,6 +177,45 @@ def read_shared_memories(source_application_id:str,identity=Depends(require_appl
         return {"data":_store().shared_memories(identity,source_application_id)}
     except AuthorizationError as exc:
         raise HTTPException(403,str(exc))
+
+
+@router.post("/documents", status_code=201)
+def ingest_platform_document(body: DocumentIngest, identity=Depends(require_application)):
+    """Index already-extracted text under the authenticated application identity."""
+    try:
+        store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        document_id = store.index_text(
+            identity, body.title, body.source_uri, body.content, body.classification
+        )
+        return {"document_id": document_id, "indexed": True, "source_uri": body.source_uri}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/documents/search")
+def search_platform_documents(query: str = Field(min_length=2, max_length=2000),
+                               limit: int = 5, identity=Depends(require_application)):
+    try:
+        store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        results = store.search(identity, query, limit)
+        return {"data": results, "count": len(results)}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.delete("/documents/{document_id}")
+def delete_platform_document(document_id: str, identity=Depends(require_application)):
+    try:
+        store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        if not store.delete(identity, document_id):
+            raise HTTPException(404, "Document not found in this application and principal scope")
+        return {"document_id": document_id, "deleted": True}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
 
 
 @router.post("/agent-tasks",status_code=202)
