@@ -46,7 +46,10 @@ def run_once(workers: WorkerService, worker, runtimes, lease_seconds: int = 900)
                 workers.record_usage(worker, execution["execution_id"],
                                      f"attempt-{execution['attempt']}-{metric}",
                                      metric, quantity)
-        workers.complete(worker, execution["execution_id"], result)
+        if not workers.complete(worker, execution["execution_id"], result):
+            # A revoked application credential, disabled version, cancellation or
+            # expired lease fences completion. Attempt safe failure cleanup only.
+            workers.fail(worker, execution["execution_id"], "execution_fenced", retryable=False)
     except RuntimeUnavailable:
         workers.fail(worker, execution["execution_id"], "runtime_unavailable", retryable=False)
     except (ValueError, PermissionError):
