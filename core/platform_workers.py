@@ -314,6 +314,32 @@ class WorkerService:
         finally:
             db.close()
 
+    def authorize_tool_call(self, worker: WorkerIdentity, execution_id: str, tool_id: str) -> bool:
+        """Revalidate live execution policy and the exact tool grant immediately before invocation."""
+        self._reauthorize(worker)
+        if not isinstance(tool_id, str) or not tool_id:
+            raise ValueError("A valid tool identifier is required")
+        db = self._db()
+        try:
+            row = db.execute("""SELECT e.*,a.manifest_json FROM arc_executions e
+              JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
+                AND a.application_id=e.application_id AND a.agent_id=e.agent_id
+                AND a.version=e.agent_version AND a.status='active'
+              WHERE e.execution_id=? AND e.tenant_id=? AND e.application_id=?
+                AND e.status='running' AND e.lease_owner=? AND e.lease_expires_at>?""",
+              (execution_id, worker.tenant_id, worker.application_id,
+               worker.worker_id, int(time.time()))).fetchone()
+            if row is None:
+                return False
+            manifest = json.loads(row["manifest_json"])
+            if tool_id not in manifest.get("allowed_tools", []):
+                return False
+            if not self._execution_authorized(db, row, manifest):
+                return False
+            return True
+        finally:
+            db.close()
+
     def heartbeat(self, worker: WorkerIdentity, execution_id: str, lease_seconds: int = 60) -> bool:
         self._reauthorize(worker)
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) or not 5 <= lease_seconds <= 900:
