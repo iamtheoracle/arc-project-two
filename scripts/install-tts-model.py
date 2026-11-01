@@ -24,7 +24,7 @@ def main() -> None:
     if (not repo_id or not re.fullmatch(r"[0-9a-fA-F]{40}", revision)
             or not model_file or not config_file or not license_name):
         raise SystemExit("Set model ID, immutable 40-character revision, ONNX/config filenames and verified license.")
-    if any(x in model_file + config_file for x in ("..", "\\\\", "\\x00")):
+    if any(x in model_file + config_file for x in ("..", "\\", "\x00")):
         raise SystemExit("Model filenames must be safe repository-relative paths.")
     destination.mkdir(parents=True, exist_ok=True, mode=0o750)
     downloaded_model = hf_hub_download(repo_id=repo_id, filename=model_file, revision=revision)
