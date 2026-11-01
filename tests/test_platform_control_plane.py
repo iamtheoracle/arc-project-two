@@ -207,3 +207,69 @@ def test_worker_claim_requires_authenticated_application_scope(tmp_path):
     _, _, identity, cp = setup(tmp_path)
     with pytest.raises(PermissionError, match="application scope"):
         cp.claim_execution("wrk_fake", 5)
+
+
+def test_execution_persists_classification_and_region_for_runtime(tmp_path):
+    _, _, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest(tools=[]))
+    eid = cp.submit_execution(identity, "research", "1.0.0", "local-default",
+                               {"prompt": "hello"}, classification="private", region="local")
+    claim = cp.claim_execution("wrk_test_worker", 30, identity.tenant_id, identity.application_id)
+    assert claim.execution_id == eid
+    assert claim.classification == "private"
+    assert claim.region == "local"
+    assert claim.route_id == "local-default"
+
+
+def test_worker_executes_model_and_commits_usage_atomically(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from core.platform_worker import PlatformWorker
+    from core.worker_identity import WorkerIdentityStore
+    path, ids, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest(tools=[]))
+    eid = cp.submit_execution(identity, "research", "1.0.0", "local-default",
+                               {"prompt": "Explain the task"})
+    workers = WorkerIdentityStore(path)
+    _, token = workers.issue(identity.tenant_id, identity.application_id,
+                             ["execution.claim", "execution.heartbeat", "execution.complete"], 3600)
+
+    class FakeGateway:
+        def __init__(self, provider_id):
+            assert provider_id == "ollama"
+
+        def chat(self, model, messages, temperature):
+            assert model == "qwen2.5:7b"
+            assert messages[-1]["content"] == "Explain the task"
+            return SimpleNamespace(
+                message=SimpleNamespace(content="Completed result"),
+                prompt_eval_count=17,
+                eval_count=9,
+            )
+
+    monkeypatch.setattr("core.platform_worker.ModelGateway", FakeGateway)
+    worker = PlatformWorker(path, token)
+    result = worker.run_once(lease_seconds=30)
+    assert result["execution_id"] == eid
+    assert result["status"] == "succeeded"
+    assert result["usage"] == {"input_tokens": 17, "output_tokens": 9}
+    assert cp.get_execution(identity, eid).status == "succeeded"
+    assert cp.usage_summary(identity, 0) == {"input_tokens": 17, "output_tokens": 9}
+
+
+def test_worker_policy_failure_is_not_retried(tmp_path, monkeypatch):
+    from core.platform_worker import PlatformWorker
+    from core.worker_identity import WorkerIdentityStore
+    path, ids, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    eid = cp.submit_execution(identity, "research", "1.0.0", "local-default",
+                               {"prompt": "This manifest requests a tool"})
+    workers = WorkerIdentityStore(path)
+    _, token = workers.issue(identity.tenant_id, identity.application_id,
+                             ["execution.claim", "execution.complete"], 3600)
+    worker = PlatformWorker(path, token)
+    with pytest.raises(PermissionError):
+        worker.run_once(lease_seconds=30)
+    assert cp.get_execution(identity, eid).status == "failed"
