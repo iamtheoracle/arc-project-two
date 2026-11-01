@@ -2,7 +2,7 @@
 
 **Working branch:** `feat/oracle-arc-network-platform-architecture`  
 **Repository:** `iamtheoracle/arc-project-two`  
-**Latest recorded commit:** `9222d76c92a77a3850deed5904c6ed7bd33380f4`  
+**Latest recorded commit:** `abd3af0984d691f18c312e5f05ef9e68ba9547e3`  
 **State:** Active development; not merged or deployed.
 
 ## Completed in this working branch
@@ -225,3 +225,6 @@ This branch contains architecture documentation and focused security hardening. 
 - Additional commits in this implementation slice include `dd78005e7e4ccd1d3b0c7c8927905ba06dba964e`, `5c0615c26abdd7870a054113098dfad98c6b587b`, `4c752d17b820f34dfd1bb63f2b5d743d1183e767`, `58492c8f6f356960fbf80e88c5453148cb8c1a46`, `d0f826886606e5b5af844894794c0e547260fe89`, `fb6a94ad6243b6a744562138a9ec4865b29a0678`, `a6d95daea87f3135c833b194c0358e39ec11fff9`, `8998aaeb16211bc4b5183a7bd3813b7c3d034252`, `870df9cc219e037de20bd716386ba6e79cadfe5b`, `421b219b9cea95b9390ff71970aa3cc45bfd9d5b`, `b9437bb0284a94b7dbf934b14aca2ef84efb8f7f`, `ef8a19b995ce808bd39bb06ff1140cf75135349a`, `ee755ebce91924ba69af2904be756e008b1cb96c`, `fdfb5bc6152397ec7f62a7e6f6568c87f7256f12`, `b30d12ec8d5d92a825aad9aebd1c11ca6a89c4f6`, `852e918952b5983fb296bb21b8158d56a91e1589`, `67c5b5b931712cc5a2b4ac33518c666fe38c47d5`, `092f62df9170d8fef18f0f037d8d413858f5990e`, `1b2e414f15dc64888dedc75a34fdae6b80a2d6e1`, `704c6b68f5e98f64437cb7d200a0ef884dc319c8`, `fa200761808f17ded414c295b17f3cc81bdebe25`, `cc9bd0c838572971b02cd0811f8dca86e22263c5`, `e06363a2f30fe868c3b2caff6585684d30b78fe5` and `9222d76c92a77a3850deed5904c6ed7bd33380f4`.
 - **Still not production-complete:** remote provider adapters, real tool adapters and sandboxing, durable/distributed queue backend, dead-letter inspection/replay APIs, multi-worker quota coordination, process/container isolation, worker deployment configuration, DB migration/restore drills and adversarial integration testing remain open.
 - Validation: the branch contains the source and tests, but this session has not executed the test suite. GitHub returned no CI status checks or workflow runs for the earlier checkpoint; the latest commit still needs a fresh CI run. No production deployment, customer traffic, arbitrary developer code execution, remote provider egress, or external side effects have been enabled.
+
+
+- Final runner hardening: if the lease heartbeat loses worker ownership or application authorization during inference, the runner now attempts a safe failure transition immediately rather than waiting for lease expiry. Commit: `abd3af0984d691f18c312e5f05ef9e68ba9547e3`.
