@@ -101,6 +101,9 @@ def test_expired_worker_lease_recovers_and_dead_letters(tmp_path):
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
                    (int(time.time()) - 1, eid))
     assert cp.recover_expired_leases() == {"requeued": 1, "dead_letter": 0}
+    with cp._session() as db:
+        db.execute("UPDATE arc_executions SET available_at=? WHERE execution_id=?",
+                   (int(time.time()) - 1, eid))
     retry = cp.claim_execution("worker-b", lease_seconds=5)
     assert retry.attempt == 2
     with cp._session() as db:
