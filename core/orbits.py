@@ -75,12 +75,15 @@ def _detect(data: bytes) -> tuple[str, str]:
             return media_type, mime
     if data:
         sample = data[:4096]
-        lowered = sample.lstrip().lower()
-        if (lowered.startswith((b"<svg", b"<html", b"<!doctype", b"<script", b"<?xml"))
-                or any(byte < 9 or 13 < byte < 32 for byte in sample)):
+        if any(byte < 9 or 13 < byte < 32 for byte in sample):
             raise OrbitAssetRejected("Active markup and binary archive formats are not accepted as plain text")
         try:
-            sample.decode("utf-8")
+            decoded_sample = sample.decode("utf-8-sig")
+            if re.match(
+                r"(?is)^\\s*(?:<!--.*?-->\\s*)*(?:<\\s*(?:svg|html|script|iframe|object|embed)\\b|<!doctype\\b|<\\?xml\\b)",
+                decoded_sample,
+            ):
+                raise OrbitAssetRejected("Active markup and binary archive formats are not accepted as plain text")
             return "document", "text/plain"
         except UnicodeDecodeError:
             pass
