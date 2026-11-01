@@ -257,3 +257,19 @@ The worker polls the application-scoped queue, claims a leased execution, rechec
 The current execution runner supports text-only prompts/messages and the configured Ollama adapter. Agent manifests that declare tools are rejected by this runner until a scoped tool broker is implemented. Provider token counts are recorded only when the provider returns them; no fabricated estimates are written. This does not yet provide billing-grade pricing, cross-host queue coordination, or automatic production deployment.
 
 For a single-host setup, API and worker must use the same protected SQLite database file and compatible model/provider configuration. For multi-host workers, migrate the control plane and queue to a shared transactional database before scaling. Start with a non-production tenant and test cancellation, worker revocation, provider timeouts, lease expiry and restart recovery before accepting real workloads.
+
+
+### Project One connection and identity boundaries
+
+Project One connects to the application-scoped control-plane API on this service:
+
+- `GET /v1/platform/identity` resolves the authenticated application, tenant, principal and capabilities.
+- `GET/POST /v1/platform/agents` and `/agents/versions` manage application-scoped agent versions.
+- `GET/PUT /v1/platform/model-routes` manages model routes.
+- `GET/POST /v1/platform/executions`, `GET /executions/{id}` and `POST /executions/{id}/cancel` manage workloads.
+- `GET/PUT /v1/platform/quotas` and `GET /v1/platform/usage` expose quota and usage data.
+- Owner tool grants are served separately at `/v1/tenants/owner/tool-grants`; they require the owner secret and must be called only by a trusted server-side Project One BFF. Application bearer credentials are never accepted for owner actions.
+
+The legacy `/v1/tenants` customer API uses an older identity schema. It is deliberately isolated in `ORACLE_ARC_TENANT_IDENTITY_DB_PATH` (default: `data/oracle_arc_tenant_identity.sqlite3`). The Project One `/v1/platform` identity and execution control plane uses `ORACLE_ARC_DB_PATH`. Do not point both settings at the same SQLite file: their identity table layouts are not compatible. The owner tool-grant store remains on the platform database so grants are bound to Project One applications created by the platform owner-provisioning API.
+
+Project One browser credentials are application-scoped and must be held only in memory or a trusted BFF. CORS is optional and exact-origin only; prefer the same-origin BFF for production owner actions. Tool grants are governance records, not proof that agent tool execution is enabled: the platform worker continues to deny tool-bearing agent manifests until the scoped broker is integrated and tested in the worker runtime.
