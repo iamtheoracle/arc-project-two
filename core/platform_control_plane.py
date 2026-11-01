@@ -288,6 +288,11 @@ class PlatformControlPlane:
         if (not isinstance(classifications, list) or not classifications or
             any(x not in allowed for x in classifications) or len(set(classifications)) != len(classifications)):
             raise ValueError("Invalid route data classifications")
+        # Remote provider endpoints are not an approved data-residency boundary.
+        # Until a provider-specific DPA/region policy is configured, only public
+        # data may leave the local Oracle Arc runtime.
+        if provider_id != "ollama" and set(classifications) != {"public"}:
+            raise PermissionError("Remote model providers are restricted to public data classifications")
         if (not isinstance(regions, list) or not regions or
             any(not isinstance(x, str) or not x.strip() or len(x) > 64 for x in regions) or
             len(set(regions)) != len(regions)):
@@ -312,6 +317,8 @@ class PlatformControlPlane:
             raise LookupError("Model route not found")
         if classification not in json.loads(row["data_classifications_json"]):
             raise PermissionError("Model route is not approved for this data classification")
+        if row["provider_id"] != "ollama" and classification != "public":
+            raise PermissionError("Remote model providers cannot process non-public data without an approved egress policy")
         if region not in json.loads(row["regions_json"]):
             raise PermissionError("Model route is not approved for this execution region")
         return {"provider_id": row["provider_id"], "model_id": row["model_id"]}
