@@ -10,7 +10,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 import re
 import sqlite3
 import time
@@ -18,6 +17,7 @@ import uuid
 from typing import Any
 
 from .tenant_identity import RequestIdentity
+from .platform_runtime import trusted_runtime_ids
 
 
 _ID = re.compile(r"^[a-z][a-z0-9._-]{1,63}$")
@@ -166,8 +166,7 @@ class PlatformControlPlane:
         for key in ("display_name", "description", "runtime"):
             if not isinstance(manifest[key], str) or not manifest[key].strip() or len(manifest[key]) > 500:
                 raise ValueError(f"Invalid agent manifest field: {key}")
-        trusted_runtimes = {x.strip() for x in os.environ.get(
-            "ORACLE_ARC_TRUSTED_RUNTIME_IDS", "oracle-arc-agent-v1").split(",") if x.strip()}
+        trusted_runtimes = trusted_runtime_ids()
         if manifest["runtime"] not in trusted_runtimes:
             raise PermissionError("Agent runtime is not in the server-side trusted runtime allowlist")
         caps, tools, routes = (manifest["required_capabilities"],
