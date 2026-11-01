@@ -295,3 +295,29 @@ Remote provider egress is deliberately fail-closed: OpenRouter, Groq and Gemini 
 
 
 See [the deployment runbook](docs/DEPLOYMENT_RUNBOOK.md) for the current single-host API/worker topology, persistent SQLite constraints, rootless Podman isolation, environment configuration and go-live checklist. Production deployment is not complete until that runbook is executed against a real host.
+
+## Permission-scoped documents and ORBITS media processing
+
+Application credentials can use the scoped document endpoints under `/v1/platform`:
+
+- `POST /documents` indexes already-extracted text (requires `document.index`).
+- `GET /documents/search?query=...` searches only the authenticated principal/application scope (requires `document.search`).
+- `DELETE /documents/{document_id}` tombstones a document in that same scope (requires `document.delete`).
+
+For binary input, build the separate isolated ORBITS worker image:
+
+```bash
+bash scripts/build-orbits-worker.sh
+```
+
+Set `ORACLE_ARC_ORBITS_WORKER_IMAGE=oracle-arc-orbits-worker:local` on the API host. The image must already be present locally; runtime execution uses Podman with `--pull=never`, no network, a read-only root filesystem, dropped Linux capabilities, non-root execution, resource limits and a hard timeout. Missing Podman or image fails closed.
+
+`POST /v1/platform/orbits/process` requires the `orbits.process` capability and accepts base64-encoded file bytes plus a processor ID:
+
+- `document.extract`: extracts text from PDF or UTF-8 plain text using `pypdf` for PDF files.
+- `image.ocr`: runs image OCR using Pillow and Tesseract.
+- `audio.inspect`: reads supported audio container/codec metadata using Mutagen. It does **not** transcribe speech; the response explicitly reports that transcription is not installed.
+
+Set `index_text: true` to index extracted PDF/plain-text or OCR text. This additionally requires `document.index`. The resulting document is stored with the authenticated tenant, application and principal scope. Audio metadata cannot be indexed as a transcript.
+
+The container is a processing boundary, not a guarantee of perfect extraction. Validate OCR accuracy, document parsing and media compatibility against representative and adversarial files before production use.
