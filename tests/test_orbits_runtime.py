@@ -48,7 +48,7 @@ def test_orbits_runner_fails_closed_on_timeout_and_unknown_processor(monkeypatch
 
 
 def test_orbits_default_registry_uses_only_isolated_platform_processors():
-    from core.orbits import build_default_orbits_registry
+    from core.orbits import build_default_orbits_registry, validate_asset
 
     registry = build_default_orbits_registry(runner=lambda processor, data: {"processor": processor})
     for processor_id, media_type, data, filename in (
@@ -56,6 +56,6 @@ def test_orbits_default_registry_uses_only_isolated_platform_processors():
         ("image.ocr", "image", b"\x89PNG\r\n\x1a\nmock", "image.png"),
         ("audio.inspect", "audio", b"ID3mock", "voice.mp3"),
     ):
-        asset = __import__("core.orbits", fromlist=["validate_asset"]).validate_asset(data, filename)
+        asset = validate_asset(data, filename)
         result = registry.process(processor_id, asset, data)
         assert result["processor"] == processor_id
