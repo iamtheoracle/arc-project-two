@@ -91,3 +91,36 @@ def test_document_delete_is_scoped_and_tombstones_content(tmp_path):
     doc_id = store.index_text(identity, "Delete me", "https://example.test/doc", "temporary content")
     assert store.delete(identity, doc_id)
     assert store.search(identity, "temporary content") == []
+
+
+def test_document_retention_expires_indexed_text_and_audits_deletion(tmp_path):
+    _, identity, _, _ = provision(tmp_path / "arc.sqlite3")
+    store = DocumentRetrievalStore(str(tmp_path / "arc.sqlite3"))
+    doc_id = store.index_text(
+        identity, "Expiring note", "arc://uploads/expiring",
+        "temporary retention evidence", retention_seconds=60,
+    )
+    with store._db() as db:
+        db.execute("UPDATE arc_documents SET expires_at=0 WHERE document_id=?", (doc_id,))
+    assert store.search(identity, "retention evidence") == []
+    with store._db() as db:
+        actions = [row["action"] for row in db.execute(
+            "SELECT action FROM arc_document_access_audit WHERE action='retention_expired'"
+        )]
+        row = db.execute("SELECT status,content FROM arc_documents WHERE document_id=?",
+                         (doc_id,)).fetchone()
+    assert actions == ["retention_expired"]
+    assert row["status"] == "deleted"
+    assert row["content"] == ""
+
+
+def test_document_explicit_delete_creates_audit_event(tmp_path):
+    _, identity, _, _ = provision(tmp_path / "arc.sqlite3")
+    store = DocumentRetrievalStore(str(tmp_path / "arc.sqlite3"))
+    doc_id = store.index_text(identity, "Audited", "arc://uploads/audited", "delete audit")
+    assert store.delete(identity, doc_id)
+    with store._db() as db:
+        actions = [row["action"] for row in db.execute(
+            "SELECT action FROM arc_document_access_audit WHERE action='delete'"
+        )]
+    assert actions == ["delete"]
