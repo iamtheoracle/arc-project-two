@@ -204,11 +204,15 @@ class PlatformControlPlane:
         with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
             for route_id in routes:
-                route = db.execute("""SELECT 1 FROM arc_model_routes
+                route = db.execute("""SELECT provider_id,regions_json FROM arc_model_routes
                     WHERE tenant_id=? AND application_id=? AND route_id=? AND enabled=1""",
                     (identity.tenant_id, identity.application_id, route_id)).fetchone()
                 if route is None:
                     raise LookupError("Every agent model route must already exist and be enabled")
+                if (manifest["runtime"] == "oracle-arc-agent-v1"
+                        and (route["provider_id"] != "ollama"
+                             or "local" not in json.loads(route["regions_json"]))):
+                    raise PermissionError("oracle-arc-agent-v1 supports local Ollama routes only")
             db.execute("""INSERT INTO arc_agent_versions
                 VALUES(?,?,?,?,?,?,'active',?)""",
                 (identity.tenant_id, identity.application_id, agent_id, version,
@@ -322,6 +326,8 @@ class PlatformControlPlane:
             (identity.tenant_id, identity.application_id, route_id)).fetchone()
         if route is None:
             raise LookupError("Enabled model route not found")
+        if manifest["runtime"] == "oracle-arc-agent-v1" and route["provider_id"] != "ollama":
+            raise PermissionError("oracle-arc-agent-v1 supports local Ollama routes only")
         if not set(manifest["required_capabilities"]).issubset(identity.capabilities):
             raise PermissionError("Application identity lacks agent-required capabilities")
         if not set(manifest["allowed_tools"]).issubset(set(identity.capabilities)):
