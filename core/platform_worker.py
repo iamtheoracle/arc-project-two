@@ -440,7 +440,23 @@ class PlatformWorker:
 
 " + memory_context
             self.identities.validate(self.identity, "execution.complete")
-            gateway = ModelGateway(provider_id=context["route"]["provider_id"])
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("execution_deadline_exceeded")
+            provider_id = context["route"]["provider_id"]
+            configured_provider_timeout = float(
+                __import__("os").environ.get(
+                    "ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS" if provider_id == "ollama"
+                    else "ORACLE_ARC_REMOTE_PROVIDER_TIMEOUT_SECONDS",
+                    "120" if provider_id == "ollama" else "30",
+                )
+            )
+            if not 0 < configured_provider_timeout <= 900:
+                raise ValueError("Configured provider timeout must be greater than 0 and at most 900 seconds")
+            gateway = ModelGateway(
+                provider_id=provider_id,
+                timeout_seconds=min(remaining, configured_provider_timeout),
+            )
             output_text, usage = self._model_with_tools(
                 gateway, context["route"]["model_id"], messages,
                 execution.execution_id, self.identity.worker_id,
