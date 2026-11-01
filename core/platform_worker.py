@@ -113,6 +113,9 @@ class PlatformWorker:
 
     def run_once(self, lease_seconds: int = 120) -> dict[str, Any] | None:
         self.identities.validate(self.identity, "execution.claim")
+        self.control.recover_expired_leases(
+            self.identity.tenant_id, self.identity.application_id
+        )
         execution = self.control.claim_execution(
             self.identity.worker_id, lease_seconds,
             self.identity.tenant_id, self.identity.application_id,
@@ -134,6 +137,8 @@ class PlatformWorker:
             row, context = self._execution_context(execution.execution_id, self.identity.worker_id)
             payload = json.loads(row["input_json"])
             messages = self._messages(payload, context["manifest"])
+            # Revalidate worker revocation and policy immediately before model invocation.
+            self.identities.validate(self.identity, "execution.complete")
             gateway = ModelGateway(provider_id=context["route"]["provider_id"])
             response = gateway.chat(context["route"]["model_id"], messages, temperature=0.2)
             message = self._field(response, "message", {})
