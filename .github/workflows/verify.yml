@@ -64,6 +64,20 @@ jobs:
           fi
       - name: Test local ASR registration, isolation contract and failure handling
         run: python -m pytest -q tests/test_orbits_asr.py
+      - name: Build separate offline local TTS worker image
+        env:
+          ORACLE_ARC_TTS_WORKER_IMAGE: oracle-arc-tts-worker:ci
+        run: bash scripts/build-orbits-tts-worker.sh
+      - name: Verify TTS fails closed without an installed local voice
+        run: |
+          if printf '{"processor_id":"audio.synthesize","text":"hello","voice_id":"local-default"}' | podman run --rm --interactive --pull=never --network=none --ipc=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=32 --memory=1g --memory-swap=1g --cpus=2 --user=65534:65534 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m oracle-arc-tts-worker:ci; then
+            echo "TTS unexpectedly ran without a provisioned local voice"
+            exit 1
+          else
+            echo "TTS correctly failed closed without a provisioned local voice"
+          fi
+      - name: Test TTS worker and capability-scoped synthesis API
+        run: python -m pytest -q tests/test_orbits_tts.py tests/test_platform_audio.py
       - name: Execute real isolated worker
         env:
           ORACLE_ARC_PLUGIN_WORKER_IMAGE: oracle-arc-plugin-worker:ci
