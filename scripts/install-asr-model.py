@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
@@ -16,10 +17,10 @@ def main() -> None:
     destination = Path(os.environ.get(
         "ORACLE_ARC_ASR_MODEL_DIR", "/opt/oracle-arc/models/whisper-small"
     )).expanduser()
-    if not repo_id or not revision or len(revision) < 7:
+    if not repo_id or not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
         raise SystemExit(
-            "Set ORACLE_ARC_ASR_MODEL_ID and an immutable "
-            "ORACLE_ARC_ASR_MODEL_REVISION (commit hash)."
+            "Set ORACLE_ARC_ASR_MODEL_ID and a 40-character immutable "
+            "ORACLE_ARC_ASR_MODEL_REVISION commit hash."
         )
     destination.mkdir(parents=True, exist_ok=True, mode=0o750)
     snapshot_download(repo_id=repo_id, revision=revision, local_dir=str(destination))
@@ -28,7 +29,11 @@ def main() -> None:
         raise SystemExit("Downloaded snapshot is not a complete faster-whisper model.")
     manifest = {}
     for path in sorted(p for p in destination.rglob("*") if p.is_file()):
-        manifest[str(path.relative_to(destination))] = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        manifest[str(path.relative_to(destination))] = digest.hexdigest()
     (destination / "oracle-arc-model-manifest.json").write_text(
         json.dumps({"repo_id": repo_id, "revision": revision, "sha256": manifest},
                    indent=2, sort_keys=True) + "\n",
