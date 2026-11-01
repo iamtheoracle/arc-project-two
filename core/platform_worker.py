@@ -385,6 +385,11 @@ class PlatformWorker:
 
     def run_once(self, lease_seconds: int = 120) -> dict[str, Any] | None:
         self.identities.validate(self.identity, "execution.claim")
+        execution_timeout = float(__import__("os").environ.get(
+            "ORACLE_ARC_EXECUTION_TIMEOUT_SECONDS", "300"
+        ))
+        if not 1 <= execution_timeout <= 3600:
+            raise ValueError("ORACLE_ARC_EXECUTION_TIMEOUT_SECONDS must be between 1 and 3600")
         self.control.recover_expired_leases(
             self.identity.tenant_id, self.identity.application_id
         )
@@ -405,11 +410,6 @@ class PlatformWorker:
         )
         heartbeat.start()
         gateway: ModelGateway | None = None
-        execution_timeout = float(__import__("os").environ.get(
-            "ORACLE_ARC_EXECUTION_TIMEOUT_SECONDS", "300"
-        ))
-        if not 1 <= execution_timeout <= 3600:
-            raise ValueError("ORACLE_ARC_EXECUTION_TIMEOUT_SECONDS must be between 1 and 3600")
         deadline = time.monotonic() + execution_timeout
         try:
             self.identities.validate(self.identity, "execution.complete")
