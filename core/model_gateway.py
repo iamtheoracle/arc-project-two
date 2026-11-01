@@ -106,8 +106,8 @@ class ProviderRegistry:
 class OllamaProvider:
     """Configured Ollama adapter with explicit host routing and remote-host safeguards."""
 
-    def __init__(self, host: Optional[str] = None) -> None:
-        timeout = float(os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
+    def __init__(self, host: Optional[str] = None, timeout_seconds: Optional[float] = None) -> None:
+        timeout = float(timeout_seconds if timeout_seconds is not None else os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
         if timeout <= 0 or timeout > 900:
             raise ValueError("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS must be between 0 and 900.")
         host = (host or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).strip()
@@ -151,9 +151,9 @@ class OllamaProvider:
 class OpenAICompatibleModelAdapter:
     """Fixed-endpoint remote adapter with the same validated tool-call contract as Ollama."""
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(self, config: ProviderConfig, timeout_seconds: float = 30.0) -> None:
         self.config = config
-        self.client = OpenAICompatibleProvider(config)
+        self.client = OpenAICompatibleProvider(config, timeout_seconds=timeout_seconds)
         self.manifest = ProviderManifest(
             provider_id=config.provider_id,
             display_name=config.provider_id.replace("-", " ").title(),
@@ -180,18 +180,23 @@ class OpenAICompatibleModelAdapter:
 class ModelGateway:
     """Routes validated model requests through an explicitly registered provider."""
 
-    def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None) -> None:
+    def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None, timeout_seconds: Optional[float] = None) -> None:
         self._owns_registry = registry is None
         self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
+            or not 0 < timeout_seconds <= 900
+        ):
+            raise ValueError("Provider timeout must be greater than 0 and at most 900 seconds.")
         self.registry = registry or ProviderRegistry()
         if registry is None:
             if self.provider_id == "ollama":
-                self.registry.register(OllamaProvider(host=host))
+                self.registry.register(OllamaProvider(host=host, timeout_seconds=timeout_seconds))
             else:
                 config = next((item for item in REMOTE_PROVIDER_CONFIGS
                                if item.provider_id == self.provider_id), None)
                 if config is not None:
-                    self.registry.register(OpenAICompatibleModelAdapter(config))
+                    self.registry.register(OpenAICompatibleModelAdapter(config, timeout_seconds=timeout_seconds or 30.0))
         # Fail closed: no silent fallback from a requested remote provider to local or vice versa.
         self.provider = self.registry.get(self.provider_id)
 
