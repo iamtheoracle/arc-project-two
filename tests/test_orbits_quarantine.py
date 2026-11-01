@@ -85,3 +85,19 @@ def test_quarantine_is_scoped_and_explicit_delete_is_audited(tmp_path):
     assert store.delete(other, asset.asset_id) is False
     assert store.delete(who, asset.asset_id) is True
     assert store.audit(who, asset.asset_id)[-1]["action"] == "owner_requested_bytes_deleted"
+
+
+def test_quarantine_rechecks_credential_revocation_before_storing_bytes(tmp_path):
+    from core.tenant_security import AuthorizationError
+
+    data = b"revocation race test"
+    asset = validate_asset(data, "revoked.txt")
+    database = tmp_path / "db.sqlite3"
+    who = provision_identity(database)
+    store = DocumentQuarantineStore(
+        str(database), str(tmp_path / "quarantine"), scanner=lambda path: "clean"
+    )
+    TenantSecurityStore(str(database)).revoke_credential(who.credential_id)
+    with pytest.raises(AuthorizationError):
+        store.ingest(who, asset, data)
+    assert not (tmp_path / "quarantine" / (asset.asset_id + ".bin")).exists()
