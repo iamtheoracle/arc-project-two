@@ -61,7 +61,7 @@ def provision(tmp_path, tool=True, provider_id="ollama", classification="private
     worker_id, worker_token = worker_ids.issue(
         tenant, application,
         ["execution.claim", "execution.heartbeat", "execution.complete",
-         "execution.fail", "tool.calculate"],
+         "execution.fail", "tool.calculate", "tool.document_search"],
         ttl_seconds=3600,
     )
     return database, identities, identity, control, grants, execution_id, worker_ids, worker_id, worker_token
