@@ -257,3 +257,77 @@ The worker polls the application-scoped queue, claims a leased execution, rechec
 The current execution runner supports text-only prompts/messages and the configured Ollama adapter. Agent manifests that declare tools are rejected by this runner until a scoped tool broker is implemented. Provider token counts are recorded only when the provider returns them; no fabricated estimates are written. This does not yet provide billing-grade pricing, cross-host queue coordination, or automatic production deployment.
 
 For a single-host setup, API and worker must use the same protected SQLite database file and compatible model/provider configuration. For multi-host workers, migrate the control plane and queue to a shared transactional database before scaling. Start with a non-production tenant and test cancellation, worker revocation, provider timeouts, lease expiry and restart recovery before accepting real workloads.
+
+
+### Project One connection and identity boundaries
+
+Project One connects to the application-scoped control-plane API on this service:
+
+- `GET /v1/platform/identity` resolves the authenticated application, tenant, principal and capabilities.
+- `GET/POST /v1/platform/agents` and `/agents/versions` manage application-scoped agent versions.
+- `GET/PUT /v1/platform/model-routes` manages model routes.
+- `GET/POST /v1/platform/executions`, `GET /executions/{id}` and `POST /executions/{id}/cancel` manage workloads.
+- `GET/PUT /v1/platform/quotas` and `GET /v1/platform/usage` expose quota and usage data.
+- Owner tool grants are served separately at `/v1/tenants/owner/tool-grants`; they require the owner secret and must be called only by a trusted server-side Project One BFF. Application bearer credentials are never accepted for owner actions.
+
+The legacy `/v1/tenants` customer API uses an older identity schema. It is deliberately isolated in `ORACLE_ARC_TENANT_IDENTITY_DB_PATH` (default: `data/oracle_arc_tenant_identity.sqlite3`). The Project One `/v1/platform` identity and execution control plane uses `ORACLE_ARC_DB_PATH`. Do not point both settings at the same SQLite file: their identity table layouts are not compatible. The owner tool-grant store remains on the platform database so grants are bound to Project One applications created by the platform owner-provisioning API.
+
+Project One browser credentials are application-scoped and must be held only in memory or a trusted BFF. CORS is optional and exact-origin only; prefer the same-origin BFF for production owner actions. The scoped broker is now wired into the platform worker model-call loop. The initial trusted registry exposes only `tool.calculate`, executed through the existing isolated rootless-Podman plugin worker. A tool is visible and callable only when the agent manifest, the active application-principal credential, the active owner grant, and the worker credential all authorize it. Other tool IDs remain unavailable until a reviewed handler is registered server-side and covered by isolation tests. Worker credentials that need calculator access must explicitly include `tool.calculate`; application credentials must independently include the same capability.
+
+
+### Durable execution event stream
+
+`GET /v1/platform/executions/events?after=<event_id>&duration_seconds=50` returns an authenticated Server-Sent Events stream. Lifecycle events are written by SQLite triggers to `arc_execution_events`, so reconnecting with the last event ID replays updates without relying on in-memory process state. The stream is scoped to the authenticated tenant, application and principal, revalidates the application credential periodically, sends keepalives, and closes after a bounded lifetime so clients can reconnect. Project One uses fetch-based streaming because native browser EventSource cannot attach its in-memory bearer credential.
+
+### Worker tool permissions
+
+For a calculator-enabled agent, all four independent grants are required:
+
+1. Agent manifest `allowed_tools` contains `tool.calculate`.
+2. At least one active application credential for the execution principal contains capability `tool.calculate`.
+3. The owner has an active `tool.calculate` grant for the same tenant/application.
+4. The worker credential was issued with `tool.calculate` in addition to execution lifecycle capabilities.
+
+The worker re-reads application capabilities and owner grants before each tool call and revalidates the worker credential. Tool schemas are generated from the trusted server registry; model output cannot add tools or handlers.
+
+
+Remote provider egress is deliberately fail-closed: OpenRouter, Groq and Gemini routes may be configured only for `public` data until a provider-specific contract, region and data-egress policy is approved. Ollama remains the local route for private data. The OpenAI-compatible adapters preserve tool-call IDs and usage accounting; tool function names are normalized to provider-safe names and resolved back to immutable internal tool IDs.
+
+
+See [the deployment runbook](docs/DEPLOYMENT_RUNBOOK.md) for the current single-host API/worker topology, persistent SQLite constraints, rootless Podman isolation, environment configuration and go-live checklist. Production deployment is not complete until that runbook is executed against a real host.
+
+## Permission-scoped documents and ORBITS media processing
+
+Application credentials can use the scoped document endpoints under `/v1/platform`:
+
+- `POST /documents` indexes already-extracted text (requires `document.index`).
+- `GET /documents/search?query=...` searches only the authenticated principal/application scope (requires `document.search`).
+- `DELETE /documents/{document_id}` tombstones a document in that same scope (requires `document.delete`).
+- `POST /documents/upload` quarantines a PDF/plain-text file, requires a successful ClamAV scan, extracts it in the isolated worker, and indexes only scanner-clean text. It requires `orbits.process` and `document.index`.
+- `GET /documents/quarantine/{asset_id}/audit` returns scope-filtered quarantine events (requires `document.audit` or `document.delete`).
+- `DELETE /documents/quarantine/{asset_id}` removes quarantined bytes and writes a deletion audit event (requires `document.delete`).
+
+For binary input, build the separate isolated ORBITS worker image:
+
+```bash
+bash scripts/build-orbits-worker.sh
+```
+
+Set `ORACLE_ARC_ORBITS_WORKER_IMAGE=oracle-arc-orbits-worker:local` on the API host. The image must already be present locally; runtime execution uses Podman with `--pull=never`, no network, a read-only root filesystem, dropped Linux capabilities, non-root execution, resource limits and a hard timeout. Missing Podman or image fails closed.
+
+`POST /v1/platform/orbits/process` requires the `orbits.process` capability and accepts base64-encoded file bytes plus a processor ID:
+
+- `document.extract`: extracts text from PDF or UTF-8 plain text using `pypdf` for PDF files.
+- `image.ocr`: runs image OCR using Pillow and Tesseract.
+- `audio.inspect`: reads supported audio container/codec metadata using Mutagen. This processor does not transcribe speech.
+- `audio.transcribe`: a separate, optional faster-whisper worker. It is registered only when a complete local model directory is provisioned. The worker mounts model files read-only, runs without network access, sets Hugging Face offline flags and has no remote fallback. See [local ASR setup](docs/LOCAL_ASR_MODEL_SETUP.md).
+
+Set `index_text: true` to index extracted PDF/plain-text or OCR text. This additionally requires `document.index`. The resulting document is stored with the authenticated tenant, application and principal scope. Audio metadata cannot be indexed as a transcript.
+
+Document uploads are stored under a private quarantine directory and scanned with ClamAV. Missing, timed-out or indeterminate scanner results fail closed. Both quarantined bytes and indexed extracted text have bounded retention; run `python scripts/expire-document-retention.py` periodically (for example, from a host scheduler) to enforce expiry even when no API traffic occurs. The default quarantine retention is seven days; indexed text defaults to one year unless a shorter per-upload value is supplied. The media upload request budget is separately bounded by `ORACLE_ARC_MEDIA_MAX_REQUEST_BYTES`.
+
+The container is a processing boundary, not a guarantee of perfect extraction. Validate OCR accuracy, document parsing, ASR quality and media compatibility against representative and adversarial files before production use. Real ASR inference and real target-host Ollama verification remain separate release gates; use `scripts/verify-local-asr.py` and `scripts/verify-local-runtime.py` after installing the model and configuring the host.
+
+## Engineering acceptance standard
+
+All new features and releases must satisfy the [Oracle Arc engineering acceptance standard](docs/ENGINEERING_ACCEPTANCE_STANDARD.md). Passing an isolated unit test or discovering a model/processor is never treated as proof of production readiness.

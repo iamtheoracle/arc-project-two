@@ -1,5 +1,6 @@
 name: Oracle Arc Verification
 on:
+  workflow_dispatch:
   push:
     branches: [main, 'feat/oracle-arc-personal-core', 'feat/human-understanding-adaptive-intelligence', 'feat/oracle-arc-network-platform-architecture']
   pull_request:
@@ -8,12 +9,18 @@ on:
       - 'feat/oracle-arc-personal-core'
       - 'feat/oracle-arc-network-platform-architecture'
       - 'feat/arc-secure-worker-execution-runtime'
+      - 'feat/arc-connected-execution-pipeline'
+      - 'feat/arc-owner-tool-grants-and-console-api'
+concurrency:
+  group: oracle-arc-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -28,8 +35,35 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
           podman info --format '{{.Host.Security.Rootless}}' | grep -qx true
+      - name: Install ClamAV and update malware signatures
+        run: |
+          sudo apt-get install -y clamav clamav-freshclam
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam --quiet
       - name: Build isolated plugin worker image
         run: podman build --pull=always -f Dockerfile.plugin-worker -t oracle-arc-plugin-worker:ci .
+      - name: Build isolated ORBITS media worker image
+        env:
+          ORACLE_ARC_ORBITS_WORKER_IMAGE: oracle-arc-orbits-worker:ci
+        run: bash scripts/build-orbits-worker.sh
+      - name: Execute real isolated ORBITS media processors
+        env:
+          ORACLE_ARC_ORBITS_WORKER_IMAGE: oracle-arc-orbits-worker:ci
+        run: python -m pytest -q tests/test_orbits_integration.py
+      - name: Build separate offline ASR worker image
+        env:
+          ORACLE_ARC_ASR_WORKER_IMAGE: oracle-arc-asr-worker:ci
+        run: bash scripts/build-orbits-asr-worker.sh
+      - name: Verify ASR fails closed when no local model is installed
+        run: |
+          if printf '{"processor_id":"audio.transcribe","data_base64":"SUQz"}' | podman run --rm --interactive --pull=never --network=none --ipc=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=48 --memory=2g --memory-swap=2g --cpus=2 --user=65534:65534 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=128m oracle-arc-asr-worker:ci; then
+            echo "ASR unexpectedly ran without an installed model"
+            exit 1
+          else
+            echo "ASR correctly failed closed without a provisioned local model"
+          fi
+      - name: Test local ASR registration, isolation contract and failure handling
+        run: python -m pytest -q tests/test_orbits_asr.py
       - name: Execute real isolated worker
         env:
           ORACLE_ARC_PLUGIN_WORKER_IMAGE: oracle-arc-plugin-worker:ci
@@ -41,11 +75,13 @@ jobs:
           registry = PluginRegistry()
           assert registry.execute("calculate", {"expression": "6 * 7"}) == "Result: 42"
           rejected = registry.execute("calculate", {"expression": "__import__('os').getcwd()"})
-          assert rejected.startswith("Error:")
+          assert "Calculation error" in rejected
           print("Rootless Podman worker execution and rejection checks passed.")
           PY
       - name: Verify sandbox restrictions inside the actual container
         run: |
           podman run --rm --pull=never --network=none --ipc=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=16 --memory=128m --memory-swap=128m --cpus=0.5 --user=65534:65534 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m --ulimit=nofile=32:32 oracle-arc-plugin-worker:ci python -I -c "import os,pathlib; assert os.geteuid()==65534; s=pathlib.Path('/proc/self/status').read_text(); assert 'CapEff:\\t0000000000000000' in s; assert 'NoNewPrivs:\\t1' in s; assert not any(r.split()[1]=='00000000' for r in pathlib.Path('/proc/net/route').read_text().splitlines()[1:]); m=next(x for x in pathlib.Path('/proc/self/mountinfo').read_text().splitlines() if x.split()[4]=='/'); assert 'ro' in m.split()[5].split(','); print('UID, zero capabilities, no-new-privileges, no default network route and read-only root verified')"
       - name: Run tests
+        env:
+          ORACLE_ARC_ORBITS_WORKER_IMAGE: oracle-arc-orbits-worker:ci
         run: python -m pytest -q

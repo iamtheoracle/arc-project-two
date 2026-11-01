@@ -24,12 +24,23 @@ def _database_path():
     return os.environ.get("ORACLE_ARC_DB_PATH","data/oracle_arc.sqlite3")
 
 
+def _identity_database_path():
+    # The legacy /v1/tenants identity schema predates TenantSecurityStore and is not
+    # column-compatible with the Project One /v1/platform schema. Keep it in a
+    # separate SQLite file so enabling both routers cannot corrupt either identity plane.
+    configured=os.environ.get("ORACLE_ARC_TENANT_IDENTITY_DB_PATH")
+    if configured:
+        return configured
+    base,extension=os.path.splitext(_database_path())
+    return base+"_tenant_identity"+(extension or ".sqlite3")
+
+
 def _identity_store():
-    return TenantIdentityStore(_database_path())
+    return TenantIdentityStore(_identity_database_path())
 
 
 def _tenant_store():
-    return TenantStore(_database_path())
+    return TenantStore(_identity_database_path())
 
 
 def _owner(authorization: str|None=Header(default=None)):
@@ -200,3 +211,53 @@ def delete_memory(memory_id:str,identity:RequestIdentity=Depends(_application_id
             raise HTTPException(404,"Memory not found")
         return {"memory_id":memory_id,"deleted":True}
     except PermissionError as exc:raise HTTPException(403,str(exc))
+
+# Owner-only tool grants. These are separate from an application's own capabilities:
+# an application cannot grant itself tools by editing its agent manifest.
+import hmac as _hmac
+from fastapi import Query as _Query
+from pydantic import BaseModel as _BaseModel, Field as _Field
+from core.tool_grants import ToolGrantStore
+from core.platform_tool_registry import PLATFORM_TOOL_IDS
+
+owner_tools_router=APIRouter(prefix="/owner/tool-grants",tags=["owner-tool-governance"])
+
+def _tool_grant_store():
+    return ToolGrantStore(_database_path())
+
+def _require_owner_tool_admin(authorization: str|None=Header(default=None)):
+    expected=os.environ.get("ORACLE_ARC_API_KEY","").strip()
+    scheme,_,token=(authorization or "").partition(" ")
+    if not expected or len(expected)<32 or expected.startswith("replace-with-"):
+        raise HTTPException(503,"Owner control-plane secret is not configured")
+    if scheme.lower()!="bearer" or not token or not _hmac.compare_digest(token,expected):
+        raise HTTPException(401,"Owner authentication required")
+
+class OwnerToolGrantCreate(_BaseModel):
+    tenant_id:str=_Field(min_length=5,max_length=100)
+    application_id:str=_Field(min_length=5,max_length=100)
+    tool_id:str=_Field(min_length=2,max_length=64)
+
+@owner_tools_router.get("",dependencies=[Depends(_require_owner_tool_admin)])
+def list_owner_tool_grants(tenant_id:str|None=_Query(default=None,min_length=5,max_length=100),
+                           application_id:str|None=_Query(default=None,min_length=5,max_length=100)):
+    if (tenant_id is None)!=(application_id is None):
+        raise HTTPException(422,"Tenant and application filters must be supplied together")
+    return {"data":_tool_grant_store().list(tenant_id,application_id)}
+
+@owner_tools_router.post("",status_code=201,dependencies=[Depends(_require_owner_tool_admin)])
+def create_owner_tool_grant(body:OwnerToolGrantCreate):
+    if body.tool_id not in PLATFORM_TOOL_IDS:
+        raise HTTPException(422,"Tool is not present in the trusted platform registry")
+    actor="owner-control-plane"
+    try:return _tool_grant_store().grant(body.tenant_id,body.application_id,body.tool_id,actor)
+    except LookupError as exc:raise HTTPException(404,str(exc))
+    except ValueError as exc:raise HTTPException(409,str(exc))
+
+@owner_tools_router.delete("/{grant_id}",dependencies=[Depends(_require_owner_tool_admin)])
+def revoke_owner_tool_grant(grant_id:str):
+    if not _tool_grant_store().revoke(grant_id,"owner-control-plane"):
+        raise HTTPException(404,"Active tool grant not found")
+    return {"grant_id":grant_id,"revoked":True}
+
+router.include_router(owner_tools_router)

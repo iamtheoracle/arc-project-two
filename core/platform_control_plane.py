@@ -110,10 +110,41 @@ class PlatformControlPlane:
             );
             CREATE INDEX IF NOT EXISTS arc_execution_claim
               ON arc_executions(status,created_at);
+            CREATE TABLE IF NOT EXISTS arc_execution_events(
+              event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              tenant_id TEXT NOT NULL, application_id TEXT NOT NULL,
+              principal_id TEXT NOT NULL, execution_id TEXT NOT NULL,
+              status TEXT NOT NULL, attempt INTEGER NOT NULL,
+              error_code TEXT, occurred_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS arc_execution_events_scope
+              ON arc_execution_events(tenant_id,application_id,principal_id,event_id);
+            CREATE TRIGGER IF NOT EXISTS arc_execution_events_insert
+            AFTER INSERT ON arc_executions
+            BEGIN
+              INSERT INTO arc_execution_events
+                (tenant_id,application_id,principal_id,execution_id,status,attempt,error_code,occurred_at)
+              VALUES(NEW.tenant_id,NEW.application_id,NEW.principal_id,NEW.execution_id,
+                NEW.status,NEW.attempt,NEW.error_code,NEW.updated_at);
+            END;
+            CREATE TRIGGER IF NOT EXISTS arc_execution_events_update
+            AFTER UPDATE OF status,attempt,error_code ON arc_executions
+            WHEN OLD.status != NEW.status OR OLD.attempt != NEW.attempt
+              OR COALESCE(OLD.error_code,'') != COALESCE(NEW.error_code,'')
+            BEGIN
+              INSERT INTO arc_execution_events
+                (tenant_id,application_id,principal_id,execution_id,status,attempt,error_code,occurred_at)
+              VALUES(NEW.tenant_id,NEW.application_id,NEW.principal_id,NEW.execution_id,
+                NEW.status,NEW.attempt,NEW.error_code,NEW.updated_at);
+            END;
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(arc_executions)")}
             if "request_digest" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN request_digest TEXT")
+            if "credential_id" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN credential_id TEXT")
+            if "policy_version" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN policy_version INTEGER")
             if "route_id" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN route_id TEXT")
             if "classification" not in columns:
@@ -187,8 +218,18 @@ class PlatformControlPlane:
             raise ValueError("Agent must reference one or more valid model route IDs")
         if not set(caps).issubset(identity.capabilities):
             raise PermissionError("Application identity lacks one or more agent-required capabilities")
+        # Tool permissions are owner-managed records, not self-asserted app token
+        # capabilities. Re-read live grants at registration so a revoked tool cannot
+        # be reintroduced by publishing another manifest version.
+        from .tool_grants import ToolGrantStore
+        active_tool_grants = ToolGrantStore(self.database_path).active_tool_ids(
+            identity.tenant_id, identity.application_id)
+        if not set(tools).issubset(active_tool_grants):
+            raise PermissionError("Agent manifest references a tool without an active owner grant")
+        # The application principal must independently hold each tool capability.
+        # Owner approval and app authorization are separate permission boundaries.
         if not set(tools).issubset(identity.capabilities):
-            raise PermissionError("Application identity lacks one or more agent tool grants")
+            raise PermissionError("Agent manifest references a tool not granted to the application principal")
         canonical = self._json(manifest)
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         with self._session() as db:
@@ -251,6 +292,11 @@ class PlatformControlPlane:
         if (not isinstance(classifications, list) or not classifications or
             any(x not in allowed for x in classifications) or len(set(classifications)) != len(classifications)):
             raise ValueError("Invalid route data classifications")
+        # Remote provider endpoints are not an approved data-residency boundary.
+        # Until a provider-specific DPA/region policy is configured, only public
+        # data may leave the local Oracle Arc runtime.
+        if provider_id != "ollama" and set(classifications) != {"public"}:
+            raise PermissionError("Remote model providers are restricted to public data classifications")
         if (not isinstance(regions, list) or not regions or
             any(not isinstance(x, str) or not x.strip() or len(x) > 64 for x in regions) or
             len(set(regions)) != len(regions)):
@@ -275,6 +321,8 @@ class PlatformControlPlane:
             raise LookupError("Model route not found")
         if classification not in json.loads(row["data_classifications_json"]):
             raise PermissionError("Model route is not approved for this data classification")
+        if row["provider_id"] != "ollama" and classification != "public":
+            raise PermissionError("Remote model providers cannot process non-public data without an approved egress policy")
         if region not in json.loads(row["regions_json"]):
             raise PermissionError("Model route is not approved for this execution region")
         return {"provider_id": row["provider_id"], "model_id": row["model_id"]}
@@ -373,11 +421,12 @@ class PlatformControlPlane:
                 db.execute("""INSERT INTO arc_executions
                     (execution_id,tenant_id,application_id,principal_id,agent_id,agent_version,
                      model_provider,model_id,route_id,classification,region,status,attempt,max_attempts,input_json,created_at,
-                     updated_at,idempotency_key,request_digest)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?)""",
+                     updated_at,idempotency_key,request_digest,credential_id,policy_version)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?,?,?)""",
                     (execution_id, identity.tenant_id, identity.application_id, identity.principal_id,
                      agent_id, version, route["provider_id"], route["model_id"], route_id, classification, region, max_attempts,
-                     input_json, now, now, idempotency_key, request_digest))
+                     input_json, now, now, idempotency_key, request_digest,
+                     identity.credential_id, identity.policy_version))
             except sqlite3.IntegrityError:
                 if idempotency_key is None:
                     raise
@@ -610,6 +659,23 @@ class PlatformControlPlane:
                 VALUES(?,?,?,?,?, ?,?)""",
                 ("use_" + uuid.uuid4().hex, identity.tenant_id, identity.application_id,
                  execution_id, metric, quantity, int(time.time())))
+
+    def list_execution_events(self, identity: RequestIdentity, after_event_id: int = 0,
+                              limit: int = 100) -> list[dict[str, Any]]:
+        """Read durable, ordered lifecycle events for exactly one principal scope."""
+        self._require(identity, "agent.execution.read")
+        if not isinstance(after_event_id, int) or isinstance(after_event_id, bool) or after_event_id < 0:
+            raise ValueError("Event cursor must be a non-negative integer")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("Event page size must be between 1 and 100")
+        with self._session() as db:
+            rows = db.execute("""SELECT event_id,execution_id,status,attempt,error_code,occurred_at
+                FROM arc_execution_events
+                WHERE tenant_id=? AND application_id=? AND principal_id=? AND event_id>?
+                ORDER BY event_id ASC LIMIT ?""",
+                (identity.tenant_id, identity.application_id, identity.principal_id,
+                 after_event_id, limit)).fetchall()
+        return [dict(row) for row in rows]
 
     def usage_summary(self, identity: RequestIdentity, since: int) -> dict[str, int]:
         self._require(identity, "usage.read")

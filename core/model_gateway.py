@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import math
 from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 import ollama
 from .inference_contract import validate_inference_request
+from .providers import PROVIDERS as REMOTE_PROVIDER_CONFIGS, OpenAICompatibleProvider, ProviderConfig
 
 
 @dataclass(frozen=True)
@@ -105,9 +107,9 @@ class ProviderRegistry:
 class OllamaProvider:
     """Configured Ollama adapter with explicit host routing and remote-host safeguards."""
 
-    def __init__(self, host: Optional[str] = None) -> None:
-        timeout = float(os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
-        if timeout <= 0 or timeout > 900:
+    def __init__(self, host: Optional[str] = None, timeout_seconds: Optional[float] = None) -> None:
+        timeout = float(timeout_seconds if timeout_seconds is not None else os.environ.get("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS", "120"))
+        if not math.isfinite(timeout) or timeout <= 0 or timeout > 900:
             raise ValueError("ORACLE_ARC_OLLAMA_TIMEOUT_SECONDS must be between 0 and 900.")
         host = (host or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).strip()
         parsed = urlsplit(host)
@@ -120,6 +122,7 @@ class OllamaProvider:
             raise ValueError("Remote Ollama is disabled. Set ORACLE_ARC_ALLOW_REMOTE_OLLAMA=true only after reviewing the data destination and transport security.")
         if not is_local and parsed.scheme != "https":
             raise ValueError("Remote Ollama connections must use HTTPS.")
+        self._host = host
         self._client = ollama.Client(host=host, timeout=timeout)
         self.manifest = ProviderManifest(
             provider_id="ollama",
@@ -128,6 +131,16 @@ class OllamaProvider:
             capabilities=ModelCapabilities(tool_calling=True, streaming=True),
             description="Ollama inference through the configured endpoint; execution location is disclosed in this manifest.",
         )
+
+    def set_timeout_seconds(self, timeout_seconds: float) -> None:
+        if (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900):
+            raise ValueError("Provider timeout must be greater than 0 and at most 900 seconds.")
+        old_client = self._client
+        self._client = ollama.Client(host=self._host, timeout=float(timeout_seconds))
+        close = getattr(old_client, "close", None)
+        if callable(close):
+            close()
 
     def chat(
         self,
@@ -147,14 +160,61 @@ class OllamaProvider:
         return self._client.chat(**kwargs, stream=True) if stream else self._client.chat(**kwargs)
 
 
+class OpenAICompatibleModelAdapter:
+    """Fixed-endpoint remote adapter with the same validated tool-call contract as Ollama."""
+
+    def __init__(self, config: ProviderConfig, timeout_seconds: float = 30.0) -> None:
+        self.config = config
+        self.client = OpenAICompatibleProvider(config, timeout_seconds=timeout_seconds)
+        self.manifest = ProviderManifest(
+            provider_id=config.provider_id,
+            display_name=config.provider_id.replace("-", " ").title(),
+            execution_location="remote",
+            capabilities=ModelCapabilities(tool_calling=True, streaming=False),
+            description="Fixed HTTPS provider endpoint; API credentials are read server-side.",
+        )
+
+    def set_timeout_seconds(self, timeout_seconds: float) -> None:
+        if (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900):
+            raise ValueError("Provider timeout must be greater than 0 and at most 900 seconds.")
+        self.client.timeout_seconds = float(timeout_seconds)
+
+    def chat(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+        temperature: float = 0.7,
+    ) -> Any:
+        if stream:
+            raise ValueError("Streaming is not enabled for this remote provider adapter.")
+        return self.client.chat_response(
+            {"messages": messages}, tools=tools, temperature=temperature, model=model
+        )
+
+
 class ModelGateway:
     """Routes validated model requests through an explicitly registered provider."""
 
-    def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None) -> None:
+    def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None, timeout_seconds: Optional[float] = None) -> None:
+        self._owns_registry = registry is None
+        self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900
+        ):
+            raise ValueError("Provider timeout must be greater than 0 and at most 900 seconds.")
         self.registry = registry or ProviderRegistry()
         if registry is None:
-            self.registry.register(OllamaProvider(host=host))
-        self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
+            if self.provider_id == "ollama":
+                self.registry.register(OllamaProvider(host=host, timeout_seconds=timeout_seconds))
+            else:
+                config = next((item for item in REMOTE_PROVIDER_CONFIGS
+                               if item.provider_id == self.provider_id), None)
+                if config is not None:
+                    self.registry.register(OpenAICompatibleModelAdapter(config, timeout_seconds=timeout_seconds or 30.0))
         # Fail closed: no silent fallback from a requested remote provider to local or vice versa.
         self.provider = self.registry.get(self.provider_id)
 
@@ -174,5 +234,25 @@ class ModelGateway:
             raise ValueError("The selected provider does not support streaming.")
         return self.provider.chat(model, messages, tools=tools, stream=stream, temperature=temperature)
 
+    def set_timeout_seconds(self, timeout_seconds: float) -> None:
+        """Tighten the active provider timeout as an execution deadline approaches."""
+        setter = getattr(self.provider, "set_timeout_seconds", None)
+        if not callable(setter):
+            raise ValueError("Selected provider cannot adjust its request timeout")
+        setter(timeout_seconds)
+
     def provider_manifest(self) -> Dict[str, Any]:
         return self.provider.manifest.public_dict()
+
+    def close(self) -> None:
+        """Release provider HTTP clients owned by this gateway instance."""
+        if not self._owns_registry:
+            return
+        for provider in self.registry._providers.values():
+            client = getattr(provider, "_client", None)
+            if client is None:
+                adapter = getattr(provider, "client", None)
+                client = getattr(adapter, "client", adapter)
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()

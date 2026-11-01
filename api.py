@@ -11,6 +11,8 @@ from collections import defaultdict, deque
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from urllib.parse import urlsplit
 from starlette.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -31,11 +33,14 @@ from core.platform_routes import router as platform_router
 # Resource guards are deliberately process-local. Deployments with multiple workers
 # must additionally enforce equivalent limits at the trusted ingress/API gateway.
 MAX_REQUEST_BYTES = int(os.environ.get("ORACLE_ARC_MAX_REQUEST_BYTES", "1048576"))
+MEDIA_UPLOAD_MAX_REQUEST_BYTES = int(os.environ.get("ORACLE_ARC_MEDIA_MAX_REQUEST_BYTES", "36000000"))
 RATE_LIMIT_REQUESTS = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_REQUESTS", "600"))
 RATE_LIMIT_WINDOW = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_WINDOW_SECONDS", "60"))
 CHAT_CONCURRENCY = int(os.environ.get("ORACLE_ARC_CHAT_CONCURRENCY", "1"))
 if not 1024 <= MAX_REQUEST_BYTES <= 16 * 1024 * 1024:
     raise RuntimeError("ORACLE_ARC_MAX_REQUEST_BYTES must be between 1 KiB and 16 MiB.")
+if not 1024 <= MEDIA_UPLOAD_MAX_REQUEST_BYTES <= 36_000_000:
+    raise RuntimeError("ORACLE_ARC_MEDIA_MAX_REQUEST_BYTES must be between 1 KiB and 36 MB.")
 if not 1 <= RATE_LIMIT_REQUESTS <= 10000 or not 1 <= RATE_LIMIT_WINDOW <= 3600:
     raise RuntimeError("Oracle Arc rate-limit configuration is outside safe bounds.")
 if not 1 <= CHAT_CONCURRENCY <= 64:
@@ -55,11 +60,17 @@ class RequestGuardMiddleware:
         if scope.get("type") != "http" or not scope.get("path", "").startswith("/v1/"):
             return await self.downstream(scope, receive, send)
 
+        path = scope.get("path", "")
+        body_limit = (
+            MEDIA_UPLOAD_MAX_REQUEST_BYTES
+            if path in {"/v1/platform/documents/upload", "/v1/platform/orbits/process"}
+            else MAX_REQUEST_BYTES
+        )
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         declared = headers.get(b"content-length")
         if declared is not None:
             try:
-                if not declared.isdigit() or int(declared) > MAX_REQUEST_BYTES:
+                if not declared.isdigit() or int(declared) > body_limit:
                     status = 413 if declared.isdigit() else 400
                     detail = "Request body too large." if status == 413 else "Invalid Content-Length."
                     response = JSONResponse({"detail": detail}, status_code=status)
@@ -95,7 +106,7 @@ class RequestGuardMiddleware:
                 return
             chunk = message.get("body", b"")
             size += len(chunk)
-            if size > MAX_REQUEST_BYTES:
+            if size > body_limit:
                 response = JSONResponse({"detail": "Request body too large."}, status_code=413)
                 return await response(scope, receive, send)
             chunks.append(chunk)
@@ -130,6 +141,28 @@ def require_chat_capacity():
 
 app = FastAPI(title="Oracle Arc", version="0.1.2", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(RequestGuardMiddleware)
+
+# Browser access is opt-in and restricted to exact trusted origins. Credentials are
+# passed as scoped application bearer tokens; ambient cookies are never enabled.
+_CORS_ORIGINS = [value.strip().rstrip("/") for value in
+                 os.environ.get("ORACLE_ARC_CORS_ORIGINS", "").split(",") if value.strip()]
+for _origin in _CORS_ORIGINS:
+    _parsed_origin = urlsplit(_origin)
+    if (_parsed_origin.scheme not in {"https", "http"} or not _parsed_origin.netloc
+            or _parsed_origin.path or _parsed_origin.query or _parsed_origin.fragment
+            or (_parsed_origin.scheme == "http" and _parsed_origin.hostname not in {"localhost", "127.0.0.1"})):
+        raise RuntimeError("ORACLE_ARC_CORS_ORIGINS must contain exact HTTPS origins (HTTP only for localhost).")
+if "*" in _CORS_ORIGINS:
+    raise RuntimeError("Wildcard CORS origins are forbidden.")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["X-Request-ID"],
+    max_age=600,
+)
 app.include_router(platform_router)
 _store: ArcStore | None = None
 _agent_registry_cache = None

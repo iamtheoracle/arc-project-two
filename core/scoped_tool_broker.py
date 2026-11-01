@@ -7,6 +7,7 @@ intersection of manifest, application, owner-policy and worker grants.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Callable, Mapping
 
 
@@ -16,6 +17,8 @@ class ToolContext:
     application_id: str
     execution_id: str
     principal_id: str
+    credential_id: str | None = None
+    policy_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,7 @@ class ToolDefinition:
     description: str
     parameters: Mapping[str, Any]
     handler: Callable[[ToolContext, dict[str, Any]], Any]
+    function_name: str | None = None
 
 
 class ScopedToolBroker:
@@ -33,10 +37,18 @@ class ScopedToolBroker:
         for tool in tools:
             if not isinstance(tool, ToolDefinition):
                 raise ValueError("Only reviewed ToolDefinition entries can be registered")
-            if not tool.tool_id or not tool.capability or not callable(tool.handler):
+            if (not isinstance(tool.tool_id, str) or not re.fullmatch(r"[a-z][a-z0-9._-]{1,63}", tool.tool_id)
+                    or not isinstance(tool.capability, str) or not tool.capability
+                    or not callable(tool.handler)):
                 raise ValueError("Tool registration is incomplete")
+            function_name = tool.function_name or tool.tool_id.replace(".", "_")
+            if not isinstance(function_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", function_name):
+                raise ValueError("Tool function names must use provider-safe characters")
             if tool.tool_id in self._tools:
                 raise ValueError("Duplicate tool registration")
+            if any((registered.function_name or registered.tool_id.replace(".", "_")) == function_name
+                   for registered in self._tools.values()):
+                raise ValueError("Duplicate provider tool function name")
             self._validate_schema_definition(tool.parameters)
             self._tools[tool.tool_id] = tool
 
@@ -93,12 +105,18 @@ class ScopedToolBroker:
                 if "maximum" in spec and value > spec["maximum"]:
                     raise ValueError("Tool numeric argument exceeds its limit")
 
+    def resolve_tool_id(self, function_name: str) -> str | None:
+        for tool in self._tools.values():
+            if (tool.function_name or tool.tool_id.replace(".", "_")) == function_name:
+                return tool.tool_id
+        return None
+
     def schemas(self, *, manifest_tools: set[str], application_grants: set[str],
                 owner_policy: set[str], worker_capabilities: set[str]) -> list[dict[str, Any]]:
         allowed = manifest_tools & application_grants & owner_policy
         return [
             {"type": "function", "function": {
-                "name": tool.tool_id, "description": tool.description,
+                "name": tool.function_name or tool.tool_id.replace(".", "_"), "description": tool.description,
                 "parameters": dict(tool.parameters),
             }}
             for tool in self._tools.values()

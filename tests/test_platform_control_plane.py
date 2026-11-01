@@ -4,6 +4,7 @@ import pytest
 
 from core.platform_control_plane import PlatformControlPlane
 from core.tenant_identity import TenantIdentityStore
+from core.tool_grants import ToolGrantStore
 
 
 CAPS = [
@@ -19,6 +20,11 @@ def setup(tmp_path, name="Tenant A", app="APP"):
     identities = TenantIdentityStore(path)
     issued = identities.provision(name, app, "principal-" + name.lower().replace(" ", "-"), CAPS)
     identity = identities.authenticate(issued["secret"])
+    # Tests model the separate owner grant plane; application capabilities alone
+    # must not silently authorize a tool.
+    grants = ToolGrantStore(path)
+    for tool_id in ("tool.search", "tool.calendar"):
+        grants.grant(identity.tenant_id, identity.application_id, tool_id, "test-owner")
     return path, identities, identity, PlatformControlPlane(path)
 
 
@@ -56,7 +62,7 @@ def test_agent_versions_are_immutable_and_application_scoped(tmp_path):
 def test_agent_manifest_cannot_grant_its_own_tools(tmp_path):
     path, ids, identity, cp = setup(tmp_path)
     bad = manifest(["admin.root"])
-    with pytest.raises(PermissionError, match="tool grants"):
+    with pytest.raises(PermissionError, match="owner grant"):
         configure(cp, identity)
         cp.register_agent(identity, "research", "1.0.0", bad)
         cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
@@ -237,11 +243,13 @@ def test_worker_executes_model_and_commits_usage_atomically(tmp_path, monkeypatc
                              ["execution.claim", "execution.heartbeat", "execution.complete"], 3600)
 
     class FakeGateway:
-        def __init__(self, provider_id):
+        def __init__(self, provider_id, timeout_seconds=None):
             assert provider_id == "ollama"
+            assert timeout_seconds is not None and timeout_seconds > 0
 
-        def chat(self, model, messages, temperature):
+        def chat(self, model, messages, tools=None, temperature=0.2):
             assert model == "qwen2.5:7b"
+            assert tools is None
             assert messages[-1]["content"] == "Explain the task"
             return SimpleNamespace(
                 message=SimpleNamespace(content="Completed result"),
@@ -301,3 +309,13 @@ def test_expired_lease_recovery_is_application_scoped(tmp_path):
                               (execution_b,)).fetchone()["status"]
     assert status_a == "queued"
     assert status_b == "running"
+
+
+def test_remote_model_routes_are_public_data_only_until_egress_policy_is_approved(tmp_path):
+    _, _, identity, cp = setup(tmp_path)
+    with pytest.raises(PermissionError, match="restricted to public"):
+        cp.configure_model_route(identity, "remote-private", "openrouter", "openai/gpt-4o-mini",
+                                 ["public", "private"], ["remote"])
+    cp.configure_model_route(identity, "remote-public", "openrouter", "openai/gpt-4o-mini",
+                              ["public"], ["remote"])
+    assert cp.resolve_model_route(identity, "remote-public", "public", "remote")["provider_id"] == "openrouter"

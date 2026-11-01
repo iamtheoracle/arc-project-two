@@ -5,16 +5,24 @@ surface; it never accepts caller-supplied tenant/app/principal scope.
 """
 from __future__ import annotations
 from dataclasses import asdict
+import base64
 import hmac
 import os
 from pathlib import Path
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+import time
 from pydantic import BaseModel, Field
 from typing import Any, Callable
 from core.concierge_runtime import ConciergeWorkflowStore, ConciergeError
 from core.tenant_security import TenantSecurityStore, AuthorizationError
 from core.platform_control_plane import PlatformControlPlane
 from core.worker_identity import WorkerIdentityStore, WorkerIdentity
+from core.document_retrieval import DocumentRetrievalStore
+from core.orbits import (build_default_orbits_registry, validate_asset, OrbitAssetRejected, OrbitProcessorUnavailable)
+from core.orbits_quarantine import (DocumentQuarantineStore, MalwareDetected, MalwareScannerUnavailable, QuarantineError, clamav_scan)
 
 router=APIRouter(prefix="/v1/platform",tags=["platform-identity"])
 _CONCIERGE_EXECUTORS: dict[str, Callable] = {}
@@ -64,6 +72,32 @@ class CredentialCreate(BaseModel):
 class MemoryCreate(BaseModel):
     content:str=Field(min_length=1,max_length=20000)
     category:str="preference"
+
+class DocumentIngest(BaseModel):
+    title:str=Field(min_length=1,max_length=240)
+    source_uri:str=Field(min_length=1,max_length=2048)
+    content:str=Field(min_length=1,max_length=100000)
+    classification:str="private"
+    retention_seconds:int=Field(default=31536000,ge=60,le=31536000)
+
+class DocumentUploadRequest(BaseModel):
+    filename:str=Field(min_length=1,max_length=180)
+    mime_type:str|None=Field(default=None,max_length=128)
+    data_base64:str=Field(min_length=4,max_length=36000000)
+    title:str=Field(min_length=1,max_length=240)
+    source_uri:str=Field(min_length=1,max_length=2048)
+    classification:str="private"
+    retention_seconds:int=Field(default=604800,ge=60,le=31536000)
+
+class OrbitProcessRequest(BaseModel):
+    processor_id:str=Field(min_length=1,max_length=64)
+    filename:str=Field(min_length=1,max_length=180)
+    mime_type:str|None=Field(default=None,max_length=128)
+    data_base64:str=Field(min_length=4,max_length=36000000)
+    index_text:bool=False
+    title:str|None=Field(default=None,min_length=1,max_length=240)
+    source_uri:str|None=Field(default=None,min_length=1,max_length=2048)
+    classification:str="private"
 
 class TaskCreate(BaseModel):
     agent_id:str=Field(min_length=1,max_length=64)
@@ -168,6 +202,162 @@ def read_shared_memories(source_application_id:str,identity=Depends(require_appl
         raise HTTPException(403,str(exc))
 
 
+@router.post("/documents/upload", status_code=201)
+def upload_platform_document(body: DocumentUploadRequest, identity=Depends(require_application)):
+    """Quarantine, scan, extract and index a document under the caller's scope."""
+    if "orbits.process" not in identity.capabilities:
+        raise HTTPException(403, "ORBITS processing capability is not granted")
+    if "document.index" not in identity.capabilities:
+        raise HTTPException(403, "Document indexing capability is not granted")
+    try:
+        raw = base64.b64decode(body.data_base64, validate=True)
+        asset = validate_asset(raw, body.filename, body.mime_type)
+        if asset.media_type != "document":
+            raise HTTPException(422, "Document upload accepts PDF or plain-text documents only")
+        database = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+        quarantine = DocumentQuarantineStore(
+            database, scanner=clamav_scan
+        )
+        stored = quarantine.ingest(identity, asset, raw, body.retention_seconds)
+        result = build_default_orbits_registry().process("document.extract", asset, raw)
+        extracted = result.get("text")
+        if not isinstance(extracted, str) or not extracted.strip():
+            raise HTTPException(422, "Document extraction produced no indexable text")
+        document_id = DocumentRetrievalStore(database).index_text(
+            identity, body.title, body.source_uri, extracted, body.classification,
+            body.retention_seconds
+        )
+        return {
+            "asset_id": asset.asset_id, "sha256": asset.sha256,
+            "quarantine_status": stored["status"], "expires_at": stored["expires_at"],
+            "document_id": document_id, "indexed": True, "source_uri": body.source_uri,
+        }
+    except MalwareDetected as exc:
+        raise HTTPException(422, str(exc))
+    except MalwareScannerUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except OrbitAssetRejected as exc:
+        raise HTTPException(422, str(exc))
+    except OrbitProcessorUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except QuarantineError as exc:
+        raise HTTPException(503, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/documents/quarantine/{asset_id}/audit")
+def read_document_quarantine_audit(asset_id: str, identity=Depends(require_application)):
+    if "document.audit" not in identity.capabilities and "document.delete" not in identity.capabilities:
+        raise HTTPException(403, "Document audit capability is not granted")
+    try:
+        store = DocumentQuarantineStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        return {"asset_id": asset_id, "events": store.audit(identity, asset_id)}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+
+
+@router.delete("/documents/quarantine/{asset_id}")
+def delete_quarantined_document(asset_id: str, identity=Depends(require_application)):
+    if "document.delete" not in identity.capabilities:
+        raise HTTPException(403, "Document deletion capability is not granted")
+    try:
+        store = DocumentQuarantineStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        if not store.delete(identity, asset_id):
+            raise HTTPException(404, "Quarantined asset not found in this application and principal scope")
+        return {"asset_id": asset_id, "deleted": True}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+
+
+@router.post("/documents", status_code=201)
+def ingest_platform_document(body: DocumentIngest, identity=Depends(require_application)):
+    """Index already-extracted text under the authenticated application identity."""
+    try:
+        store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        document_id = store.index_text(
+            identity, body.title, body.source_uri, body.content, body.classification,
+            body.retention_seconds
+        )
+        return {"document_id": document_id, "indexed": True, "source_uri": body.source_uri}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/documents/search")
+def search_platform_documents(query: str = Query(min_length=2, max_length=2000),
+                               limit: int = 5, identity=Depends(require_application)):
+    try:
+        store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        results = store.search(identity, query, limit)
+        return {"data": results, "count": len(results)}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.delete("/documents/{document_id}")
+def delete_platform_document(document_id: str, identity=Depends(require_application)):
+    try:
+        store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        if not store.delete(identity, document_id):
+            raise HTTPException(404, "Document not found in this application and principal scope")
+        return {"document_id": document_id, "deleted": True}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+
+
+@router.post("/orbits/process", status_code=200)
+def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_application)):
+    """Run a verified media processor in the isolated ORBITS container."""
+    if "orbits.process" not in identity.capabilities:
+        raise HTTPException(403, "ORBITS processing capability is not granted")
+    if body.index_text and body.processor_id == "audio.inspect":
+        raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
+    try:
+        raw = base64.b64decode(body.data_base64, validate=True)
+        asset = validate_asset(raw, body.filename, body.mime_type)
+        registry = build_default_orbits_registry()
+        result = registry.process(body.processor_id, asset, raw)
+        response = {"asset_id": asset.asset_id, "sha256": asset.sha256,
+                    "media_type": asset.media_type, "processor_id": body.processor_id,
+                    "result": result}
+        if body.index_text:
+            if asset.media_type == "audio":
+                raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
+            if "document.index" not in identity.capabilities:
+                raise HTTPException(403, "Document indexing capability is not granted")
+            extracted = result.get("text")
+            if not isinstance(extracted, str) or not extracted.strip():
+                raise HTTPException(422, "The processor did not produce indexable text")
+            store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+            document_id = store.index_text(
+                identity,
+                body.title or body.filename,
+                body.source_uri or f"arc://orbits/{asset.asset_id}",
+                extracted,
+                body.classification,
+            )
+            response["document_id"] = document_id
+            response["indexed"] = True
+        return response
+    except HTTPException:
+        raise
+    except (ValueError, OrbitAssetRejected) as exc:
+        raise HTTPException(422, str(exc))
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except OrbitProcessorUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        raise HTTPException(503, "Isolated ORBITS processing is unavailable or failed")
+
+
 @router.post("/agent-tasks",status_code=202)
 def create_scoped_agent_task(body:TaskCreate,identity=Depends(require_application)):
     try:
@@ -261,7 +451,7 @@ def require_worker(authorization: str | None = Header(default=None)) -> WorkerId
 
 
 class WorkerIssue(BaseModel):
-    capabilities: list[str] = Field(min_length=1, max_length=4)
+    capabilities: list[str] = Field(min_length=1, max_length=8)
     ttl_seconds: int = Field(default=86400, ge=60, le=2592000)
 
 
@@ -513,3 +703,125 @@ def cancel_platform_execution(execution_id: str, identity=Depends(require_applic
         return {"execution_id": execution_id, "status": "cancelled"}
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
+
+
+# Read-only console collections. Every query is constrained by the authenticated
+# tenant, application and principal; caller-supplied scope is never trusted.
+import sqlite3 as _sqlite3
+import json as _json
+
+@router.get("/agents")
+def list_platform_agents(identity=Depends(require_application)):
+    if "agent.read" not in identity.capabilities:
+        raise HTTPException(403,"Agent read capability is not granted")
+    cp=_control_plane()
+    with _sqlite3.connect(cp.database_path) as db:
+        db.row_factory=_sqlite3.Row
+        rows=db.execute("""SELECT tenant_id,application_id,agent_id,version,manifest_json,manifest_digest
+            FROM arc_agent_versions WHERE tenant_id=? AND application_id=? AND status='active'
+            ORDER BY agent_id,created_at DESC""",(identity.tenant_id,identity.application_id)).fetchall()
+    return {"data":[{"tenant_id":x["tenant_id"],"application_id":x["application_id"],
+        "agent_id":x["agent_id"],"version":x["version"],"manifest":_json.loads(x["manifest_json"]),
+        "manifest_digest":x["manifest_digest"]} for x in rows]}
+
+@router.get("/model-routes")
+def list_platform_model_routes(identity=Depends(require_application)):
+    if "model.route.manage" not in identity.capabilities and "model.route.use" not in identity.capabilities:
+        raise HTTPException(403,"Model route read capability is not granted")
+    cp=_control_plane()
+    with _sqlite3.connect(cp.database_path) as db:
+        db.row_factory=_sqlite3.Row
+        rows=db.execute("""SELECT route_id,provider_id,model_id,data_classifications_json,regions_json
+            FROM arc_model_routes WHERE tenant_id=? AND application_id=? AND enabled=1 ORDER BY route_id""",
+            (identity.tenant_id,identity.application_id)).fetchall()
+    return {"data":[{"route_id":x["route_id"],"provider_id":x["provider_id"],"model_id":x["model_id"],
+        "data_classifications":_json.loads(x["data_classifications_json"]),
+        "regions":_json.loads(x["regions_json"])} for x in rows]}
+
+@router.get("/quotas")
+def read_application_quota(identity=Depends(require_application)):
+    if "quota.read" not in identity.capabilities and "quota.manage" not in identity.capabilities:
+        raise HTTPException(403,"Quota read capability is not granted")
+    cp=_control_plane()
+    with _sqlite3.connect(cp.database_path) as db:
+        db.row_factory=_sqlite3.Row
+        row=db.execute("""SELECT window_seconds,max_executions,max_concurrent,max_input_bytes
+            FROM arc_app_quotas WHERE tenant_id=? AND application_id=?""",
+            (identity.tenant_id,identity.application_id)).fetchone()
+    return {"application_id":identity.application_id,"quota":dict(row) if row else None}
+
+@router.get("/executions")
+def list_platform_executions(limit:int=50,identity=Depends(require_application)):
+    if "agent.execution.read" not in identity.capabilities:
+        raise HTTPException(403,"Execution read capability is not granted")
+    if not 1<=limit<=100: raise HTTPException(422,"Limit must be between 1 and 100")
+    cp=_control_plane()
+    with _sqlite3.connect(cp.database_path) as db:
+        db.row_factory=_sqlite3.Row
+        db.execute("BEGIN")
+        rows=db.execute("""SELECT * FROM arc_executions WHERE tenant_id=? AND application_id=?
+            AND principal_id=? ORDER BY created_at DESC LIMIT ?""",
+            (identity.tenant_id,identity.application_id,identity.principal_id,limit)).fetchall()
+        cursor=db.execute("""SELECT COALESCE(MAX(event_id),0) FROM arc_execution_events
+            WHERE tenant_id=? AND application_id=? AND principal_id=?""",
+            (identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()[0]
+    return {"data":[asdict(cp._execution(x)) for x in rows],"event_cursor":int(cursor)}
+
+@router.get("/executions/events")
+async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
+        authorization: str | None = Header(default=None)):
+    """Stream durable event-log updates; every reconnect revalidates the bearer credential."""
+    if not isinstance(after, int) or after < 0:
+        raise HTTPException(422, "Event cursor must be a non-negative integer")
+    if not isinstance(duration_seconds, int) or not 1 <= duration_seconds <= 50:
+        raise HTTPException(422, "Stream duration must be between 1 and 50 seconds")
+    identity = require_application(authorization)
+    if "agent.execution.read" not in identity.capabilities:
+        raise HTTPException(403, "Execution read capability is not granted")
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(401, "Application credential required")
+    cp = _control_plane()
+
+    async def events():
+        cursor = after
+        started = time.monotonic()
+        last_heartbeat = started
+        last_auth_check = started
+        yield "retry: 2000\n\n"
+        # Netlify and common reverse proxies impose bounded response lifetimes.
+        # The client reconnects using the last durable event ID.
+        while time.monotonic() - started < duration_seconds:
+            if time.monotonic() - last_auth_check >= 10:
+                try:
+                    live_identity = _store().authenticate(token)
+                except AuthorizationError:
+                    yield "event: auth.expired\ndata: {\"reason\":\"credential_expired_or_revoked\"}\n\n"
+                    return
+                if (live_identity.tenant_id != identity.tenant_id
+                        or live_identity.application_id != identity.application_id
+                        or live_identity.principal_id != identity.principal_id):
+                    yield "event: auth.expired\ndata: {\"reason\":\"identity_scope_changed\"}\n\n"
+                    return
+                last_auth_check = time.monotonic()
+            try:
+                batch = cp.list_execution_events(identity, cursor, 100)
+            except (PermissionError, ValueError):
+                yield "event: stream.error\ndata: {\"reason\":\"execution_event_access_denied\"}\n\n"
+                return
+            for item in batch:
+                cursor = item["event_id"]
+                yield (f"id: {cursor}\nevent: execution\ndata: "
+                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n\n")
+            now = time.monotonic()
+            if not batch and now - last_heartbeat >= 15:
+                yield ": keepalive\n\n"
+                last_heartbeat = now
+            await asyncio.sleep(0.75)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-store, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+

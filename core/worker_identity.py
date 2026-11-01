@@ -51,7 +51,7 @@ class WorkerIdentityStore:
 
     def issue(self, tenant_id: str, application_id: str,
               capabilities: list[str], ttl_seconds: int=86400) -> tuple[str,str]:
-        allowed={"execution.claim","execution.heartbeat","execution.complete","execution.fail"}
+        allowed={"execution.claim","execution.heartbeat","execution.complete","execution.fail","tool.calculate"}
         if not isinstance(capabilities,list) or not capabilities or len(set(capabilities))!=len(capabilities):
             raise ValueError("Worker capabilities must be a unique non-empty list")
         if not set(capabilities).issubset(allowed):
