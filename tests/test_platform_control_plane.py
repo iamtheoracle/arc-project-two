@@ -243,8 +243,9 @@ def test_worker_executes_model_and_commits_usage_atomically(tmp_path, monkeypatc
                              ["execution.claim", "execution.heartbeat", "execution.complete"], 3600)
 
     class FakeGateway:
-        def __init__(self, provider_id):
+        def __init__(self, provider_id, timeout_seconds=None):
             assert provider_id == "ollama"
+            assert timeout_seconds is not None and timeout_seconds > 0
 
         def chat(self, model, messages, tools=None, temperature=0.2):
             assert model == "qwen2.5:7b"
