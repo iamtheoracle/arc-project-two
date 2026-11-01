@@ -89,7 +89,12 @@ class DocumentUploadRequest(BaseModel):
     classification:str="private"
     retention_seconds:int=Field(default=604800,ge=60,le=31536000)
 
-class AudioSynthesizeRequest(BaseModel):\n    text: str = Field(min_length=1, max_length=4000)\n    voice_id: str = Field(default="local-default", min_length=1, max_length=64)\n\nclass OrbitProcessRequest(BaseModel):
+class AudioSynthesizeRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    voice_id: str = Field(default="local-default", min_length=1, max_length=64)
+
+
+class OrbitProcessRequest(BaseModel):
     processor_id:str=Field(min_length=1,max_length=64)
     filename:str=Field(min_length=1,max_length=180)
     mime_type:str|None=Field(default=None,max_length=128)
