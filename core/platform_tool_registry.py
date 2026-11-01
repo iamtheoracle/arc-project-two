@@ -9,6 +9,8 @@ from __future__ import annotations
 from core.plugins import PluginRegistry
 from core.scoped_tool_broker import ScopedToolBroker, ToolDefinition
 
+PLATFORM_TOOL_IDS = frozenset({"tool.calculate"})
+
 
 def build_platform_tool_broker(plugin_registry: PluginRegistry | None = None) -> ScopedToolBroker:
     plugins = plugin_registry or PluginRegistry()
