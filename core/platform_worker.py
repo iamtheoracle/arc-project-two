@@ -262,7 +262,7 @@ class PlatformWorker:
     def _model_with_tools(self, gateway: ModelGateway, model: str,
                           messages: list[dict[str, Any]], execution_id: str,
                           worker_id: str, provider_id: str,
-                          deadline: float) -> tuple[str, dict[str, int]]:
+                          deadline: float, provider_timeout: float) -> tuple[str, dict[str, int]]:
         usage: dict[str, int] = {}
         max_tool_rounds = 4
         total_tool_calls = 0
@@ -282,6 +282,12 @@ class PlatformWorker:
             )
             if len(messages) > 100:
                 raise ValueError("execution_message_history_limit_exceeded")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("execution_deadline_exceeded")
+            set_timeout = getattr(gateway, "set_timeout_seconds", None)
+            if callable(set_timeout):
+                set_timeout(min(remaining, provider_timeout))
             response = gateway.chat(
                 model, messages, tools=schemas or None, temperature=0.2
             )
@@ -461,7 +467,7 @@ class PlatformWorker:
             output_text, usage = self._model_with_tools(
                 gateway, context["route"]["model_id"], messages,
                 execution.execution_id, self.identity.worker_id,
-                context["route"]["provider_id"], deadline,
+                context["route"]["provider_id"], deadline, configured_provider_timeout,
             )
             result = {
                 "content": output_text,
