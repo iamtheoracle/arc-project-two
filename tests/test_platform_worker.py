@@ -137,7 +137,7 @@ def test_worker_loads_only_authenticated_scoped_spark_memory_and_records_oracle_
         db.execute(
             "UPDATE arc_executions SET input_json=? WHERE execution_id=?",
             (json.dumps({
-                "prompt": "Summarize my current project.",
+                "prompt": "Summarize my project.",
                 "spark_memory": {"enabled": True, "categories": ["project"]},
             }), execution_id),
         )
