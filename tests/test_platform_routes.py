@@ -99,3 +99,108 @@ def test_concierge_plan_is_allowed_but_execution_fails_closed_without_provider(c
     confirm=client.post(f"/v1/platform/concierge/workflows/{plan.json()['workflow_id']}/confirm",
         headers=headers,json={"action_fingerprint":plan.json()["action_fingerprint"]})
     assert confirm.status_code==503
+
+
+
+def test_developer_runtime_api_registers_routes_agents_workers_and_queues(client):
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Developer Tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Research App"}).json()["application_id"]
+    capabilities = [
+        "agent.register", "agent.read", "agent.manage", "agent.execute",
+        "agent.execution.read", "model.route.manage", "model.route.use",
+        "quota.manage", "usage.write", "usage.read", "reasoning",
+        "worker.register", "worker.manage",
+    ]
+    issued = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),
+        json={"principal_id": "developer-1", "capabilities": capabilities},
+    )
+    assert issued.status_code == 201
+    headers = {"Authorization": "Bearer " + issued.json()["credential"]}
+
+    route = client.put("/v1/platform/model-routes/local-default", headers=headers, json={
+        "route_id": "local-default", "provider_id": "ollama", "model_id": "qwen2.5:7b",
+        "data_classifications": ["public", "internal", "private"], "regions": ["local"],
+    })
+    assert route.status_code == 200
+    quota = client.put("/v1/platform/quotas", headers=headers, json={
+        "window_seconds": 60, "max_executions": 10, "max_concurrent": 2,
+        "max_input_bytes": 4096,
+    })
+    assert quota.status_code == 200
+    published = client.post("/v1/platform/agents/versions", headers=headers, json={
+        "agent_id": "research", "version": "1.0.0",
+        "manifest": {
+            "display_name": "Research", "description": "Research agent",
+            "required_capabilities": ["reasoning"], "allowed_tools": [],
+            "model_routes": ["local-default"], "runtime": "oracle-arc-agent-v1",
+        },
+    })
+    assert published.status_code == 201
+    worker = client.post("/v1/platform/workers", headers=headers, json={
+        "runtime_ids": ["oracle-arc-agent-v1"], "ttl_seconds": 3600,
+    })
+    assert worker.status_code == 201
+    assert worker.json()["shown_once"] is True
+    submitted = client.post("/v1/platform/executions", headers=headers, json={
+        "agent_id": "research", "agent_version": "1.0.0",
+        "route_id": "local-default",
+        "payload": {"messages": [{"role": "user", "content": "Explain model routing."}]},
+        "classification": "private", "region": "local",
+        "idempotency_key": "developer-api-test-1",
+    })
+    assert submitted.status_code == 202
+    execution_id = submitted.json()["execution_id"]
+    read = client.get(f"/v1/platform/executions/{execution_id}", headers=headers)
+    assert read.status_code == 200
+    assert read.json()["route_id"] == "local-default"
+    assert client.get("/v1/platform/usage", headers=headers).status_code == 200
+
+
+def test_remote_agent_api_requires_explicit_residency_and_classification(client):
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Remote Tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Remote App"}).json()["application_id"]
+    capabilities = ["agent.register", "agent.execute", "model.route.manage",
+                    "model.route.use", "quota.manage", "agent.execution.read",
+                    "reasoning"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "remote-dev", "capabilities": capabilities},
+    ).json()["credential"]
+    headers = {"Authorization": "Bearer " + token}
+    assert client.put("/v1/platform/model-routes/remote-default", headers=headers, json={
+        "route_id": "remote-default", "provider_id": "groq", "model_id": "llama-3.3-70b-versatile",
+        "data_classifications": ["public", "internal", "private"], "regions": ["unspecified"],
+    }).status_code == 200
+    assert client.put("/v1/platform/quotas", headers=headers, json={
+        "window_seconds": 60, "max_executions": 10, "max_concurrent": 2,
+        "max_input_bytes": 4096,
+    }).status_code == 200
+    published = client.post("/v1/platform/agents/versions", headers=headers, json={
+        "agent_id": "remote-research", "version": "1.0.0",
+        "manifest": {
+            "display_name": "Remote Research", "description": "Remote research agent",
+            "required_capabilities": ["reasoning"], "allowed_tools": [],
+            "model_routes": ["remote-default"], "runtime": "oracle-arc-remote-agent-v1",
+        },
+    })
+    assert published.status_code == 201
+    rejected = client.post("/v1/platform/executions", headers=headers, json={
+        "agent_id": "remote-research", "agent_version": "1.0.0",
+        "route_id": "remote-default",
+        "payload": {"messages": [{"role": "user", "content": "hello"}]},
+        "classification": "sensitive", "region": "unspecified",
+    })
+    assert rejected.status_code == 403
+    accepted = client.post("/v1/platform/executions", headers=headers, json={
+        "agent_id": "remote-research", "agent_version": "1.0.0",
+        "route_id": "remote-default",
+        "payload": {"messages": [{"role": "user", "content": "hello"}]},
+        "classification": "private", "region": "unspecified",
+    })
+    assert accepted.status_code == 202
