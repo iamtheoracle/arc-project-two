@@ -331,3 +331,19 @@ The container is a processing boundary, not a guarantee of perfect extraction. V
 ## Engineering acceptance standard
 
 All new features and releases must satisfy the [Oracle Arc engineering acceptance standard](docs/ENGINEERING_ACCEPTANCE_STANDARD.md). Passing an isolated unit test or discovering a model/processor is never treated as proof of production readiness.
+
+
+## Voice and audio
+
+Voice and audio are a first-class Oracle Arc capability. The current ORBITS audio foundation provides metadata inspection and an optional offline faster-whisper transcription worker; it does not yet provide a complete spoken conversation experience.
+
+The implementation contract and remaining phases are documented in [Voice and Audio Architecture](docs/VOICE_AUDIO_ARCHITECTURE.md). The planned end-to-end path is:
+
+1. User-initiated microphone capture with visible recording state and bounded audio intake.
+2. Local speech detection and transcription through the separately provisioned ASR worker.
+3. Authenticated transcript handoff to the same ORACLE conversation context used by text chat.
+4. Local speech synthesis through a separately provisioned, isolated TTS worker.
+5. Validated audio playback with stop, cancel and interruption handling.
+6. Durable, scoped voice-session events, retention controls and deletion.
+
+Local processing is the default. No silent remote audio fallback is permitted. TTS, microphone capture, durable voice sessions, live streaming/VAD and end-to-end voice conversation are not implemented yet and must not be represented as available. Real ASR inference also remains unverified until the pinned model is installed and exercised on the target host.
