@@ -166,10 +166,10 @@ class PlatformWorker:
 
     def _model_with_tools(self, gateway: ModelGateway, model: str,
                           messages: list[dict[str, Any]], execution_id: str,
-                          worker_id: str, initial_row: dict[str, Any],
-                          manifest: dict[str, Any]) -> tuple[str, dict[str, int]]:
+                          worker_id: str) -> tuple[str, dict[str, int]]:
         usage: dict[str, int] = {}
         max_tool_rounds = 4
+        total_tool_calls = 0
         for round_index in range(max_tool_rounds + 1):
             self.identities.validate(self.identity, "execution.complete")
             row, context = self._execution_context(execution_id, worker_id)
@@ -184,6 +184,8 @@ class PlatformWorker:
             )
             if manifest_tools and not schemas:
                 raise PermissionError("No declared agent tools remain authorized by all four permission boundaries")
+            if len(messages) > 100:
+                raise ValueError("execution_message_history_limit_exceeded")
             response = gateway.chat(
                 model, messages, tools=schemas or None, temperature=0.2
             )
@@ -205,9 +207,14 @@ class PlatformWorker:
             if round_index >= max_tool_rounds:
                 raise RuntimeError("tool_call_round_limit_exceeded")
 
+            if not isinstance(calls, (list, tuple)) or len(calls) > 8:
+                raise ValueError("model_tool_call_batch_limit_exceeded")
+            total_tool_calls += len(calls)
+            if total_tool_calls > 16:
+                raise ValueError("execution_tool_call_limit_exceeded")
+            parsed_calls = [self._tool_call(call) for call in calls]
             normalized_calls = []
-            for call in calls:
-                name, arguments = self._tool_call(call)
+            for name, arguments in parsed_calls:
                 normalized_calls.append({
                     "type": "function",
                     "function": {"name": name, "arguments": arguments},
@@ -220,10 +227,7 @@ class PlatformWorker:
                 "tool_calls": normalized_calls,
             })
 
-            for name, arguments in zip(
-                [self._tool_call(call)[0] for call in calls], 
-                [self._tool_call(call)[1] for call in calls],
-            ):
+            for name, arguments in parsed_calls:
                 # Refresh every boundary immediately before each consequential tool call.
                 self.identities.validate(self.identity, "execution.complete")
                 latest_row, latest_context = self._execution_context(execution_id, worker_id)
@@ -298,7 +302,6 @@ class PlatformWorker:
             output_text, usage = self._model_with_tools(
                 gateway, context["route"]["model_id"], messages,
                 execution.execution_id, self.identity.worker_id,
-                row, context["manifest"],
             )
             result = {
                 "content": output_text,
