@@ -513,6 +513,9 @@ class PlatformControlPlane:
             raise ValueError("Error code must be a normalized non-sensitive code")
         now = int(time.time())
         with self._session() as db:
+            # Serialize the state read and transition. Cancellation, lease recovery and
+            # worker failure must never overwrite one another's terminal state.
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute("""SELECT attempt,max_attempts FROM arc_executions
                 WHERE execution_id=? AND status='running' AND lease_owner=?
                 AND lease_expires_at>?""", (execution_id, worker_id, now)).fetchone()
@@ -520,10 +523,12 @@ class PlatformControlPlane:
                 return False
             status = "queued" if retryable and row["attempt"] < row["max_attempts"] else (
                 "dead_letter" if retryable else "failed")
-            db.execute("""UPDATE arc_executions SET status=?,error_code=?,updated_at=?,
-                lease_owner=NULL,lease_expires_at=NULL WHERE execution_id=?""",
-                (status, error_code, now, execution_id))
-            return True
+            cur = db.execute("""UPDATE arc_executions SET status=?,error_code=?,updated_at=?,
+                lease_owner=NULL,lease_expires_at=NULL
+                WHERE execution_id=? AND status='running' AND lease_owner=?
+                AND lease_expires_at>?""",
+                (status, error_code, now, execution_id, worker_id, now))
+            return cur.rowcount == 1
 
     def recover_expired_leases(self, tenant_id: str | None = None,
                                application_id: str | None = None) -> dict[str, int]:
