@@ -365,8 +365,8 @@ class WorkerService:
 
     def list_tool_invocations(self, identity, execution_id: str, limit: int = 100) -> list[dict]:
         """Read audit metadata only within the caller's tenant/application scope."""
-        if "execution.read" not in identity.capabilities:
-            raise PermissionError("execution.read capability is required")
+        if "agent.execution.read" not in identity.capabilities:
+            raise PermissionError("agent.execution.read capability is required")
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
             raise ValueError("Audit limit must be between 1 and 500")
         db = self._db()
