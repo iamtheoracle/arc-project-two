@@ -56,6 +56,7 @@ class DocumentQuarantineStore:
     def __init__(self, database_path: str, quarantine_dir: str | None = None,
                  scanner=clamav_scan):
         self.database_path = str(database_path)
+        Path(self.database_path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root = Path(quarantine_dir or os.environ.get(
             "ORACLE_ARC_QUARANTINE_DIR", "data/quarantine"
         )).expanduser()
