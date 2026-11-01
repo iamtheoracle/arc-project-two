@@ -242,7 +242,8 @@ class PlatformWorker:
                 # Revocation either commits first and blocks this call, or waits until this
                 # in-flight call finishes; after revoke returns, no subsequent call can run.
                 with self.tool_grants.execution_guard(
-                    self.identity.tenant_id, self.identity.application_id, tool_id
+                    self.identity.tenant_id, self.identity.application_id, tool_id,
+                    execution_id, worker_id,
                 ):
                     self.identities.validate(self.identity, "execution.complete")
                     latest_row, latest_context = self._execution_context(execution_id, worker_id)
