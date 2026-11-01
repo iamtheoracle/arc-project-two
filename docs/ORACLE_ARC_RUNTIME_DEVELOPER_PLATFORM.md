@@ -70,11 +70,17 @@ The application identity must already possess every required capability and
 tool grant. Every model route must already exist and be enabled in the same
 tenant/application. Runtime IDs must be in the server-side
 `ORACLE_ARC_TRUSTED_RUNTIME_IDS` allowlist (default:
-`oracle-arc-agent-v1`). Developers cannot register a new executable runtime by
-putting its name in a manifest. The first installed text runtime currently
-requires an empty `allowed_tools` list; declaring tools is supported in the
-manifest contract, but execution remains disabled until reviewed tool adapters
-are installed.
+`oracle-arc-agent-v1,oracle-arc-remote-agent-v1`). Developers cannot register a new executable runtime by
+putting its name in a manifest. Both installed text runtimes currently require an empty `allowed_tools` list;
+declaring tools is supported in the manifest contract, but execution remains
+disabled until reviewed tool adapters are installed. The local runtime is
+`oracle-arc-agent-v1`. The remote runtime is
+`oracle-arc-remote-agent-v1` and additionally requires the platform operator
+to set `ORACLE_ARC_ENABLE_REMOTE_INFERENCE=true`. Remote routes must use one of
+OpenRouter, Groq or Gemini, explicitly allow the `unspecified` residency region,
+and exclude sensitive/restricted data. "Unspecified" is deliberately not a
+residency guarantee: it records that the provider's execution region has not
+been attested. Remote egress remains disabled by default.
 
 ## Worker security model
 
@@ -126,7 +132,9 @@ python -m core.platform_worker_runner
 ```
 
 The installed `oracle-arc-agent-v1` runtime executes text-only workloads with an empty
-tool list through the configured local Ollama model route. It validates the message payload through
+tool list through the configured local Ollama model route. The separate
+`oracle-arc-remote-agent-v1` runtime can use OpenRouter, Groq or Gemini only
+after explicit operator opt-in and the remote data/residency policy checks. It validates the message payload through
 the shared model gateway, renews the lease while inference is running, records
 provider token counts where available, and completes or fails the execution.
 The first runtime refuses remote Ollama hosts and manifests that declare tools
@@ -135,9 +143,10 @@ model routes supported by the installed runtime.
 
 ## Deliberate implementation boundary
 
-This is a working **first-party local text runtime**, not a general-purpose code
-hosting service or full third-party agent sandbox. Remote OpenRouter, Groq and
-Gemini execution is not yet wired into this runtime. Declared tool IDs and their
+This is a working **first-party text runtime system**, not a general-purpose code
+hosting service or full third-party agent sandbox. Local Ollama and separately
+opt-in remote OpenRouter, Groq and Gemini routes are wired through the privacy
+gateway. Declared tool IDs and their
 permissions are validated and persisted, but the runtime refuses to invoke them
 until server-installed, sandboxed adapters and per-call authorization are
 implemented. There is no arbitrary developer code upload/import/execute path.
@@ -145,5 +154,5 @@ Production worker isolation, supervised deployment manifests, distributed quota
 enforcement, database migration/restore drills, adversarial integration tests
 and CI verification remain separate engineering gates.
 
-No customer workload, remote provider egress, arbitrary code execution, production
-deployment or external side effect is enabled.
+No customer workload, remote provider egress by default, arbitrary code execution,
+production deployment or external side effect is enabled.
