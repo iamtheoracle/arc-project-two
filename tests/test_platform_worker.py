@@ -179,3 +179,52 @@ def test_worker_credential_expiry_and_revocation_are_rechecked(tmp_path):
     assert worker_ids.revoke(identity2.worker_id)
     with pytest.raises(PermissionError, match="expired or revoked"):
         worker_ids.validate(identity2, "execution.claim")
+
+
+def test_worker_fails_closed_when_application_principal_credential_expires(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(tmp_path)
+    with sqlite3.connect(database) as db:
+        db.execute("UPDATE arc_credentials SET expires_at=0 WHERE credential_id=?",
+                   (identity.credential_id,))
+    monkeypatch.setattr(worker_module, "ModelGateway", FakeGateway)
+    worker = PlatformWorker(database, worker_token, tool_broker=build_platform_tool_broker(FakePlugins()))
+
+    with pytest.raises(PermissionError, match="No declared agent tools"):
+        worker.run_once()
+
+    assert control.get_execution(identity, execution_id).status in {"failed", "dead_letter"}
+
+
+def test_worker_claims_only_its_bound_tenant_and_application_queue(tmp_path):
+    database, identities, identity_a, control, grants, execution_a, worker_ids, worker_id, worker_token = provision(tmp_path, tool=False)
+    tenant_b = identities.create_tenant("Second tenant")
+    application_b = identities.create_application(tenant_b, "Other application")
+    token_b = identities.issue_credential(
+        tenant_b, application_b, "principal-b",
+        CAPABILITIES, ttl_seconds=3600,
+    )
+    identity_b = identities.authenticate(token_b)
+    control.configure_model_route(
+        identity_b, "local-default", "ollama", "qwen2.5:7b", ["private"], ["local"]
+    )
+    control.register_agent(identity_b, "research", "1.0.0", {
+        "display_name": "Research B",
+        "description": "Second tenant agent",
+        "required_capabilities": ["reasoning"],
+        "allowed_tools": [],
+        "model_routes": ["local-default"],
+        "runtime": "oracle-arc-agent-v1",
+    })
+    execution_b = control.submit_execution(
+        identity_b, "research", "1.0.0", "local-default",
+        {"prompt": "tenant B"}, max_attempts=2,
+    )
+
+    claimed = control.claim_execution(
+        worker_id, lease_seconds=30,
+        tenant_id=identity_a.tenant_id, application_id=identity_a.application_id,
+    )
+    assert claimed.execution_id == execution_a
+    assert control.get_execution(identity_b, execution_b).status == "queued"
