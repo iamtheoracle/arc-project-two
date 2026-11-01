@@ -11,7 +11,6 @@ import signal
 import threading
 import time
 
-from core.platform_control_plane import PlatformControlPlane
 from core.platform_runtime import RuntimeUnavailable, default_runtime_registry
 from core.platform_workers import WorkerService
 
@@ -72,7 +71,6 @@ def main() -> None:
     workers = WorkerService(database)
     worker = workers.authenticate(token)
     runtimes = default_runtime_registry()
-    control_plane = PlatformControlPlane(database)
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
@@ -81,7 +79,7 @@ def main() -> None:
     while not stopped.is_set():
         now = time.monotonic()
         if now - last_recovery >= 30:
-            control_plane.recover_expired_leases()
+            workers.recover_expired_leases(worker)
             last_recovery = now
         try:
             processed = run_once(workers, worker, runtimes)
