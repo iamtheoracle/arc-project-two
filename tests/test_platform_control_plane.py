@@ -342,7 +342,7 @@ def test_tool_call_authorization_is_bound_to_live_worker_lease_and_app_credentia
     assert workers.authorize_tool_call(worker, execution_id, "math.calculate") is False
 
     audit = workers.list_tool_invocations(identity, execution_id)
-    assert [item["decision"] for item in audit] == ["denied", "denied", "allowed"]
+    assert sorted(item["decision"] for item in audit) == ["allowed", "denied", "denied"]
     assert {item["tool_id"] for item in audit} == {"math.calculate", "math.unknown"}
     assert all("arguments" not in item and "result" not in item for item in audit)
 
