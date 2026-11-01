@@ -152,8 +152,18 @@ class DocumentQuarantineStore:
                 removed += 1
         return removed
 
+    def _reauthorize(self, identity):
+        # Recheck current credential state and grants immediately before file access.
+        from core.document_retrieval import DocumentRetrievalStore
+        documents = DocumentRetrievalStore(self.database_path)
+        current = documents._reauthorize(identity)
+        documents.security.require(current, "orbits.process")
+        documents.security.require(current, "document.index")
+        return current
+
     def ingest(self, identity, asset: OrbitAsset, data: bytes,
                retention_seconds: int = 604800) -> dict:
+        identity = self._reauthorize(identity)
         if not 60 <= retention_seconds <= 31536000:
             raise ValueError("Retention must be between 60 seconds and 365 days")
         if not isinstance(asset, OrbitAsset) or not isinstance(data, bytes):
@@ -224,6 +234,10 @@ class DocumentQuarantineStore:
                 "expires_at": now + retention_seconds}
 
     def delete(self, identity, asset_id: str) -> bool:
+        from core.document_retrieval import DocumentRetrievalStore
+        documents = DocumentRetrievalStore(self.database_path)
+        identity = documents._reauthorize(identity)
+        documents.security.require(identity, "document.delete")
         if not isinstance(asset_id, str) or not re.fullmatch(r"orb_[a-f0-9]{32}", asset_id):
             raise ValueError("Invalid quarantine asset identifier")
         with self._db() as db:
@@ -243,6 +257,11 @@ class DocumentQuarantineStore:
             return True
 
     def audit(self, identity, asset_id: str) -> list[dict]:
+        from core.document_retrieval import DocumentRetrievalStore
+        documents = DocumentRetrievalStore(self.database_path)
+        identity = documents._reauthorize(identity)
+        if "document.audit" not in identity.capabilities and "document.delete" not in identity.capabilities:
+            raise PermissionError("Document audit capability is not granted")
         with self._db() as db:
             rows = db.execute(
                 """SELECT action,sha256,occurred_at FROM arc_document_quarantine_audit
