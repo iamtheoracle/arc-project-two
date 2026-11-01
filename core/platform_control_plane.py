@@ -335,6 +335,9 @@ class PlatformControlPlane:
             raise LookupError("Enabled model route not found")
         if manifest["runtime"] == "oracle-arc-agent-v1" and route["provider_id"] != "ollama":
             raise PermissionError("oracle-arc-agent-v1 supports local Ollama routes only")
+        if (manifest["runtime"] == "oracle-arc-remote-agent-v1"
+                and route["provider_id"] not in {"openrouter", "groq", "gemini"}):
+            raise PermissionError("oracle-arc-remote-agent-v1 requires a remote provider route")
         if not set(manifest["required_capabilities"]).issubset(identity.capabilities):
             raise PermissionError("Application identity lacks agent-required capabilities")
         if not set(manifest["allowed_tools"]).issubset(set(identity.capabilities)):
@@ -364,6 +367,10 @@ class PlatformControlPlane:
             if (agent_manifest["runtime"] == "oracle-arc-agent-v1"
                     and region != "local"):
                 raise PermissionError("oracle-arc-agent-v1 accepts local execution regions only")
+            if (agent_manifest["runtime"] == "oracle-arc-remote-agent-v1"
+                    and (region != "unspecified"
+                         or classification not in {"public", "internal", "private"})):
+                raise PermissionError("Remote execution requires unspecified residency and non-sensitive data")
             if classification not in json.loads(route["data_classifications_json"]):
                 raise PermissionError("Model route is not approved for this data classification")
             if region not in json.loads(route["regions_json"]):
