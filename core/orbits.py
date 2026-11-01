@@ -73,9 +73,14 @@ def _detect(data: bytes) -> tuple[str, str]:
             if mime == "audio/wav":
                 continue
             return media_type, mime
-    if data and b"\x00" not in data[:4096]:
+    if data:
+        sample = data[:4096]
+        lowered = sample.lstrip().lower()
+        if (lowered.startswith((b"<svg", b"<html", b"<!doctype", b"<script", b"<?xml"))
+                or any(byte < 9 or 13 < byte < 32 for byte in sample)):
+            raise OrbitAssetRejected("Active markup and binary archive formats are not accepted as plain text")
         try:
-            data[:4096].decode("utf-8")
+            sample.decode("utf-8")
             return "document", "text/plain"
         except UnicodeDecodeError:
             pass
