@@ -299,10 +299,10 @@ def test_trusted_runtime_dispatch_rejects_uninstalled_and_tool_enabled_runtimes(
         registry.execute("not-installed", {}, {"runtime": "not-installed"})
 
     default = default_runtime_registry()
-    with pytest.raises(RuntimeUnavailable, match="tool adapters"):
+    with pytest.raises(PermissionError, match="per-call authorizer"):
         default.execute("oracle-arc-agent-v1",
                         {"model_provider": "ollama", "input_json": '{"messages":[{"role":"user","content":"hi"}]}'},
-                        {"runtime": "oracle-arc-agent-v1", "allowed_tools": ["tool.search"]})
+                        {"runtime": "oracle-arc-agent-v1", "allowed_tools": ["math.calculate"]})
 
 
 def test_first_runtime_refuses_remote_ollama_egress(monkeypatch):
