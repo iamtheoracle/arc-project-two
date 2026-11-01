@@ -37,7 +37,13 @@ def run_once(workers: WorkerService, worker, runtimes, lease_seconds: int = 900)
     heartbeat.start()
     try:
         manifest = workers.execution_manifest(worker, execution["execution_id"])
-        result = runtimes.execute(manifest["runtime"], execution, manifest)
+        if manifest.get("allowed_tools"):
+            authorize = lambda tool_id: workers.authorize_tool_call(
+                worker, execution["execution_id"], tool_id)
+            result = runtimes.execute(
+                manifest["runtime"], execution, manifest, tool_authorizer=authorize)
+        else:
+            result = runtimes.execute(manifest["runtime"], execution, manifest)
         if lost_lease.is_set():
             workers.fail(worker, execution["execution_id"], "execution_fenced", retryable=False)
             return True
