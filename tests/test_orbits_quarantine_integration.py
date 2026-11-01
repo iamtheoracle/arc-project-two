@@ -4,6 +4,7 @@ import pytest
 
 from core.orbits import validate_asset
 from core.orbits_quarantine import DocumentQuarantineStore, MalwareDetected
+from core.tenant_security import TenantSecurityStore
 
 
 pytestmark = pytest.mark.skipif(
@@ -16,9 +17,15 @@ def test_real_clamav_accepts_clean_text_and_detects_eicar(tmp_path):
     store = DocumentQuarantineStore(
         str(tmp_path / "arc.sqlite3"), str(tmp_path / "quarantine")
     )
-    identity = type("Identity", (), {
-        "tenant_id": "tenant", "application_id": "app", "principal_id": "principal"
-    })()
+    security = TenantSecurityStore(str(tmp_path / "arc.sqlite3"))
+    tenant = security.create_tenant("ClamAV tenant")
+    app = security.create_application(tenant, "ClamAV app")
+    token = security.issue_credential(
+        tenant, app, "principal",
+        ["orbits.process", "document.index", "document.delete", "document.audit"],
+        ttl_seconds=3600,
+    )
+    identity = security.authenticate(token)
     clean = b"ordinary text for malware scanning"
     clean_asset = validate_asset(clean, "clean.txt")
     result = store.ingest(identity, clean_asset, clean)
