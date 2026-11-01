@@ -202,6 +202,26 @@ class WorkerService:
             db.commit()
             db.close()
 
+    def execution_manifest(self, worker: WorkerIdentity, execution_id: str) -> dict:
+        """Return only the active manifest attached to this worker's live leased task."""
+        self._reauthorize(worker)
+        db = self._db()
+        try:
+            row = db.execute("""SELECT a.manifest_json FROM arc_executions e
+              JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
+                AND a.application_id=e.application_id AND a.agent_id=e.agent_id
+                AND a.version=e.agent_version
+              WHERE e.execution_id=? AND e.tenant_id=? AND e.application_id=?
+                AND e.status='running' AND e.lease_owner=? AND e.lease_expires_at>?
+                AND a.status='active'""",
+              (execution_id, worker.tenant_id, worker.application_id,
+               worker.worker_id, int(time.time()))).fetchone()
+            if row is None:
+                raise PermissionError("No active execution lease is owned by this worker")
+            return json.loads(row["manifest_json"])
+        finally:
+            db.close()
+
     def heartbeat(self, worker: WorkerIdentity, execution_id: str, lease_seconds: int = 60) -> bool:
         self._reauthorize(worker)
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) or not 5 <= lease_seconds <= 900:
