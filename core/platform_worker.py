@@ -169,7 +169,7 @@ class PlatformWorker:
 
     def _model_with_tools(self, gateway: ModelGateway, model: str,
                           messages: list[dict[str, Any]], execution_id: str,
-                          worker_id: str) -> tuple[str, dict[str, int]]:
+                          worker_id: str, provider_id: str) -> tuple[str, dict[str, int]]:
         usage: dict[str, int] = {}
         max_tool_rounds = 4
         total_tool_calls = 0
@@ -264,7 +264,7 @@ class PlatformWorker:
                     "name": function_name,
                     "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
                 }
-                if call_id:
+                if call_id and provider_id != "ollama":
                     tool_message["tool_call_id"] = call_id
                 messages.append(tool_message)
         raise RuntimeError("model_tool_loop_terminated_unexpectedly")
@@ -318,6 +318,7 @@ class PlatformWorker:
             output_text, usage = self._model_with_tools(
                 gateway, context["route"]["model_id"], messages,
                 execution.execution_id, self.identity.worker_id,
+                context["route"]["provider_id"],
             )
             result = {
                 "content": output_text,
