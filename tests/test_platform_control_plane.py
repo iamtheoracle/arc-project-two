@@ -393,3 +393,33 @@ def test_remote_runtime_fails_closed_without_operator_opt_in(monkeypatch):
             {"model_provider": "openrouter", "region": "unspecified",
              "classification": "public", "input_json": '{"messages":[{"role":"user","content":"hello"}]}'},
             {"runtime": "oracle-arc-remote-agent-v1", "allowed_tools": []})
+
+
+
+def test_remote_runtime_passes_route_selected_model_and_policy_to_privacy_gateway(monkeypatch):
+    import core.privacy_gateway as privacy
+    from core.platform_runtime import default_runtime_registry
+
+    captured = {}
+    class FakePrivacyGateway:
+        def chat(self, policy, **kwargs):
+            captured["policy"] = policy
+            captured["kwargs"] = kwargs
+            return {"answer": "remote answer", "input_tokens": 9, "output_tokens": 4}
+
+    monkeypatch.setattr(privacy, "PrivacyAwareModelGateway", FakePrivacyGateway)
+    monkeypatch.setenv("ORACLE_ARC_ENABLE_REMOTE_INFERENCE", "true")
+    result = default_runtime_registry().execute(
+        "oracle-arc-remote-agent-v1",
+        {"tenant_id": "tenant-x", "application_id": "app-y",
+         "model_provider": "groq", "model_id": "llama-route-model",
+         "region": "unspecified", "classification": "private",
+         "input_json": '{"messages":[{"role":"user","content":"hello"}],"temperature":0.2}'},
+        {"runtime": "oracle-arc-remote-agent-v1", "allowed_tools": []})
+    assert result["answer"] == "remote answer"
+    assert captured["policy"].tenant_id == "tenant-x"
+    assert captured["policy"].allowed_providers == ("groq",)
+    assert captured["policy"].allow_remote is True
+    assert captured["policy"].allowed_regions == ("unspecified",)
+    assert captured["kwargs"]["model"] == "llama-route-model"
+    assert captured["kwargs"]["temperature"] == 0.2
