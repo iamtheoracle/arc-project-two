@@ -33,11 +33,14 @@ from core.platform_routes import router as platform_router
 # Resource guards are deliberately process-local. Deployments with multiple workers
 # must additionally enforce equivalent limits at the trusted ingress/API gateway.
 MAX_REQUEST_BYTES = int(os.environ.get("ORACLE_ARC_MAX_REQUEST_BYTES", "1048576"))
+MEDIA_UPLOAD_MAX_REQUEST_BYTES = int(os.environ.get("ORACLE_ARC_MEDIA_MAX_REQUEST_BYTES", "36000000"))
 RATE_LIMIT_REQUESTS = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_REQUESTS", "600"))
 RATE_LIMIT_WINDOW = int(os.environ.get("ORACLE_ARC_RATE_LIMIT_WINDOW_SECONDS", "60"))
 CHAT_CONCURRENCY = int(os.environ.get("ORACLE_ARC_CHAT_CONCURRENCY", "1"))
 if not 1024 <= MAX_REQUEST_BYTES <= 16 * 1024 * 1024:
     raise RuntimeError("ORACLE_ARC_MAX_REQUEST_BYTES must be between 1 KiB and 16 MiB.")
+if not 1024 <= MEDIA_UPLOAD_MAX_REQUEST_BYTES <= 36_000_000:
+    raise RuntimeError("ORACLE_ARC_MEDIA_MAX_REQUEST_BYTES must be between 1 KiB and 36 MB.")
 if not 1 <= RATE_LIMIT_REQUESTS <= 10000 or not 1 <= RATE_LIMIT_WINDOW <= 3600:
     raise RuntimeError("Oracle Arc rate-limit configuration is outside safe bounds.")
 if not 1 <= CHAT_CONCURRENCY <= 64:
@@ -57,11 +60,17 @@ class RequestGuardMiddleware:
         if scope.get("type") != "http" or not scope.get("path", "").startswith("/v1/"):
             return await self.downstream(scope, receive, send)
 
+        path = scope.get("path", "")
+        body_limit = (
+            MEDIA_UPLOAD_MAX_REQUEST_BYTES
+            if path in {"/v1/platform/documents/upload", "/v1/platform/orbits/process"}
+            else MAX_REQUEST_BYTES
+        )
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
         declared = headers.get(b"content-length")
         if declared is not None:
             try:
-                if not declared.isdigit() or int(declared) > MAX_REQUEST_BYTES:
+                if not declared.isdigit() or int(declared) > body_limit:
                     status = 413 if declared.isdigit() else 400
                     detail = "Request body too large." if status == 413 else "Invalid Content-Length."
                     response = JSONResponse({"detail": detail}, status_code=status)
@@ -97,7 +106,7 @@ class RequestGuardMiddleware:
                 return
             chunk = message.get("body", b"")
             size += len(chunk)
-            if size > MAX_REQUEST_BYTES:
+            if size > body_limit:
                 response = JSONResponse({"detail": "Request body too large."}, status_code=413)
                 return await response(scope, receive, send)
             chunks.append(chunk)
