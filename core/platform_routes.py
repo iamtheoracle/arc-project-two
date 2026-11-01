@@ -252,18 +252,24 @@ def upload_platform_document(body: DocumentUploadRequest, identity=Depends(requi
 def read_document_quarantine_audit(asset_id: str, identity=Depends(require_application)):
     if "document.audit" not in identity.capabilities and "document.delete" not in identity.capabilities:
         raise HTTPException(403, "Document audit capability is not granted")
-    store = DocumentQuarantineStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
-    return {"asset_id": asset_id, "events": store.audit(identity, asset_id)}
+    try:
+        store = DocumentQuarantineStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        return {"asset_id": asset_id, "events": store.audit(identity, asset_id)}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
 
 
 @router.delete("/documents/quarantine/{asset_id}")
 def delete_quarantined_document(asset_id: str, identity=Depends(require_application)):
     if "document.delete" not in identity.capabilities:
         raise HTTPException(403, "Document deletion capability is not granted")
-    store = DocumentQuarantineStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
-    if not store.delete(identity, asset_id):
-        raise HTTPException(404, "Quarantined asset not found in this application and principal scope")
-    return {"asset_id": asset_id, "deleted": True}
+    try:
+        store = DocumentQuarantineStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+        if not store.delete(identity, asset_id):
+            raise HTTPException(404, "Quarantined asset not found in this application and principal scope")
+        return {"asset_id": asset_id, "deleted": True}
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
 
 
 @router.post("/documents", status_code=201)
