@@ -165,3 +165,10 @@ The local Ollama runtime now advertises only platform-installed tools explicitly
 Tool IDs must be both installed by platform code and present in the agent manifest and the application's capability grants. Before each tool invocation, the worker revalidates its own credential, execution lease, tenant/application scope, submitting application credential, policy version, active agent version, model route and exact tool grant. A denied or stale authorization stops the invocation. Tool use is currently supported only by the local Ollama runtime; remote runtimes continue to reject tool-enabled manifests.
 
 The model/tool loop is bounded to five model turns and eight tool calls per turn, with shared inference validation and output limits. This is a restricted platform tool adapter, not a general-purpose sandbox for arbitrary developer code. Do not register user-supplied Python, shell commands, arbitrary HTTP clients or filesystem tools as trusted handlers.
+
+
+## Tool invocation audit
+
+Every worker-side tool authorization attempt is now written to the tenant/application-scoped `arc_tool_invocations` audit table. Each event records the execution, worker, stable tool ID, allow/deny decision, a bounded reason code and timestamp. Tool arguments and results are intentionally excluded to avoid turning operational logs into a secondary store of user content.
+
+Applications with the `agent.execution.read` capability can read audit metadata through `GET /v1/platform/executions/{execution_id}/tool-invocations`. The response is scoped to the caller's tenant and application, supports a bounded page size, and returns no content when the execution has no recorded tool attempts. This is an invocation authorization audit, not a complete model/provider trace or billing ledger.
