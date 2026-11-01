@@ -289,3 +289,6 @@ For a calculator-enabled agent, all four independent grants are required:
 4. The worker credential was issued with `tool.calculate` in addition to execution lifecycle capabilities.
 
 The worker re-reads application capabilities and owner grants before each tool call and revalidates the worker credential. Tool schemas are generated from the trusted server registry; model output cannot add tools or handlers.
+
+
+Remote provider egress is deliberately fail-closed: OpenRouter, Groq and Gemini routes may be configured only for `public` data until a provider-specific contract, region and data-egress policy is approved. Ollama remains the local route for private data. The OpenAI-compatible adapters preserve tool-call IDs and usage accounting; tool function names are normalized to provider-safe names and resolved back to immutable internal tool IDs.
