@@ -261,7 +261,7 @@ def require_worker(authorization: str | None = Header(default=None)) -> WorkerId
 
 
 class WorkerIssue(BaseModel):
-    capabilities: list[str] = Field(min_length=1, max_length=4)
+    capabilities: list[str] = Field(min_length=1, max_length=8)
     ttl_seconds: int = Field(default=86400, ge=60, le=2592000)
 
 
