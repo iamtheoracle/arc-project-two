@@ -18,6 +18,7 @@ from typing import Any
 
 from .tenant_identity import RequestIdentity
 from .platform_runtime import trusted_runtime_ids
+from .platform_tools import default_tool_registry
 
 
 _ID = re.compile(r"^[a-z][a-z0-9._-]{1,63}$")
@@ -194,6 +195,9 @@ class PlatformControlPlane:
             any(not isinstance(x, str) or not _ID.fullmatch(x) for x in tools) or
             len(set(tools)) != len(tools)):
             raise ValueError("Agent tools must be a unique list of normalized tool IDs")
+        installed_tools = default_tool_registry()
+        for tool_id in tools:
+            installed_tools.get(tool_id)
         if (not isinstance(routes, list) or not routes or
             any(not isinstance(x, str) or not _ID.fullmatch(x) for x in routes) or
             len(set(routes)) != len(routes)):
