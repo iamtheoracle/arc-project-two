@@ -122,6 +122,7 @@ class OllamaProvider:
             raise ValueError("Remote Ollama is disabled. Set ORACLE_ARC_ALLOW_REMOTE_OLLAMA=true only after reviewing the data destination and transport security.")
         if not is_local and parsed.scheme != "https":
             raise ValueError("Remote Ollama connections must use HTTPS.")
+        self._host = host
         self._client = ollama.Client(host=host, timeout=timeout)
         self.manifest = ProviderManifest(
             provider_id="ollama",
@@ -130,6 +131,16 @@ class OllamaProvider:
             capabilities=ModelCapabilities(tool_calling=True, streaming=True),
             description="Ollama inference through the configured endpoint; execution location is disclosed in this manifest.",
         )
+
+    def set_timeout_seconds(self, timeout_seconds: float) -> None:
+        if (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900):
+            raise ValueError("Provider timeout must be greater than 0 and at most 900 seconds.")
+        old_client = self._client
+        self._client = ollama.Client(host=self._host, timeout=float(timeout_seconds))
+        close = getattr(old_client, "close", None)
+        if callable(close):
+            close()
 
     def chat(
         self,
@@ -162,6 +173,12 @@ class OpenAICompatibleModelAdapter:
             capabilities=ModelCapabilities(tool_calling=True, streaming=False),
             description="Fixed HTTPS provider endpoint; API credentials are read server-side.",
         )
+
+    def set_timeout_seconds(self, timeout_seconds: float) -> None:
+        if (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900):
+            raise ValueError("Provider timeout must be greater than 0 and at most 900 seconds.")
+        self.client.timeout_seconds = float(timeout_seconds)
 
     def chat(
         self,
@@ -216,6 +233,13 @@ class ModelGateway:
         if stream and not capabilities.streaming:
             raise ValueError("The selected provider does not support streaming.")
         return self.provider.chat(model, messages, tools=tools, stream=stream, temperature=temperature)
+
+    def set_timeout_seconds(self, timeout_seconds: float) -> None:
+        """Tighten the active provider timeout as an execution deadline approaches."""
+        setter = getattr(self.provider, "set_timeout_seconds", None)
+        if not callable(setter):
+            raise ValueError("Selected provider cannot adjust its request timeout")
+        setter(timeout_seconds)
 
     def provider_manifest(self) -> Dict[str, Any]:
         return self.provider.manifest.public_dict()
