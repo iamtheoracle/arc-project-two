@@ -102,8 +102,9 @@ class DocumentRetrievalStore:
 
     @staticmethod
     def _source_uri(value: str) -> str:
-        if not isinstance(value, str) or not 1 <= len(value) <= 2048:
-            raise ValueError("A source URI is required")
+        if (not isinstance(value, str) or not 1 <= len(value) <= 2048
+                or any(ord(char) < 32 for char in value)):
+            raise ValueError("A source URI is required and must not contain control characters")
         parsed = urlsplit(value)
         if parsed.username or parsed.password or parsed.scheme not in {"https", "arc"}:
             raise ValueError("Source URI must use HTTPS or the internal arc scheme")
@@ -119,10 +120,12 @@ class DocumentRetrievalStore:
     ) -> str:
         current = self._reauthorize(identity)
         self.security.require(current, "document.index")
-        if not isinstance(title, str) or not title.strip() or len(title) > 240:
+        if (not isinstance(title, str) or not title.strip() or len(title) > 240
+                or any(ord(char) < 32 for char in title)):
             raise ValueError("Document title is invalid")
         uri = self._source_uri(source_uri)
-        if not isinstance(content, str) or not content.strip() or len(content) > 100_000:
+        if (not isinstance(content, str) or not content.strip() or len(content) > 100_000
+                or "\\x00" in content):
             raise ValueError("Extracted document text is invalid or exceeds 100 KB")
         if classification not in {"public", "internal", "private", "sensitive"}:
             raise ValueError("Unsupported document classification")
@@ -165,7 +168,7 @@ class DocumentRetrievalStore:
                 content_sha256,classification,created_at
                 FROM arc_documents
                 WHERE tenant_id=? AND application_id=? AND principal_id=? AND status='active'
-                ORDER BY updated_at DESC LIMIT 1000""",
+                ORDER BY updated_at DESC LIMIT 200""",
                 (current.tenant_id, current.application_id, current.principal_id)).fetchall()
         matches = []
         for row in rows:
