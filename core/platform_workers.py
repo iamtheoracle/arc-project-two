@@ -13,6 +13,7 @@ import secrets
 import sqlite3
 import time
 import uuid
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +58,10 @@ class WorkerService:
                 or any(not isinstance(x, str) or not x.strip() or len(x) > 128 for x in runtime_ids)
                 or len(set(runtime_ids)) != len(runtime_ids)):
             raise ValueError("Provide 1–20 unique approved runtime identifiers")
+        configured = os.environ.get("ORACLE_ARC_TRUSTED_RUNTIME_IDS", "oracle-arc-agent-v1")
+        trusted = {item.strip() for item in configured.split(",") if item.strip()}
+        if not set(runtime_ids).issubset(trusted):
+            raise PermissionError("Runtime is not in the server-side trusted runtime allowlist")
         return sorted(runtime_ids)
 
     def register(self, identity, runtime_ids: list[str], ttl_seconds: int = 86400) -> dict:
@@ -69,13 +74,7 @@ class WorkerService:
         db = self._db()
         try:
             db.execute("BEGIN IMMEDIATE")
-            rows = db.execute("""
-              SELECT DISTINCT json_each.value AS runtime_id
-              FROM arc_agent_versions, json_each(json_extract(manifest_json,'$.runtime'))
-              WHERE tenant_id=? AND application_id=? AND status='active'
-            """, (identity.tenant_id, identity.application_id)).fetchall()
-            # SQLite json_each over a scalar is not portable across supported builds;
-            # perform a bounded manifest scan instead.
+            # Runtime execution remains server-allowlisted; manifests cannot install code.
             approved = set()
             manifests = db.execute("""SELECT manifest_json FROM arc_agent_versions
               WHERE tenant_id=? AND application_id=? AND status='active'""",
