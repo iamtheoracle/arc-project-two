@@ -34,6 +34,14 @@ def main() -> None:
                    indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    # Model weights are public runtime assets; make them readable by the worker's
+    # fixed non-root UID while keeping the host model directory non-writable.
+    for item in destination.rglob("*"):
+        if item.is_dir():
+            item.chmod(0o755)
+        elif item.is_file():
+            item.chmod(0o644)
+    destination.chmod(0o755)
     print(f"Installed pinned offline ASR model: {repo_id}@{revision}")
     print(f"Model directory: {destination}")
 
