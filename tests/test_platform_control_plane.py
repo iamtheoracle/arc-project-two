@@ -217,7 +217,7 @@ def test_worker_cannot_claim_another_application_or_unapproved_runtime(tmp_path)
     worker_b = workers.register(identity_b, ["oracle-arc-agent-v1"])["credential"]
     execution_id = cp.submit_execution(identity_a, "research", "1.0.0", "local-default", {})
     assert workers.claim(workers.authenticate(worker_b), 5) is None
-    with pytest.raises(PermissionError, match="active registered agent"):
+    with pytest.raises(PermissionError, match="server-side trusted runtime allowlist"):
         workers.register(identity_b, ["untrusted-runtime"])
 
 
