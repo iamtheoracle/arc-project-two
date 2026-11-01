@@ -473,6 +473,40 @@ class PlatformControlPlane:
                 (self._json(output), now, execution_id, worker_id, now))
             return cur.rowcount == 1
 
+    def complete_execution_with_usage(self, execution_id: str, worker_id: str,
+                                       output: dict[str, Any],
+                                       usage: dict[str, int]) -> bool:
+        """Fence completion and append trusted provider usage in one transaction."""
+        if not isinstance(output, dict) or not isinstance(usage, dict):
+            raise ValueError("Output and usage must be objects")
+        allowed = {"input_tokens", "output_tokens"}
+        if not set(usage).issubset(allowed):
+            raise ValueError("Unsupported provider usage metric")
+        for metric, quantity in usage.items():
+            if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity < 0:
+                raise ValueError("Usage quantities must be non-negative integers")
+        now = int(time.time())
+        with self._session() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cur = db.execute("""UPDATE arc_executions SET status='succeeded',output_json=?,
+                updated_at=?,lease_owner=NULL,lease_expires_at=NULL
+                WHERE execution_id=? AND status='running' AND lease_owner=?
+                AND lease_expires_at>?""",
+                (self._json(output), now, execution_id, worker_id, now))
+            if cur.rowcount != 1:
+                return False
+            owner = db.execute("""SELECT tenant_id,application_id FROM arc_executions
+                WHERE execution_id=?""", (execution_id,)).fetchone()
+            for metric, quantity in usage.items():
+                usage_id = "use_" + hashlib.sha256(
+                    (execution_id + ":" + metric).encode("utf-8")).hexdigest()
+                db.execute("""INSERT OR IGNORE INTO arc_usage_ledger
+                    (usage_id,tenant_id,application_id,execution_id,metric,quantity,recorded_at)
+                    VALUES(?,?,?,?,?,?,?)""",
+                    (usage_id, owner["tenant_id"], owner["application_id"],
+                     execution_id, metric, quantity, now))
+            return True
+
     def fail_execution(self, execution_id: str, worker_id: str,
                        error_code: str, retryable: bool = True) -> bool:
         if not isinstance(error_code, str) or not re.fullmatch(r"[a-z0-9_.-]{1,80}", error_code):
