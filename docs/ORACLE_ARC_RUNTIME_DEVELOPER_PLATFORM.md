@@ -172,3 +172,21 @@ The model/tool loop is bounded to five model turns and eight tool calls per turn
 Every worker-side tool authorization attempt is now written to the tenant/application-scoped `arc_tool_invocations` audit table. Each event records the execution, worker, stable tool ID, allow/deny decision, a bounded reason code and timestamp. Tool arguments and results are intentionally excluded to avoid turning operational logs into a secondary store of user content.
 
 Applications with the `agent.execution.read` capability can read audit metadata through `GET /v1/platform/executions/{execution_id}/tool-invocations`. The response is scoped to the caller's tenant and application, supports a bounded page size, and returns no content when the execution has no recorded tool attempts. This is an invocation authorization audit, not a complete model/provider trace or billing ledger.
+
+
+## Local model discovery and readiness
+
+The local Ollama discovery module probes only a loopback endpoint. It provides a
+bounded provider health check and enumerates installed models through the Ollama
+tags/show APIs. Capability flags are derived only from explicit provider metadata;
+unknown values remain false. In particular, streaming and structured-output support
+are not inferred from a model name or tag. Inventory is descriptive and does not
+grant route access: applications still need an enabled, tenant-scoped model route,
+and the worker still revalidates that route at execution time.
+
+Discovery is not a remote-provider scanner. Remote model discovery and provider
+health probes remain disabled to avoid unexpected data egress and credential use.
+The module applies short request timeouts, bounds inventory size, rejects
+non-loopback endpoints and does not return provider response bodies or credentials
+in errors. Live model availability still depends on a running Ollama service and
+models actually pulled onto that host; no live host was exercised by this change.
