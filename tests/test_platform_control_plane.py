@@ -10,7 +10,7 @@ CAPS = [
     "agent.register", "agent.read", "agent.manage", "agent.execute",
     "agent.execution.read", "model.route.manage", "model.route.use",
     "quota.manage", "usage.write", "usage.read", "reasoning",
-    "tool.search", "tool.calendar", "worker.register", "worker.manage",
+    "math.calculate", "worker.register", "worker.manage",
 ]
 
 
@@ -27,7 +27,7 @@ def manifest(tools=None):
         "display_name": "Research agent",
         "description": "Tenant-scoped research specialist",
         "required_capabilities": ["reasoning"],
-        "allowed_tools": tools or ["tool.search"],
+        "allowed_tools": tools or ["math.calculate"],
         "model_routes": ["local-default"],
         "runtime": "oracle-arc-agent-v1",
     }
@@ -45,8 +45,8 @@ def test_agent_versions_are_immutable_and_application_scoped(tmp_path):
     _, _, b, _ = setup(tmp_path, "Tenant B", "APP")
     configure(cp, a)
     cp.register_agent(a, "research", "1.0.0", manifest())
-    cp.register_agent(a, "research", "1.1.0", manifest(["tool.search", "tool.calendar"]))
-    assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["tool.search"]
+    cp.register_agent(a, "research", "1.1.0", manifest(["math.calculate"]))
+    assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["math.calculate"]
     with pytest.raises(LookupError):
         cp.get_agent(b, "research")
     with pytest.raises(Exception):
