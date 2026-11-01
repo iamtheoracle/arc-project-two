@@ -320,6 +320,7 @@ class PlatformControlPlane:
                  max_executions, max_concurrent, max_input_bytes, int(time.time())))
 
     def _route_for_agent(self, db, identity, agent_id, version, route_id):
+        self._require(identity, "model.route.use")
         agent = db.execute("""SELECT manifest_json,status FROM arc_agent_versions
             WHERE tenant_id=? AND application_id=? AND agent_id=? AND version=?""",
             (identity.tenant_id, identity.application_id, agent_id, version)).fetchone()
