@@ -17,6 +17,8 @@ class ToolContext:
     application_id: str
     execution_id: str
     principal_id: str
+    credential_id: str | None = None
+    policy_version: int | None = None
 
 
 @dataclass(frozen=True)
