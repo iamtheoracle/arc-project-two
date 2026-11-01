@@ -386,11 +386,14 @@ class WorkerService:
         db = self._db()
         try:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("""SELECT attempt,max_attempts FROM arc_executions
-              WHERE execution_id=? AND tenant_id=? AND application_id=? AND status='running'
-              AND lease_owner=? AND lease_expires_at>?""",
+            row = db.execute("""SELECT e.*,a.manifest_json FROM arc_executions e
+              JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
+                AND a.application_id=e.application_id AND a.agent_id=e.agent_id
+                AND a.version=e.agent_version AND a.status='active'
+              WHERE e.execution_id=? AND e.tenant_id=? AND e.application_id=? AND e.status='running'
+                AND e.lease_owner=? AND e.lease_expires_at>?""",
               (execution_id, worker.tenant_id, worker.application_id, worker.worker_id, now)).fetchone()
-            if row is None:
+            if row is None or not self._execution_authorized(db, row, json.loads(row["manifest_json"])):
                 return False
             status = "queued" if retryable and row["attempt"] < row["max_attempts"] else (
                 "dead_letter" if retryable else "failed")
