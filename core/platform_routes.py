@@ -5,6 +5,7 @@ surface; it never accepts caller-supplied tenant/app/principal scope.
 """
 from __future__ import annotations
 from dataclasses import asdict
+import base64
 import hmac
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ from core.tenant_security import TenantSecurityStore, AuthorizationError
 from core.platform_control_plane import PlatformControlPlane
 from core.worker_identity import WorkerIdentityStore, WorkerIdentity
 from core.document_retrieval import DocumentRetrievalStore
+from core.orbits import (build_default_orbits_registry, validate_asset, OrbitAssetRejected, OrbitProcessorUnavailable)
 
 router=APIRouter(prefix="/v1/platform",tags=["platform-identity"])
 _CONCIERGE_EXECUTORS: dict[str, Callable] = {}
@@ -74,6 +76,16 @@ class DocumentIngest(BaseModel):
     title:str=Field(min_length=1,max_length=240)
     source_uri:str=Field(min_length=1,max_length=2048)
     content:str=Field(min_length=1,max_length=100000)
+    classification:str="private"
+
+class OrbitProcessRequest(BaseModel):
+    processor_id:str=Field(min_length=1,max_length=64)
+    filename:str=Field(min_length=1,max_length=180)
+    mime_type:str|None=Field(default=None,max_length=128)
+    data_base64:str=Field(min_length=4,max_length=36000000)
+    index_text:bool=False
+    title:str|None=Field(default=None,min_length=1,max_length=240)
+    source_uri:str|None=Field(default=None,min_length=1,max_length=2048)
     classification:str="private"
 
 class TaskCreate(BaseModel):
@@ -216,6 +228,50 @@ def delete_platform_document(document_id: str, identity=Depends(require_applicat
         return {"document_id": document_id, "deleted": True}
     except AuthorizationError as exc:
         raise HTTPException(403, str(exc))
+
+
+@router.post("/orbits/process", status_code=200)
+def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_application)):
+    """Run a verified media processor in the isolated ORBITS container."""
+    if "orbits.process" not in identity.capabilities:
+        raise HTTPException(403, "ORBITS processing capability is not granted")
+    try:
+        raw = base64.b64decode(body.data_base64, validate=True)
+        asset = validate_asset(raw, body.filename, body.mime_type)
+        registry = build_default_orbits_registry()
+        result = registry.process(body.processor_id, asset, raw)
+        response = {"asset_id": asset.asset_id, "sha256": asset.sha256,
+                    "media_type": asset.media_type, "processor_id": body.processor_id,
+                    "result": result}
+        if body.index_text:
+            if asset.media_type == "audio":
+                raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
+            if "document.index" not in identity.capabilities:
+                raise HTTPException(403, "Document indexing capability is not granted")
+            extracted = result.get("text")
+            if not isinstance(extracted, str) or not extracted.strip():
+                raise HTTPException(422, "The processor did not produce indexable text")
+            store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+            document_id = store.index_text(
+                identity,
+                body.title or body.filename,
+                body.source_uri or f"arc://orbits/{asset.asset_id}",
+                extracted,
+                body.classification,
+            )
+            response["document_id"] = document_id
+            response["indexed"] = True
+        return response
+    except HTTPException:
+        raise
+    except (ValueError, OrbitAssetRejected) as exc:
+        raise HTTPException(422, str(exc))
+    except AuthorizationError as exc:
+        raise HTTPException(403, str(exc))
+    except OrbitProcessorUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        raise HTTPException(503, "Isolated ORBITS processing is unavailable or failed")
 
 
 @router.post("/agent-tasks",status_code=202)
