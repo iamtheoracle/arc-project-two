@@ -219,6 +219,11 @@ class WorkerService:
         if manifest.get("runtime") == "oracle-arc-agent-v1":
             if route["provider_id"] != "ollama" or execution["region"] != "local":
                 return False
+        if manifest.get("runtime") == "oracle-arc-remote-agent-v1":
+            if (route["provider_id"] not in {"openrouter", "groq", "gemini"}
+                    or execution["region"] != "unspecified"
+                    or execution["classification"] not in {"public", "internal", "private"}):
+                return False
         return True
 
     def claim(self, worker: WorkerIdentity, lease_seconds: int = 60):
