@@ -109,7 +109,7 @@ def test_project_one_application_identity_and_owner_tool_governance_share_the_li
         headers=owner(),json={"principal_id":"arc-console-owner","capabilities":[
             "agent.read","agent.register","agent.execute","agent.execution.read",
             "model.route.manage","model.route.use","quota.read","quota.manage",
-            "usage.read","reasoning","tool.search"
+            "usage.read","reasoning","tool.calculate"
         ]})
     assert issued.status_code==201
     app_headers={"Authorization":"Bearer "+issued.json()["credential"]}
@@ -118,9 +118,13 @@ def test_project_one_application_identity_and_owner_tool_governance_share_the_li
     grants_path="/v1/tenants/owner/tool-grants"
     assert client.get(grants_path,headers=app_headers).status_code==401
     granted=client.post(grants_path,headers=owner(),json={
-        "tenant_id":tenant,"application_id":application,"tool_id":"tool.search"
+        "tenant_id":tenant,"application_id":application,"tool_id":"tool.calculate"
     })
     assert granted.status_code==201,granted.text
+    unsupported=client.post(grants_path,headers=owner(),json={
+        "tenant_id":tenant,"application_id":application,"tool_id":"tool.unknown"
+    })
+    assert unsupported.status_code==422
     grant_id=granted.json()["grant_id"]
 
     route=client.put("/v1/platform/model-routes/local-default",headers=app_headers,json={
@@ -130,7 +134,7 @@ def test_project_one_application_identity_and_owner_tool_governance_share_the_li
     assert route.status_code==200,route.text
     manifest={
         "display_name":"Research","description":"Tenant-scoped research agent",
-        "required_capabilities":["reasoning"],"allowed_tools":["tool.search"],
+        "required_capabilities":["reasoning"],"allowed_tools":["tool.calculate"],
         "model_routes":["local-default"],"runtime":"oracle-arc-agent-v1"
     }
     registered=client.post("/v1/platform/agents/versions",headers=app_headers,json={
