@@ -110,6 +110,33 @@ class PlatformControlPlane:
             );
             CREATE INDEX IF NOT EXISTS arc_execution_claim
               ON arc_executions(status,created_at);
+            CREATE TABLE IF NOT EXISTS arc_execution_events(
+              event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              tenant_id TEXT NOT NULL, application_id TEXT NOT NULL,
+              principal_id TEXT NOT NULL, execution_id TEXT NOT NULL,
+              status TEXT NOT NULL, attempt INTEGER NOT NULL,
+              error_code TEXT, occurred_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS arc_execution_events_scope
+              ON arc_execution_events(tenant_id,application_id,principal_id,event_id);
+            CREATE TRIGGER IF NOT EXISTS arc_execution_events_insert
+            AFTER INSERT ON arc_executions
+            BEGIN
+              INSERT INTO arc_execution_events
+                (tenant_id,application_id,principal_id,execution_id,status,attempt,error_code,occurred_at)
+              VALUES(NEW.tenant_id,NEW.application_id,NEW.principal_id,NEW.execution_id,
+                NEW.status,NEW.attempt,NEW.error_code,NEW.updated_at);
+            END;
+            CREATE TRIGGER IF NOT EXISTS arc_execution_events_update
+            AFTER UPDATE OF status,attempt,error_code ON arc_executions
+            WHEN OLD.status != NEW.status OR OLD.attempt != NEW.attempt
+              OR COALESCE(OLD.error_code,'') != COALESCE(NEW.error_code,'')
+            BEGIN
+              INSERT INTO arc_execution_events
+                (tenant_id,application_id,principal_id,execution_id,status,attempt,error_code,occurred_at)
+              VALUES(NEW.tenant_id,NEW.application_id,NEW.principal_id,NEW.execution_id,
+                NEW.status,NEW.attempt,NEW.error_code,NEW.updated_at);
+            END;
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(arc_executions)")}
             if "request_digest" not in columns:
@@ -620,6 +647,23 @@ class PlatformControlPlane:
                 VALUES(?,?,?,?,?, ?,?)""",
                 ("use_" + uuid.uuid4().hex, identity.tenant_id, identity.application_id,
                  execution_id, metric, quantity, int(time.time())))
+
+    def list_execution_events(self, identity: RequestIdentity, after_event_id: int = 0,
+                              limit: int = 100) -> list[dict[str, Any]]:
+        """Read durable, ordered lifecycle events for exactly one principal scope."""
+        self._require(identity, "agent.execution.read")
+        if not isinstance(after_event_id, int) or isinstance(after_event_id, bool) or after_event_id < 0:
+            raise ValueError("Event cursor must be a non-negative integer")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("Event page size must be between 1 and 100")
+        with self._session() as db:
+            rows = db.execute("""SELECT event_id,execution_id,status,attempt,error_code,occurred_at
+                FROM arc_execution_events
+                WHERE tenant_id=? AND application_id=? AND principal_id=? AND event_id>?
+                ORDER BY event_id ASC LIMIT ?""",
+                (identity.tenant_id, identity.application_id, identity.principal_id,
+                 after_event_id, limit)).fetchall()
+        return [dict(row) for row in rows]
 
     def usage_summary(self, identity: RequestIdentity, since: int) -> dict[str, int]:
         self._require(identity, "usage.read")
