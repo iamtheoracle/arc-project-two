@@ -181,6 +181,7 @@ class ModelGateway:
     """Routes validated model requests through an explicitly registered provider."""
 
     def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None) -> None:
+        self._owns_registry = registry is None
         self.registry = registry or ProviderRegistry()
         if registry is None:
             self.registry.register(OllamaProvider(host=host))
@@ -208,3 +209,16 @@ class ModelGateway:
 
     def provider_manifest(self) -> Dict[str, Any]:
         return self.provider.manifest.public_dict()
+
+    def close(self) -> None:
+        """Release provider HTTP clients owned by this gateway instance."""
+        if not self._owns_registry:
+            return
+        for provider in self.registry._providers.values():
+            client = getattr(provider, "_client", None)
+            if client is None:
+                adapter = getattr(provider, "client", None)
+                client = getattr(adapter, "client", adapter)
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
