@@ -74,5 +74,9 @@ class PrivacyAwareModelGateway:
         adapter = self.remote_providers[provider_id]
         result = adapter.chat({"model": model, "messages": messages,
                                "temperature": temperature})
+        if isinstance(result, str):
+            result = {"answer": result}
+        if not isinstance(result, dict) or not isinstance(result.get("answer"), str):
+            raise RuntimeError("Remote provider returned an invalid normalized response")
         return {**result, "provider": provider_id, "remote": True,
                 "execution_location": "remote"}
