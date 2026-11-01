@@ -18,6 +18,10 @@ def test_orbits_rejects_mime_spoofing_active_content_and_path_traversal():
     with pytest.raises(OrbitAssetRejected):
         validate_asset(b"<svg><script>alert(1)</script></svg>", "vector.svg")
     with pytest.raises(OrbitAssetRejected):
+        validate_asset(b"\\xef\\xbb\\xbf<svg><script>blocked</script></svg>", "bom.svg")
+    with pytest.raises(OrbitAssetRejected):
+        validate_asset(b"<!-- header --><html><script>blocked</script></html>", "comment.html")
+    with pytest.raises(OrbitAssetRejected):
         validate_asset(b"PK\x03\x04archive", "archive.docx")
     with pytest.raises(OrbitAssetRejected):
         validate_asset(b"%PDF-payload", "../secret.pdf")
