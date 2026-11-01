@@ -245,6 +245,8 @@ def _control_plane() -> PlatformControlPlane:
 
 
 def _worker_store() -> WorkerIdentityStore:
+    # Ensure tenant/application tables exist before creating the worker foreign keys.
+    _store()
     return WorkerIdentityStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
 
 
