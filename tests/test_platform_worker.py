@@ -21,7 +21,7 @@ CAPABILITIES = [
 ]
 
 
-def provision(tmp_path, tool=True):
+def provision(tmp_path, tool=True, provider_id="ollama", classification="private", region="local"):
     database = str(tmp_path / "arc.sqlite3")
     identities = TenantSecurityStore(database)
     tenant = identities.create_tenant("Worker test tenant")
@@ -33,7 +33,8 @@ def provision(tmp_path, tool=True):
     identity = identities.authenticate(token)
     control = PlatformControlPlane(database)
     control.configure_model_route(
-        identity, "local-default", "ollama", "qwen2.5:7b", ["private"], ["local"]
+        identity, "local-default", provider_id, "qwen2.5:7b",
+        [classification], [region]
     )
     control.set_quota(identity, window_seconds=60, max_executions=10,
                       max_concurrent=2, max_input_bytes=65536)
@@ -50,7 +51,8 @@ def provision(tmp_path, tool=True):
     })
     execution_id = control.submit_execution(
         identity, "research", "1.0.0", "local-default",
-        {"prompt": "Calculate 6 * 7"}, max_attempts=2,
+        {"prompt": "Calculate 6 * 7"}, classification=classification,
+        region=region, max_attempts=2,
     )
     worker_ids = WorkerIdentityStore(database)
     worker_id, worker_token = worker_ids.issue(
@@ -74,6 +76,7 @@ class FakePlugins:
 class FakeGateway:
     def __init__(self, **_kwargs):
         self.calls = 0
+        self.provider_id = _kwargs.get("provider_id", "ollama")
 
     def chat(self, model, messages, tools=None, temperature=0.2):
         self.calls += 1
@@ -96,8 +99,13 @@ class FakeGateway:
                 "eval_count": 2,
             }
         assert messages[-1]["role"] == "tool"
-        assert "tool_call_id" not in messages[-1]
         assert messages[-2]["tool_calls"][0]["id"] == "call_calc_1"
+        if self.provider_id == "ollama":
+            assert messages[-1]["name"] == "tool_calculate"
+            assert "tool_call_id" not in messages[-1]
+        else:
+            assert messages[-1]["tool_call_id"] == "call_calc_1"
+            assert "name" not in messages[-1]
         assert json.loads(messages[-1]["content"]) == {"result": "Result: 42"}
         return {
             "message": {"content": "The answer is 42.", "tool_calls": []},
@@ -235,3 +243,20 @@ def test_worker_claims_only_its_bound_tenant_and_application_queue(tmp_path):
     )
     assert claimed.execution_id == execution_a
     assert control.get_execution(identity_b, execution_b).status == "queued"
+
+
+def test_worker_emits_openai_compatible_tool_message_contract_for_remote_provider(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(
+        tmp_path, provider_id="openrouter", classification="public", region="remote"
+    )
+    plugins = FakePlugins()
+    monkeypatch.setattr(worker_module, "ModelGateway", FakeGateway)
+    worker = PlatformWorker(database, worker_token, tool_broker=build_platform_tool_broker(plugins))
+
+    result = worker.run_once()
+
+    assert result["status"] == "succeeded"
+    assert result["output"]["content"] == "The answer is 42."
+    assert plugins.calls == [("calculate", {"expression": "6 * 7"})]
