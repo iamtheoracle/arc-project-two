@@ -90,7 +90,8 @@ def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any],
     total_input_tokens = 0
     total_output_tokens = 0
     answer = None
-    # Bounded tool loop: no more than five model turns and eight tool invocations.
+    total_tool_calls = 0
+    # Bounded tool loop: no more than five model turns and eight total invocations.
     for turn in range(5):
         response = gateway.chat(
             model=execution["model_id"], messages=messages,
@@ -120,7 +121,10 @@ def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any],
         assistant_message = {"role": "assistant", "content": getattr(message, "content", "") or "",
                              "tool_calls": []}
         tool_messages = []
+        if len(calls) > 8 - total_tool_calls:
+            raise RuntimeError("Model exceeded the maximum tool-call budget")
         for call in calls:
+            total_tool_calls += 1
             function = getattr(call, "function", None)
             if function is None and isinstance(call, dict):
                 function = call.get("function", {})
