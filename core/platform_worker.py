@@ -301,6 +301,7 @@ class PlatformWorker:
             daemon=True,
         )
         heartbeat.start()
+        gateway: ModelGateway | None = None
         try:
             self.identities.validate(self.identity, "execution.complete")
             row, context = self._execution_context(execution.execution_id, self.identity.worker_id)
@@ -344,6 +345,11 @@ class PlatformWorker:
         finally:
             stop.set()
             heartbeat.join(timeout=2)
+            if gateway is not None:
+                try:
+                    gateway.close()
+                except Exception:
+                    pass
 
     def run_forever(self, stop_event: threading.Event, poll_interval: float = 1.0,
                     lease_seconds: int = 120) -> None:
