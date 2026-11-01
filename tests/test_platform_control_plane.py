@@ -10,7 +10,7 @@ CAPS = [
     "agent.register", "agent.read", "agent.manage", "agent.execute",
     "agent.execution.read", "model.route.manage", "model.route.use",
     "quota.manage", "usage.write", "usage.read", "reasoning",
-    "tool.search", "tool.calendar",
+    "tool.search", "tool.calendar", "worker.register", "worker.manage",
 ]
 
 
@@ -169,3 +169,68 @@ def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
     assert cp.cancel_execution(identity, eid)
     assert not cp.complete_execution(eid, "worker-a", {"answer": "late"})
     assert cp.get_execution(identity, eid).status == "cancelled"
+
+
+
+def test_worker_credentials_are_independent_scoped_and_revocable(tmp_path):
+    from core.platform_workers import WorkerService
+
+    path, _, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    workers = WorkerService(path)
+    issued = workers.register(identity, ["oracle-arc-agent-v1"], ttl_seconds=3600)
+    worker = workers.authenticate(issued["credential"])
+    assert worker.worker_id == issued["worker_id"]
+    assert workers.authenticate_from_identity(worker).application_id == identity.application_id
+
+    execution_id = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
+    claim = workers.claim(worker, lease_seconds=5)
+    assert claim["execution_id"] == execution_id
+    assert claim["lease_owner"] == worker.worker_id
+    assert workers.heartbeat(worker, execution_id, 60)
+    assert workers.complete(worker, execution_id, {"answer": "done"})
+    assert cp.get_execution(identity, execution_id).status == "succeeded"
+
+    assert workers.revoke(identity, worker.worker_id)
+    with pytest.raises(PermissionError, match="revoked"):
+        workers.authenticate(issued["credential"])
+    with pytest.raises(PermissionError, match="revoked"):
+        workers.heartbeat(worker, execution_id, 60)
+
+
+def test_worker_cannot_claim_another_application_or_unapproved_runtime(tmp_path):
+    from core.platform_workers import WorkerService
+
+    path, ids, identity_a, cp = setup(tmp_path)
+    configure(cp, identity_a)
+    cp.register_agent(identity_a, "research", "1.0.0", manifest())
+    issued_b = ids.provision("Tenant B", "APP", "principal-b", CAPS)
+    identity_b = ids.authenticate(issued_b["secret"])
+    workers = WorkerService(path)
+    worker_b = workers.register(identity_b, ["oracle-arc-agent-v1"])["credential"]
+    execution_id = cp.submit_execution(identity_a, "research", "1.0.0", "local-default", {})
+    assert workers.claim(workers.authenticate(worker_b), 5) is None
+    with pytest.raises(PermissionError, match="active registered agent"):
+        workers.register(identity_b, ["untrusted-runtime"])
+
+
+def test_worker_lease_cannot_complete_after_expiry_or_cancellation(tmp_path):
+    from core.platform_workers import WorkerService
+
+    path, _, identity, cp = setup(tmp_path)
+    identity_caps = list(identity.capabilities) + ["agent.execution.cancel"]
+    # Issue a second application identity with cancellation and worker permissions.
+    _, ids, _, _ = setup(tmp_path)
+    issued = ids.provision("Tenant A", "APP", "principal-expiry", identity_caps)
+    identity = ids.authenticate(issued["secret"])
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    workers = WorkerService(path)
+    worker = workers.authenticate(workers.register(identity, ["oracle-arc-agent-v1"])["credential"])
+    execution_id = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
+    workers.claim(worker, 5)
+    with cp._session() as db:
+        db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
+                   (int(time.time()) - 1, execution_id))
+    assert not workers.complete(worker, execution_id, {"late": True})
