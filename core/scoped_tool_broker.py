@@ -37,7 +37,7 @@ class ScopedToolBroker:
                 raise ValueError("Only reviewed ToolDefinition entries can be registered")
             if not tool.tool_id or not tool.capability or not callable(tool.handler):
                 raise ValueError("Tool registration is incomplete")
-            function_name = tool.function_name or tool.tool_id
+            function_name = tool.function_name or tool.tool_id.replace(".", "_")
             if not isinstance(function_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", function_name):
                 raise ValueError("Tool function names must use provider-safe characters")
             if tool.tool_id in self._tools:
@@ -100,7 +100,7 @@ class ScopedToolBroker:
 
     def resolve_tool_id(self, function_name: str) -> str | None:
         for tool in self._tools.values():
-            if (tool.function_name or tool.tool_id) == function_name:
+            if (tool.function_name or tool.tool_id.replace(".", "_")) == function_name:
                 return tool.tool_id
         return None
 
@@ -109,7 +109,7 @@ class ScopedToolBroker:
         allowed = manifest_tools & application_grants & owner_policy
         return [
             {"type": "function", "function": {
-                "name": tool.function_name or tool.tool_id, "description": tool.description,
+                "name": tool.function_name or tool.tool_id.replace(".", "_"), "description": tool.description,
                 "parameters": dict(tool.parameters),
             }}
             for tool in self._tools.values()
