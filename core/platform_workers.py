@@ -230,6 +230,8 @@ class WorkerService:
         if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) or not 5 <= lease_seconds <= 900:
             raise ValueError("Lease must be between 5 and 900 seconds")
         self._reauthorize(worker)
+        if not set(worker.runtime_ids).issubset(trusted_runtime_ids()):
+            raise PermissionError("Worker runtime authorization is no longer trusted by the platform")
         now = int(time.time())
         db = self._db()
         try:
