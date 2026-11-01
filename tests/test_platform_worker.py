@@ -17,7 +17,7 @@ from core.platform_worker import PlatformWorker
 CAPABILITIES = [
     "agent.register", "agent.read", "agent.execute", "agent.execution.read",
     "model.route.manage", "model.route.use", "quota.manage", "usage.read", "reasoning",
-    "tool.calculate",
+    "tool_calculate",
 ]
 
 
@@ -39,12 +39,12 @@ def provision(tmp_path, tool=True):
                       max_concurrent=2, max_input_bytes=65536)
     grants = ToolGrantStore(database)
     if tool:
-        grants.grant(tenant, application, "tool.calculate", "owner-test")
+        grants.grant(tenant, application, "tool_calculate", "owner-test")
     control.register_agent(identity, "research", "1.0.0", {
         "display_name": "Research",
         "description": "A scoped research agent",
         "required_capabilities": ["reasoning"],
-        "allowed_tools": ["tool.calculate"] if tool else [],
+        "allowed_tools": ["tool_calculate"] if tool else [],
         "model_routes": ["local-default"],
         "runtime": "oracle-arc-agent-v1",
     })
@@ -56,7 +56,7 @@ def provision(tmp_path, tool=True):
     worker_id, worker_token = worker_ids.issue(
         tenant, application,
         ["execution.claim", "execution.heartbeat", "execution.complete",
-         "execution.fail", "tool.calculate"],
+         "execution.fail", "tool_calculate"],
         ttl_seconds=3600,
     )
     return database, identities, identity, control, grants, execution_id, worker_ids, worker_id, worker_token
@@ -79,7 +79,7 @@ class FakeGateway:
         self.calls += 1
         assert model == "qwen2.5:7b"
         assert temperature == 0.2
-        assert tools and tools[0]["function"]["name"] == "tool.calculate"
+        assert tools and tools[0]["function"]["name"] == "tool_calculate"
         if self.calls == 1:
             return {
                 "message": {
@@ -87,7 +87,7 @@ class FakeGateway:
                     "tool_calls": [{
                         "id": "call_calc_1",
                         "function": {
-                            "name": "tool.calculate",
+                            "name": "tool_calculate",
                             "arguments": {"expression": "6 * 7"},
                         }
                     }],
