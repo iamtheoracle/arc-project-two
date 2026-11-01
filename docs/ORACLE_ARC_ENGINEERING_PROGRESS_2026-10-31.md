@@ -2,7 +2,7 @@
 
 **Working branch:** `feat/oracle-arc-network-platform-architecture`  
 **Repository:** `iamtheoracle/arc-project-two`  
-**Latest recorded commit:** `abd3af0984d691f18c312e5f05ef9e68ba9547e3`  
+**Latest recorded commit:** `a60db0fc33687f4586497e4ae8bb1390bb3c3979`  
 **State:** Active development; not merged or deployed.
 
 ## Completed in this working branch
@@ -228,3 +228,17 @@ This branch contains architecture documentation and focused security hardening. 
 
 
 - Final runner hardening: if the lease heartbeat loses worker ownership or application authorization during inference, the runner now attempts a safe failure transition immediately rather than waiting for lease expiry. Commit: `abd3af0984d691f18c312e5f05ef9e68ba9547e3`.
+
+
+## Provider execution expansion — remote runtime vertical slice
+
+- Extended the fixed-endpoint OpenRouter, Groq and Gemini adapters to honor the exact model ID selected by the application's route, rather than silently using only a server-wide default model.
+- Remote adapter requests now honor the validated temperature and normalize answer text plus provider-reported input/output token usage. Provider errors remain sanitized; credentials remain server-side.
+- Updated the privacy-aware gateway to retain normalized answer/usage metadata and a stable message envelope.
+- Added the separately installed `oracle-arc-remote-agent-v1` runtime. It uses the existing privacy-aware gateway and requires explicit operator opt-in via `ORACLE_ARC_ENABLE_REMOTE_INFERENCE=true`; it is not enabled by default.
+- Remote publication and execution require OpenRouter/Groq/Gemini routes with the explicit `unspecified` residency value. Only public, internal and private classifications are accepted; sensitive/restricted data is rejected. "Unspecified" means residency is not attested, not that a provider is guaranteed to run in a particular region.
+- Worker claim-time policy checks now revalidate the remote provider, classification and residency constraints. Worker runtime trust is rechecked against platform-installed handlers before claiming work.
+- Added tests for route-selected provider models, temperature and usage parsing, remote route publication/submission policy, operator opt-in, and exact privacy-policy propagation into the remote runtime.
+- Relevant commits in this slice: `94ed2c26e36f660465ad1f0b8a062762f008f9ef`, `c14f3830afdd64d7af93104eb157eb64903d3fdf`, `3ea5457876e776e75ad15777ad86c896251589b2`, `97ce59d367d7c4b44f603794f617b3fc244fb640`, `9d2dd8541fa35dd75afc6b41b1987bc8e94e315d`, `deb69a8541447b5ae28826bdf944b70becf5c1e7`, `3cfcc6c0016df2edae1954fe1bcdad605624056d`, `a5c3edcdd8533c33d3186ad53d6b99a08bff3f46`, `a3d6e4a0b70d271380c92b9b7dc27a4bebf79f3c`, `a9f158dfb635ec2c691742d4ff066b99bd62e66d`, `15b83a5afc6290ce05fea596dfa581d0517bc4eb`, `cce9c9a28147da4fcb816f35a647ce68a8600d07`, `47c692c0c79e1265096dcc10e623ab2de2c56334` and `a60db0fc33687f4586497e4ae8bb1390bb3c3979`.
+- **Validation remains pending:** source tests have been extended but not executed in this session. No passing CI result is claimed. No provider credentials, remote egress, customer traffic or production deployment have been enabled.
+- Remaining major gates: sandboxed tool adapters and per-call authorization; execution timeout/cancellation that can interrupt in-flight provider calls; distributed queue/quota coordination; dead-letter inspection/replay; runtime isolation and deployment hardening; migrations/restore drills; full integration/adversarial tests.
