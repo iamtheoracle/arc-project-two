@@ -261,10 +261,13 @@ class PlatformWorker:
                 )
                 tool_message = {
                     "role": "tool",
-                    "name": function_name,
                     "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
                 }
-                if call_id and provider_id != "ollama":
+                if provider_id == "ollama":
+                    tool_message["name"] = function_name
+                else:
+                    if not call_id:
+                        raise ValueError("remote_provider_tool_call_id_missing")
                     tool_message["tool_call_id"] = call_id
                 messages.append(tool_message)
         raise RuntimeError("model_tool_loop_terminated_unexpectedly")
