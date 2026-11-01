@@ -217,6 +217,11 @@ def test_execution_event_stream_replays_durable_events_only_to_the_owning_princi
     })
     assert queued.status_code==202,queued.text
 
+    snapshot=client.get("/v1/platform/executions",headers=ha)
+    assert snapshot.status_code==200
+    assert snapshot.json()["event_cursor"]>=1
+    assert snapshot.json()["data"][0]["execution_id"]==queued.json()["execution_id"]
+
     own_stream=client.get("/v1/platform/executions/events",
         params={"after":0,"duration_seconds":1},headers=ha)
     assert own_stream.status_code==200
