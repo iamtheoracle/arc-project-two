@@ -141,6 +141,10 @@ class PlatformControlPlane:
             columns = {row[1] for row in db.execute("PRAGMA table_info(arc_executions)")}
             if "request_digest" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN request_digest TEXT")
+            if "credential_id" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN credential_id TEXT")
+            if "policy_version" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN policy_version INTEGER")
             if "route_id" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN route_id TEXT")
             if "classification" not in columns:
@@ -417,11 +421,12 @@ class PlatformControlPlane:
                 db.execute("""INSERT INTO arc_executions
                     (execution_id,tenant_id,application_id,principal_id,agent_id,agent_version,
                      model_provider,model_id,route_id,classification,region,status,attempt,max_attempts,input_json,created_at,
-                     updated_at,idempotency_key,request_digest)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?)""",
+                     updated_at,idempotency_key,request_digest,credential_id,policy_version)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?, 'queued',0,?,?,?, ?,?,?,?,?)""",
                     (execution_id, identity.tenant_id, identity.application_id, identity.principal_id,
                      agent_id, version, route["provider_id"], route["model_id"], route_id, classification, region, max_attempts,
-                     input_json, now, now, idempotency_key, request_digest))
+                     input_json, now, now, idempotency_key, request_digest,
+                     identity.credential_id, identity.policy_version))
             except sqlite3.IntegrityError:
                 if idempotency_key is None:
                     raise
