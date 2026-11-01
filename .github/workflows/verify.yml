@@ -11,6 +11,10 @@ on:
       - 'feat/arc-secure-worker-execution-runtime'
       - 'feat/arc-connected-execution-pipeline'
       - 'feat/arc-owner-tool-grants-and-console-api'
+concurrency:
+  group: oracle-arc-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 jobs:
