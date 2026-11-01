@@ -572,10 +572,14 @@ def list_platform_executions(limit:int=50,identity=Depends(require_application))
     cp=_control_plane()
     with _sqlite3.connect(cp.database_path) as db:
         db.row_factory=_sqlite3.Row
+        db.execute("BEGIN")
         rows=db.execute("""SELECT * FROM arc_executions WHERE tenant_id=? AND application_id=?
             AND principal_id=? ORDER BY created_at DESC LIMIT ?""",
             (identity.tenant_id,identity.application_id,identity.principal_id,limit)).fetchall()
-    return {"data":[asdict(cp._execution(x)) for x in rows]}
+        cursor=db.execute("""SELECT COALESCE(MAX(event_id),0) FROM arc_execution_events
+            WHERE tenant_id=? AND application_id=? AND principal_id=?""",
+            (identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()[0]
+    return {"data":[asdict(cp._execution(x)) for x in rows],"event_cursor":int(cursor)}
 
 @router.get("/executions/events")
 async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
