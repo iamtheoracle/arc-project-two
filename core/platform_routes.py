@@ -596,7 +596,7 @@ async def stream_platform_execution_events(after: int = 0,
         started = time.monotonic()
         last_heartbeat = started
         last_auth_check = started
-        yield "retry: 2000\\n\\n"
+        yield "retry: 2000\n\n"
         # Netlify and common reverse proxies impose bounded response lifetimes.
         # The client reconnects using the last durable event ID.
         while time.monotonic() - started < 50:
@@ -604,26 +604,26 @@ async def stream_platform_execution_events(after: int = 0,
                 try:
                     live_identity = _store().authenticate(token)
                 except AuthorizationError:
-                    yield "event: auth.expired\\ndata: {\"reason\":\"credential_expired_or_revoked\"}\\n\\n"
+                    yield "event: auth.expired\ndata: {\"reason\":\"credential_expired_or_revoked\"}\n\n"
                     return
                 if (live_identity.tenant_id != identity.tenant_id
                         or live_identity.application_id != identity.application_id
                         or live_identity.principal_id != identity.principal_id):
-                    yield "event: auth.expired\\ndata: {\"reason\":\"identity_scope_changed\"}\\n\\n"
+                    yield "event: auth.expired\ndata: {\"reason\":\"identity_scope_changed\"}\n\n"
                     return
                 last_auth_check = time.monotonic()
             try:
                 batch = cp.list_execution_events(identity, cursor, 100)
             except (PermissionError, ValueError):
-                yield "event: stream.error\\ndata: {\"reason\":\"execution_event_access_denied\"}\\n\\n"
+                yield "event: stream.error\ndata: {\"reason\":\"execution_event_access_denied\"}\n\n"
                 return
             for item in batch:
                 cursor = item["event_id"]
-                yield (f"id: {cursor}\\nevent: execution\\ndata: "
-                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\\n\\n")
+                yield (f"id: {cursor}\nevent: execution\ndata: "
+                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n\n")
             now = time.monotonic()
             if not batch and now - last_heartbeat >= 15:
-                yield ": keepalive\\n\\n"
+                yield ": keepalive\n\n"
                 last_heartbeat = now
             await asyncio.sleep(0.75)
 
