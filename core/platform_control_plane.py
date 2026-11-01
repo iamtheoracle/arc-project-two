@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -161,6 +162,10 @@ class PlatformControlPlane:
         for key in ("display_name", "description", "runtime"):
             if not isinstance(manifest[key], str) or not manifest[key].strip() or len(manifest[key]) > 500:
                 raise ValueError(f"Invalid agent manifest field: {key}")
+        trusted_runtimes = {x.strip() for x in os.environ.get(
+            "ORACLE_ARC_TRUSTED_RUNTIME_IDS", "oracle-arc-agent-v1").split(",") if x.strip()}
+        if manifest["runtime"] not in trusted_runtimes:
+            raise PermissionError("Agent runtime is not in the server-side trusted runtime allowlist")
         caps, tools, routes = (manifest["required_capabilities"],
                                manifest["allowed_tools"], manifest["model_routes"])
         if (not isinstance(caps, list) or not caps or
@@ -476,17 +481,6 @@ class PlatformControlPlane:
         if row is None:
             raise LookupError("Execution not found")
         return self._execution(row)
-
-    def cancel_execution(self, identity: RequestIdentity, execution_id: str) -> bool:
-        self._require(identity, "agent.execution.cancel")
-        now = int(time.time())
-        with self._session() as db:
-            cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?
-                lease_owner=NULL,lease_expires_at=NULL,error_code='cancelled_by_principal'
-                WHERE execution_id=? AND tenant_id=? AND application_id=? AND principal_id=?
-                AND status IN ('queued','running')""",
-                (now, execution_id, identity.tenant_id, identity.application_id, identity.principal_id))
-            return cur.rowcount == 1
 
     def cancel_execution(self, identity: RequestIdentity, execution_id: str) -> bool:
         self._require(identity, "agent.execution.cancel")
