@@ -310,3 +310,28 @@ def test_first_runtime_refuses_remote_ollama_egress(monkeypatch):
             {"model_provider": "ollama",
              "input_json": '{"messages":[{"role":"user","content":"hello"}]}'},
             {"runtime": "oracle-arc-agent-v1", "allowed_tools": []})
+
+
+
+def test_worker_runner_executes_installed_handler_and_records_usage(tmp_path):
+    from core.platform_workers import WorkerService
+    from core.platform_worker_runner import run_once
+
+    path, _, identity, cp = setup(tmp_path)
+    configure(cp, identity)
+    cp.register_agent(identity, "research", "1.0.0", manifest())
+    workers = WorkerService(path)
+    worker = workers.authenticate(workers.register(identity, ["oracle-arc-agent-v1"])["credential"])
+    execution_id = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
+
+    class FakeRuntimeRegistry:
+        def execute(self, runtime_id, execution, agent_manifest):
+            assert runtime_id == "oracle-arc-agent-v1"
+            assert execution["execution_id"] == execution_id
+            return {"answer": "runtime completed", "input_tokens": 7, "output_tokens": 3}
+
+    assert run_once(workers, worker, FakeRuntimeRegistry(), lease_seconds=5)
+    result = cp.get_execution(identity, execution_id)
+    assert result.status == "succeeded"
+    assert '"answer":"runtime completed"' in result.output_json
+    assert cp.usage_summary(identity, 0) == {"input_tokens": 7, "output_tokens": 3}
