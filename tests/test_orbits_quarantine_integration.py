@@ -32,7 +32,7 @@ def test_real_clamav_accepts_clean_text_and_detects_eicar(tmp_path):
     assert result["status"] == "clean"
 
     # Standard EICAR antivirus test signature; this is inert test content, not malware.
-    eicar = (b"X5O!P%@AP[4\\\\PZX54(P^)7CC)7}$"
+    eicar = (b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$"
              b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*")
     eicar_asset = validate_asset(eicar, "eicar.txt")
     with pytest.raises(MalwareDetected):
