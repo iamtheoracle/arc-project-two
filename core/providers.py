@@ -6,6 +6,7 @@ never included in connector metadata or API responses.
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,8 +42,11 @@ class OpenAICompatibleProvider:
         self.config = config
         self.api_key = api_key if api_key is not None else os.environ.get(config.api_key_env, "")
         self.model = model or os.environ.get(config.model_env, config.default_model)
-        self.timeout_seconds = timeout_seconds
-        self.client = client or httpx.Client(timeout=timeout_seconds)
+        if (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900):
+            raise ValueError("Remote provider timeout must be greater than 0 and at most 900 seconds.")
+        self.timeout_seconds = float(timeout_seconds)
+        self.client = client or httpx.Client(timeout=self.timeout_seconds)
 
     @property
     def configured(self) -> bool:
