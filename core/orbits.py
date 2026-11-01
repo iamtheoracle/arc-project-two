@@ -136,16 +136,23 @@ class OrbitProcessorRegistry:
         processor = self._processors.get(processor_id)
         if processor is None:
             raise OrbitProcessorUnavailable("No trusted processor is installed for this operation")
-        if asset.media_type != processor.media_type or len(data) != asset.size_bytes:
-            raise OrbitAssetRejected("Asset does not match the processor contract")
+        if not isinstance(asset, OrbitAsset) or not isinstance(data, bytes):
+            raise OrbitAssetRejected("ORBITS requires a validated asset and immutable byte content")
+        verified = validate_asset(data, asset.filename, asset.mime_type)
+        if (verified.media_type != asset.media_type or verified.sha256 != asset.sha256
+                or len(data) != asset.size_bytes):
+            raise OrbitAssetRejected("Asset bytes or detected type changed after validation")
+        if asset.media_type != processor.media_type:
+            raise OrbitAssetRejected("Asset media type does not match the installed processor")
         if len(data) > processor.max_input_bytes:
             raise OrbitAssetRejected("Asset exceeds the installed processor's input budget")
-        if hashlib.sha256(data).hexdigest() != asset.sha256:
-            raise OrbitAssetRejected("Asset bytes changed after validation")
         result = processor.handler(asset, data)
         if not isinstance(result, dict):
             raise RuntimeError("ORBITS processor returned an invalid result")
-        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        try:
+            encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("ORBITS processor output is not JSON serializable") from exc
         if len(encoded.encode("utf-8")) > 1_000_000:
             raise RuntimeError("ORBITS processor output exceeds one megabyte")
         return result
