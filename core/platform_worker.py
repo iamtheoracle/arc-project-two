@@ -32,7 +32,7 @@ class PlatformWorker:
         self.control = PlatformControlPlane(database_path)
         self.tool_grants = ToolGrantStore(database_path)
         self.spark = TenantSecurityStore(database_path)
-        self.tool_broker = tool_broker or build_platform_tool_broker()
+        self.tool_broker = tool_broker or build_platform_tool_broker(database_path=database_path)
         self.identities.validate(self.identity, "execution.claim")
         self.identities.validate(self.identity, "execution.complete")
 
@@ -359,6 +359,8 @@ class PlatformWorker:
                             application_id=latest_row["application_id"],
                             execution_id=execution_id,
                             principal_id=latest_row["principal_id"],
+                            credential_id=latest_row["credential_id"],
+                            policy_version=latest_row["policy_version"],
                         ),
                         manifest_tools=manifest_tools,
                         application_grants=app_grants,
