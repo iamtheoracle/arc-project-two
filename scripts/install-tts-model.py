@@ -41,7 +41,7 @@ def main() -> None:
     (destination / "oracle-arc-tts-manifest.json").write_text(
         json.dumps({"repo_id": repo_id, "revision": revision, "license": license_name,
                     "source_model_file": model_file, "source_config_file": config_file,
-                    "sha256": hashes}, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+                    "sha256": hashes}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for item in destination.iterdir():
         item.chmod(0o755 if item.is_dir() else 0o644)
     destination.chmod(0o755)
