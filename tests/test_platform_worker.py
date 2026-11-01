@@ -211,6 +211,8 @@ def test_worker_claims_only_its_bound_tenant_and_application_queue(tmp_path):
     control.configure_model_route(
         identity_b, "local-default", "ollama", "qwen2.5:7b", ["private"], ["local"]
     )
+    control.set_quota(identity_b, window_seconds=60, max_executions=10,
+                       max_concurrent=2, max_input_bytes=65536)
     control.register_agent(identity_b, "research", "1.0.0", {
         "display_name": "Research B",
         "description": "Second tenant agent",
