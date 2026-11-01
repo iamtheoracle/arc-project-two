@@ -241,6 +241,39 @@ class TenantSecurityStore:
                                    int(row["policy_version"]))
 
 
+    def identity_for_execution(self, credential_id: str, tenant_id: str,
+                               application_id: str, principal_id: str,
+                               policy_version: int) -> RequestIdentity:
+        """Resolve the exact submitting principal from a live execution, never from payload fields."""
+        if not all(isinstance(value, str) and value for value in
+                   (credential_id, tenant_id, application_id, principal_id)):
+            raise AuthorizationError("Execution identity is incomplete")
+        now = int(time.time())
+        with self._session() as db:
+            row = db.execute("""SELECT c.capabilities_json,c.expires_at,c.revoked_at,
+                a.policy_version,a.status AS app_status,t.status AS tenant_status,
+                p.status AS principal_status
+                FROM arc_credentials c
+                JOIN arc_applications a ON a.tenant_id=c.tenant_id
+                  AND a.application_id=c.application_id
+                JOIN arc_tenants t ON t.tenant_id=c.tenant_id
+                JOIN arc_principals p ON p.principal_id=c.principal_id
+                WHERE c.credential_id=? AND c.tenant_id=?
+                  AND c.application_id=? AND c.principal_id=?""",
+                (credential_id, tenant_id, application_id, principal_id)).fetchone()
+        if (row is None or row["revoked_at"] is not None
+                or (row["expires_at"] is not None and row["expires_at"] <= now)
+                or row["tenant_status"] != "active"
+                or row["app_status"] != "active"
+                or row["principal_status"] != "active"
+                or row["policy_version"] != policy_version):
+            raise AuthorizationError("Submitting application identity is no longer authorized")
+        import json
+        return RequestIdentity(
+            credential_id, tenant_id, application_id, principal_id,
+            frozenset(json.loads(row["capabilities_json"])), int(row["policy_version"]),
+        )
+
     def create_scoped_task(self, identity: RequestIdentity, agent_id: str,
                            required_capabilities: Iterable[str], payload: dict) -> str:
         import json
