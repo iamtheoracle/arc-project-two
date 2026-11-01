@@ -125,7 +125,7 @@ class DocumentRetrievalStore:
             raise ValueError("Document title is invalid")
         uri = self._source_uri(source_uri)
         if (not isinstance(content, str) or not content.strip() or len(content) > 100_000
-                or "\\x00" in content):
+                or "\x00" in content):
             raise ValueError("Extracted document text is invalid or exceeds 100 KB")
         if classification not in {"public", "internal", "private", "sensitive"}:
             raise ValueError("Unsupported document classification")
