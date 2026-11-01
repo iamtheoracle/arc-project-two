@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+from urllib.parse import urlsplit
 from typing import Any, Callable
 
 
@@ -64,8 +65,14 @@ def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any]) -
     if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
         raise ValueError("Temperature must be a number between 0 and 2")
 
-    # Import at execution time so non-Ollama platform processes need not initialize
-    # a local provider client merely to use the control-plane APIs.
+    # The first runtime is deliberately local-only. Environment flags must not
+    # silently turn a local route into an unreviewed remote data-egress path.
+    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").strip()
+    parsed = urlsplit(host)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise RuntimeUnavailable("This runtime permits local Ollama only; remote egress is not enabled")
+    # Import at execution time so control-plane API processes do not initialize
+    # a model client until an actual workload is run.
     from core.model_gateway import ModelGateway
     response = ModelGateway(provider_id="ollama").chat(
         model=execution["model_id"], messages=messages,
