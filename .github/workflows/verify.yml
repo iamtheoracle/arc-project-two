@@ -44,7 +44,7 @@ jobs:
           registry = PluginRegistry()
           assert registry.execute("calculate", {"expression": "6 * 7"}) == "Result: 42"
           rejected = registry.execute("calculate", {"expression": "__import__('os').getcwd()"})
-          assert rejected.startswith("Error:")
+          assert "Calculation error" in rejected
           print("Rootless Podman worker execution and rejection checks passed.")
           PY
       - name: Verify sandbox restrictions inside the actual container
