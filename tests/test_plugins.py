@@ -68,3 +68,12 @@ def test_worker_rejects_unsafe_calculator_expression():
     )
     assert completed.returncode != 0
     assert "error" in json.loads(completed.stdout)
+
+
+def test_calculator_bounds_exponents_nesting_and_input_length():
+    from plugins.calculator import calculate
+    assert calculate("2 ** 10 + sqrt(16)") == "Result: 1028.0"
+    assert calculate("2 ** 1000").startswith("Calculation error:")
+    assert calculate("1 + " * 200 + "1").startswith("Calculation error:")
+    assert calculate("'not a number'").startswith("Calculation error:")
+    assert calculate("sqrt(1, 2)").startswith("Calculation error:")
