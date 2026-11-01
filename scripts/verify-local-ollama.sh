@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-host="\${OLLAMA_HOST:-http://127.0.0.1:11434}"
-model="\${ORACLE_ARC_MODEL:-qwen2.5:7b}"
+host="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+model="${ORACLE_ARC_MODEL:-qwen2.5:7b}"
 
 case "$host" in
   http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*|http://\[::1\]|http://\[::1\]:*)
