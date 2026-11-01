@@ -308,3 +308,13 @@ def test_expired_lease_recovery_is_application_scoped(tmp_path):
                               (execution_b,)).fetchone()["status"]
     assert status_a == "queued"
     assert status_b == "running"
+
+
+def test_remote_model_routes_are_public_data_only_until_egress_policy_is_approved(tmp_path):
+    _, _, identity, cp = setup(tmp_path)
+    with pytest.raises(PermissionError, match="restricted to public"):
+        cp.configure_model_route(identity, "remote-private", "openrouter", "openai/gpt-4o-mini",
+                                 ["public", "private"], ["remote"])
+    cp.configure_model_route(identity, "remote-public", "openrouter", "openai/gpt-4o-mini",
+                              ["public"], ["remote"])
+    assert cp.resolve_model_route(identity, "remote-public", "public", "remote")["provider_id"] == "openrouter"
