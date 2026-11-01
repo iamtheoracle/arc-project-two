@@ -109,6 +109,7 @@ class PlatformControlPlane:
               idempotency_key TEXT,
               request_digest TEXT, credential_id TEXT, policy_version INTEGER,
               route_id TEXT, classification TEXT, region TEXT,
+              available_at INTEGER NOT NULL DEFAULT 0,
               UNIQUE(tenant_id,application_id,idempotency_key)
             );
             CREATE INDEX IF NOT EXISTS arc_execution_claim
@@ -127,6 +128,8 @@ class PlatformControlPlane:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN classification TEXT")
             if "region" not in columns:
                 db.execute("ALTER TABLE arc_executions ADD COLUMN region TEXT")
+            if "available_at" not in columns:
+                db.execute("ALTER TABLE arc_executions ADD COLUMN available_at INTEGER NOT NULL DEFAULT 0")
             db.commit()
 
     def _connect(self):
@@ -431,7 +434,8 @@ class PlatformControlPlane:
         with self._session() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("""SELECT * FROM arc_executions
-                WHERE status='queued' ORDER BY created_at,execution_id LIMIT 1""").fetchone()
+                WHERE status='queued' AND available_at<=? ORDER BY created_at,execution_id LIMIT 1""",
+                (now,)).fetchone()
             if row is None:
                 return None
             cur = db.execute("""UPDATE arc_executions SET status='running',attempt=attempt+1,
@@ -483,9 +487,10 @@ class PlatformControlPlane:
                 return False
             status = "queued" if retryable and row["attempt"] < row["max_attempts"] else (
                 "dead_letter" if retryable else "failed")
+            delay = min(300, 5 * (2 ** max(0, row["attempt"] - 1))) if status == "queued" else 0
             db.execute("""UPDATE arc_executions SET status=?,error_code=?,updated_at=?,
-                lease_owner=NULL,lease_expires_at=NULL WHERE execution_id=?""",
-                (status, error_code, now, execution_id))
+                available_at=?,lease_owner=NULL,lease_expires_at=NULL WHERE execution_id=?""",
+                (status, error_code, now, now + delay, execution_id))
             return True
 
     def recover_expired_leases(self) -> dict[str, int]:
@@ -497,10 +502,11 @@ class PlatformControlPlane:
             counts = {"requeued": 0, "dead_letter": 0}
             for row in expired:
                 status = "queued" if row["attempt"] < row["max_attempts"] else "dead_letter"
+                delay = min(300, 5 * (2 ** max(0, row["attempt"] - 1))) if status == "queued" else 0
                 db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
-                    lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+                    available_at=?,lease_owner=NULL,lease_expires_at=NULL,updated_at=?
                     WHERE execution_id=? AND status='running' AND lease_expires_at<=?""",
-                    (status, now, row["execution_id"], now))
+                    (status, now + delay, now, row["execution_id"], now))
                 counts["requeued" if status == "queued" else "dead_letter"] += 1
             return counts
 
