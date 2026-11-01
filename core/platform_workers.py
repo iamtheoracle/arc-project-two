@@ -263,6 +263,15 @@ class WorkerService:
         now = int(time.time())
         db = self._db()
         try:
+            current = db.execute("""SELECT e.*,a.manifest_json FROM arc_executions e
+              JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
+                AND a.application_id=e.application_id AND a.agent_id=e.agent_id
+                AND a.version=e.agent_version AND a.status='active'
+              WHERE e.execution_id=? AND e.tenant_id=? AND e.application_id=?
+                AND e.status='running' AND e.lease_owner=? AND e.lease_expires_at>?""",
+              (execution_id, worker.tenant_id, worker.application_id, worker.worker_id, now)).fetchone()
+            if current is None or not self._execution_authorized(db, current, json.loads(current["manifest_json"])):
+                return False
             cur = db.execute("""UPDATE arc_executions SET lease_expires_at=?,updated_at=?
               WHERE execution_id=? AND tenant_id=? AND application_id=? AND status='running'
               AND lease_owner=? AND lease_expires_at>?""",
@@ -283,6 +292,15 @@ class WorkerService:
         now = int(time.time())
         db = self._db()
         try:
+            current = db.execute("""SELECT e.*,a.manifest_json FROM arc_executions e
+              JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
+                AND a.application_id=e.application_id AND a.agent_id=e.agent_id
+                AND a.version=e.agent_version AND a.status='active'
+              WHERE e.execution_id=? AND e.tenant_id=? AND e.application_id=?
+                AND e.status='running' AND e.lease_owner=? AND e.lease_expires_at>?""",
+              (execution_id, worker.tenant_id, worker.application_id, worker.worker_id, now)).fetchone()
+            if current is None or not self._execution_authorized(db, current, json.loads(current["manifest_json"])):
+                return False
             cur = db.execute("""UPDATE arc_executions SET status='succeeded',output_json=?,
               updated_at=?,lease_owner=NULL,lease_expires_at=NULL
               WHERE execution_id=? AND tenant_id=? AND application_id=? AND status='running'
@@ -310,12 +328,15 @@ class WorkerService:
         db = self._db()
         try:
             db.execute("BEGIN IMMEDIATE")
-            execution = db.execute("""SELECT 1 FROM arc_executions
-              WHERE execution_id=? AND tenant_id=? AND application_id=? AND status='running'
-              AND lease_owner=? AND lease_expires_at>?""",
+            execution = db.execute("""SELECT e.*,a.manifest_json FROM arc_executions e
+              JOIN arc_agent_versions a ON a.tenant_id=e.tenant_id
+                AND a.application_id=e.application_id AND a.agent_id=e.agent_id
+                AND a.version=e.agent_version AND a.status='active'
+              WHERE e.execution_id=? AND e.tenant_id=? AND e.application_id=?
+                AND e.status='running' AND e.lease_owner=? AND e.lease_expires_at>?""",
               (execution_id, worker.tenant_id, worker.application_id, worker.worker_id, now)).fetchone()
-            if execution is None:
-                raise PermissionError("Usage can only be recorded against the worker's active execution lease")
+            if execution is None or not self._execution_authorized(db, execution, json.loads(execution["manifest_json"])):
+                raise PermissionError("Usage can only be recorded against an authorized active execution lease")
             existing = db.execute("SELECT metric,quantity FROM arc_usage_ledger WHERE usage_id=?",
                                   (usage_id,)).fetchone()
             if existing is not None:
@@ -328,6 +349,30 @@ class WorkerService:
               (usage_id, worker.tenant_id, worker.application_id, execution_id, metric, quantity, now))
             db.commit()
             return True
+        finally:
+            db.close()
+
+    def recover_expired_leases(self, worker: WorkerIdentity) -> dict[str, int]:
+        """Recover only this worker's tenant/application queue, never other tenants."""
+        self._reauthorize(worker)
+        now = int(time.time())
+        db = self._db()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            expired = db.execute("""SELECT execution_id,attempt,max_attempts FROM arc_executions
+              WHERE tenant_id=? AND application_id=? AND status='running'
+                AND lease_expires_at<=?""",
+              (worker.tenant_id, worker.application_id, now)).fetchall()
+            counts = {"requeued": 0, "dead_letter": 0}
+            for row in expired:
+                status = "queued" if row["attempt"] < row["max_attempts"] else "dead_letter"
+                db.execute("""UPDATE arc_executions SET status=?,error_code='worker_lease_expired',
+                  lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+                  WHERE execution_id=? AND status='running' AND lease_expires_at<=?""",
+                  (status, now, row["execution_id"], now))
+                counts["requeued" if status == "queued" else "dead_letter"] += 1
+            db.commit()
+            return counts
         finally:
             db.close()
 
