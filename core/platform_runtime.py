@@ -31,13 +31,18 @@ class TrustedRuntimeRegistry:
         self._handlers[runtime_id] = handler
 
     def execute(self, runtime_id: str, execution: dict[str, Any],
-                manifest: dict[str, Any]) -> dict[str, Any]:
+                manifest: dict[str, Any], tool_authorizer: Callable[[str], bool] | None = None) -> dict[str, Any]:
         handler = self._handlers.get(runtime_id)
         if handler is None:
             raise RuntimeUnavailable("No platform-installed handler exists for this runtime")
         if manifest.get("runtime") != runtime_id:
             raise PermissionError("Execution runtime does not match the published agent manifest")
-        result = handler(execution, manifest)
+        if manifest.get("allowed_tools"):
+            if tool_authorizer is None:
+                raise PermissionError("Tool-enabled execution requires a live per-call authorizer")
+            result = handler(execution, manifest, tool_authorizer)
+        else:
+            result = handler(execution, manifest)
         if not isinstance(result, dict):
             raise RuntimeError("Trusted runtime returned an invalid result")
         encoded = json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -46,12 +51,14 @@ class TrustedRuntimeRegistry:
         return result
 
 
-def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
-    """Minimal text runtime. Tools remain unavailable until trusted tool adapters exist."""
+def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any],
+                          tool_authorizer: Callable[[str], bool] | None = None) -> dict[str, Any]:
+    """Local text runtime with platform-installed tools and per-call authorization."""
     if execution.get("model_provider") != "ollama":
         raise RuntimeUnavailable("This installed runtime currently supports Ollama routes only")
-    if manifest.get("allowed_tools"):
-        raise RuntimeUnavailable("This runtime has no approved tool adapters installed")
+    allowed_tools = manifest.get("allowed_tools", [])
+    if not isinstance(allowed_tools, list):
+        raise ValueError("Agent tool grants must be a list")
     try:
         payload = json.loads(execution["input_json"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -74,21 +81,73 @@ def _ollama_agent_runtime(execution: dict[str, Any], manifest: dict[str, Any]) -
     # Import at execution time so control-plane API processes do not initialize
     # a model client until an actual workload is run.
     from core.model_gateway import ModelGateway
-    response = ModelGateway(provider_id="ollama").chat(
-        model=execution["model_id"], messages=messages,
-        tools=None, stream=False, temperature=float(temperature))
-    message = getattr(response, "message", None)
-    answer = getattr(message, "content", None)
-    if answer is None and isinstance(response, dict):
-        answer = (response.get("message") or {}).get("content")
+    from core.platform_tools import default_tool_registry
+    gateway = ModelGateway(provider_id="ollama")
+    registry = default_tool_registry()
+    tool_definitions = registry.definitions(allowed_tools, execution.get("classification", "private"))
+    if allowed_tools and tool_authorizer is None:
+        raise PermissionError("Tool-enabled execution requires live per-call authorization")
+    total_input_tokens = 0
+    total_output_tokens = 0
+    answer = None
+    # Bounded tool loop: no more than five model turns and eight tool invocations.
+    for turn in range(5):
+        response = gateway.chat(
+            model=execution["model_id"], messages=messages,
+            tools=tool_definitions or None, stream=False, temperature=float(temperature))
+        message = getattr(response, "message", None)
+        if message is None and isinstance(response, dict):
+            message = response.get("message") or {}
+        for source in ("prompt_eval_count", "eval_count"):
+            value = getattr(response, source, None)
+            if value is None and isinstance(response, dict):
+                value = response.get(source)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                if source == "prompt_eval_count":
+                    total_input_tokens += value
+                else:
+                    total_output_tokens += value
+        calls = getattr(message, "tool_calls", None)
+        if calls is None and isinstance(message, dict):
+            calls = message.get("tool_calls")
+        if not calls:
+            answer = getattr(message, "content", None)
+            if answer is None and isinstance(message, dict):
+                answer = message.get("content")
+            break
+        if turn == 4:
+            raise RuntimeError("Model exceeded the maximum tool-use turns")
+        assistant_message = {"role": "assistant", "content": getattr(message, "content", "") or "",
+                             "tool_calls": []}
+        for call in calls:
+            function = getattr(call, "function", None)
+            if function is None and isinstance(call, dict):
+                function = call.get("function", {})
+            name = getattr(function, "name", None)
+            arguments = getattr(function, "arguments", None)
+            if isinstance(function, dict):
+                name = function.get("name")
+                arguments = function.get("arguments")
+            if not isinstance(name, str) or not isinstance(arguments, dict):
+                raise ValueError("Model returned a malformed tool call")
+            if not tool_authorizer(name):
+                raise PermissionError("Tool invocation was denied by live execution policy")
+            tool_result = registry.execute(
+                name, arguments, allowed_tools=allowed_tools,
+                classification=execution.get("classification", "private"))
+            assistant_message["tool_calls"].append({
+                "type": "function", "function": {"name": name, "arguments": arguments}})
+            messages.append(assistant_message)
+            messages.append({"role": "tool", "content": json.dumps(tool_result, separators=(",", ":"))})
+            if len(messages) > 110:
+                raise ValueError("Tool execution exceeded the conversation message limit")
     if not isinstance(answer, str) or not answer.strip():
         raise RuntimeError("Model provider returned no text content")
     result: dict[str, Any] = {"answer": answer}
-    for source, target in (("prompt_eval_count", "input_tokens"),
-                           ("eval_count", "output_tokens")):
-        value = getattr(response, source, None)
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-            result[target] = value
+    if total_input_tokens:
+        result["input_tokens"] = total_input_tokens
+    if total_output_tokens:
+        result["output_tokens"] = total_output_tokens
     return result
 
 
