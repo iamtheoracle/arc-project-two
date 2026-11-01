@@ -60,7 +60,7 @@ A published manifest has exactly these fields:
   "display_name": "Research assistant",
   "description": "A scoped research agent",
   "required_capabilities": ["reasoning"],
-  "allowed_tools": ["tool.search"],
+  "allowed_tools": [],
   "model_routes": ["research-default"],
   "runtime": "oracle-arc-agent-v1"
 }
@@ -71,7 +71,10 @@ tool grant. Every model route must already exist and be enabled in the same
 tenant/application. Runtime IDs must be in the server-side
 `ORACLE_ARC_TRUSTED_RUNTIME_IDS` allowlist (default:
 `oracle-arc-agent-v1`). Developers cannot register a new executable runtime by
-putting its name in a manifest.
+putting its name in a manifest. The first installed text runtime currently
+requires an empty `allowed_tools` list; declaring tools is supported in the
+manifest contract, but execution remains disabled until reviewed tool adapters
+are installed.
 
 ## Worker security model
 
@@ -122,8 +125,8 @@ ORACLE_ARC_WORKER_TOKEN='arcw1....' \\
 python -m core.platform_worker_runner
 ```
 
-The installed `oracle-arc-agent-v1` runtime executes text-only workloads through
-the configured local Ollama model route. It validates the message payload through
+The installed `oracle-arc-agent-v1` runtime executes text-only workloads with an empty
+tool list through the configured local Ollama model route. It validates the message payload through
 the shared model gateway, renews the lease while inference is running, records
 provider token counts where available, and completes or fails the execution.
 The first runtime refuses remote Ollama hosts and manifests that declare tools
