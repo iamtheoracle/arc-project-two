@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import stat
 
 import pytest
 
@@ -60,3 +61,10 @@ def test_voice_session_rejects_invalid_transition_and_cursor(tmp_path):
         store.transition(who, session_id, "playing")
     with pytest.raises(ValueError):
         store.events(who, session_id, after=-1)
+
+
+def test_voice_session_database_is_private_to_the_service_user(tmp_path):
+    database = tmp_path / "private" / "voice.sqlite3"
+    store = VoiceSessionStore(database)
+    assert stat.S_IMODE(database.stat().st_mode) == 0o600
+    assert store.create(identity())["raw_audio_retained"] is False
