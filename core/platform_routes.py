@@ -524,7 +524,8 @@ def transcribe_voice_session(session_id: str, body: AudioTranscribeRequest,
     finally:
         if quarantine is not None and asset is not None and stored is not None and stored.get("status") == "clean":
             try:
-                quarantine.purge_processed_asset(identity, asset.asset_id)
+                if not quarantine.purge_processed_asset(identity, asset.asset_id):
+                    raise QuarantineError("Transient audio asset was not available for secure deletion")
             except AuthorizationError as exc:
                 raise HTTPException(403, "Application authorization changed during audio processing") from exc
             except QuarantineError as exc:
