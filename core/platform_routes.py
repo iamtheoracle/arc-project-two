@@ -741,6 +741,64 @@ def submit_platform_execution(body: ExecutionCreate,
         raise HTTPException(409, str(exc))
 
 
+@router.get("/executions/events")
+async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
+        authorization: str | None = Header(default=None)):
+    """Stream durable event-log updates; every reconnect revalidates the bearer credential."""
+    if not isinstance(after, int) or after < 0:
+        raise HTTPException(422, "Event cursor must be a non-negative integer")
+    if not isinstance(duration_seconds, int) or not 1 <= duration_seconds <= 50:
+        raise HTTPException(422, "Stream duration must be between 1 and 50 seconds")
+    identity = require_application(authorization)
+    if "agent.execution.read" not in identity.capabilities:
+        raise HTTPException(403, "Execution read capability is not granted")
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(401, "Application credential required")
+    cp = _control_plane()
+
+    async def events():
+        cursor = after
+        started = time.monotonic()
+        last_heartbeat = started
+        last_auth_check = started
+        yield "retry: 2000\n\n"
+        # Netlify and common reverse proxies impose bounded response lifetimes.
+        # The client reconnects using the last durable event ID.
+        while time.monotonic() - started < duration_seconds:
+            if time.monotonic() - last_auth_check >= 10:
+                try:
+                    live_identity = _store().authenticate(token)
+                except AuthorizationError:
+                    yield "event: auth.expired\ndata: {\"reason\":\"credential_expired_or_revoked\"}\n\n"
+                    return
+                if (live_identity.tenant_id != identity.tenant_id
+                        or live_identity.application_id != identity.application_id
+                        or live_identity.principal_id != identity.principal_id):
+                    yield "event: auth.expired\ndata: {\"reason\":\"identity_scope_changed\"}\n\n"
+                    return
+                last_auth_check = time.monotonic()
+            try:
+                batch = cp.list_execution_events(identity, cursor, 100)
+            except (PermissionError, ValueError):
+                yield "event: stream.error\ndata: {\"reason\":\"execution_event_access_denied\"}\n\n"
+                return
+            for item in batch:
+                cursor = item["event_id"]
+                yield (f"id: {cursor}\nevent: execution\ndata: "
+                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n\n")
+            now = time.monotonic()
+            if not batch and now - last_heartbeat >= 15:
+                yield ": keepalive\n\n"
+                last_heartbeat = now
+            await asyncio.sleep(0.75)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-store, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+
 @router.get("/executions/{execution_id}")
 def read_platform_execution(execution_id: str, identity=Depends(require_application)):
     try:
@@ -847,62 +905,4 @@ def list_platform_executions(limit:int=50,identity=Depends(require_application))
             WHERE tenant_id=? AND application_id=? AND principal_id=?""",
             (identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()[0]
     return {"data":[asdict(cp._execution(x)) for x in rows],"event_cursor":int(cursor)}
-
-@router.get("/executions/events")
-async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
-        authorization: str | None = Header(default=None)):
-    """Stream durable event-log updates; every reconnect revalidates the bearer credential."""
-    if not isinstance(after, int) or after < 0:
-        raise HTTPException(422, "Event cursor must be a non-negative integer")
-    if not isinstance(duration_seconds, int) or not 1 <= duration_seconds <= 50:
-        raise HTTPException(422, "Stream duration must be between 1 and 50 seconds")
-    identity = require_application(authorization)
-    if "agent.execution.read" not in identity.capabilities:
-        raise HTTPException(403, "Execution read capability is not granted")
-    scheme, _, token = (authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(401, "Application credential required")
-    cp = _control_plane()
-
-    async def events():
-        cursor = after
-        started = time.monotonic()
-        last_heartbeat = started
-        last_auth_check = started
-        yield "retry: 2000\n\n"
-        # Netlify and common reverse proxies impose bounded response lifetimes.
-        # The client reconnects using the last durable event ID.
-        while time.monotonic() - started < duration_seconds:
-            if time.monotonic() - last_auth_check >= 10:
-                try:
-                    live_identity = _store().authenticate(token)
-                except AuthorizationError:
-                    yield "event: auth.expired\ndata: {\"reason\":\"credential_expired_or_revoked\"}\n\n"
-                    return
-                if (live_identity.tenant_id != identity.tenant_id
-                        or live_identity.application_id != identity.application_id
-                        or live_identity.principal_id != identity.principal_id):
-                    yield "event: auth.expired\ndata: {\"reason\":\"identity_scope_changed\"}\n\n"
-                    return
-                last_auth_check = time.monotonic()
-            try:
-                batch = cp.list_execution_events(identity, cursor, 100)
-            except (PermissionError, ValueError):
-                yield "event: stream.error\ndata: {\"reason\":\"execution_event_access_denied\"}\n\n"
-                return
-            for item in batch:
-                cursor = item["event_id"]
-                yield (f"id: {cursor}\nevent: execution\ndata: "
-                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n\n")
-            now = time.monotonic()
-            if not batch and now - last_heartbeat >= 15:
-                yield ": keepalive\n\n"
-                last_heartbeat = now
-            await asyncio.sleep(0.75)
-
-    return StreamingResponse(events(), media_type="text/event-stream", headers={
-        "Cache-Control": "no-store, no-transform",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    })
 
