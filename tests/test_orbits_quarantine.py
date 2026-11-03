@@ -156,3 +156,31 @@ def test_quarantine_retention_also_deletes_linked_indexed_document(tmp_path):
     assert store.expire_due(now=stored["expires_at"] + 1) == 1
     assert documents.search(who, "retained document") == []
     assert store.audit(who, asset.asset_id)[-1]["action"] == "retention_expired_and_bytes_deleted"
+
+
+def test_quarantine_retention_also_tombstones_linked_indexed_text(tmp_path):
+    import sqlite3
+    from core.document_retrieval import DocumentRetrievalStore
+
+    database = tmp_path / "retention-linked.sqlite3"
+    data = b"source document with confidential retention marker"
+    asset = validate_asset(data, "linked-retention.txt")
+    who = provision_identity(database)
+    quarantine = DocumentQuarantineStore(
+        str(database), str(tmp_path / "linked-quarantine"),
+        scanner=lambda path: "clean",
+    )
+    indexed = DocumentRetrievalStore(str(database)).index_text(
+        who, "Linked source", "arc://linked/source",
+        "confidential retention marker must expire with its source",
+        retention_seconds=60,
+    )
+    stored = quarantine.ingest(who, asset, data, retention_seconds=60)
+    quarantine.link_document(who, asset.asset_id, indexed)
+    assert quarantine.expire_due(now=stored["expires_at"] + 1) == 1
+    with sqlite3.connect(database) as db:
+        row = db.execute(
+            "SELECT status,content FROM arc_documents WHERE document_id=?",
+            (indexed,),
+        ).fetchone()
+    assert row == ("deleted", "")
