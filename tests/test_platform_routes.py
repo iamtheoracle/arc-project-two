@@ -544,3 +544,48 @@ def test_generic_orbits_document_extraction_cannot_bypass_quarantine(client, mon
         })
     assert response.status_code == 403
     assert "quarantined document upload workflow" in response.json()["detail"]
+
+def test_spark_grant_is_revoked_when_last_source_credential_is_revoked(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"SPARK revoke tenant"}).json()["tenant_id"]
+    source=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"SPARK source"}).json()["application_id"]
+    destination=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"SPARK destination"}).json()["application_id"]
+    source_token=client.post(f"/v1/platform/tenants/{tenant}/applications/{source}/credentials",headers=owner(),
+        json={"principal_id":"principal-1","capabilities":["spark.memory.write","spark.memory.share"]}).json()["credential"]
+    destination_token=client.post(f"/v1/platform/tenants/{tenant}/applications/{destination}/credentials",headers=owner(),
+        json={"principal_id":"principal-1","capabilities":["spark.memory.read_shared"]}).json()["credential"]
+    source_headers={"Authorization":"Bearer "+source_token}
+    destination_headers={"Authorization":"Bearer "+destination_token}
+    saved=client.post("/v1/platform/memories",headers=source_headers,json={"content":"Only this principal may share this memory","category":"project"})
+    assert saved.status_code==201
+    grant=client.post("/v1/platform/memory-sharing-grants",headers=source_headers,json={
+        "destination_application_id":destination,"categories":["project"],"purpose":"Authorized project continuity"
+    })
+    assert grant.status_code==201
+    assert client.get(f"/v1/platform/shared-memories/{source}",headers=destination_headers).json()["data"]
+    credential_id=source_token.split(".",1)[0]
+    assert client.delete(f"/v1/platform/credentials/{credential_id}",headers=owner()).status_code==200
+    assert client.get(f"/v1/platform/shared-memories/{source}",headers=destination_headers).json()["data"]==[]
+
+
+def test_spark_grant_survives_revocation_when_source_has_another_live_credential(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"SPARK multi-key tenant"}).json()["tenant_id"]
+    source=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"SPARK multi-key source"}).json()["application_id"]
+    destination=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"SPARK multi-key destination"}).json()["application_id"]
+    first=client.post(f"/v1/platform/tenants/{tenant}/applications/{source}/credentials",headers=owner(),
+        json={"principal_id":"principal-2","capabilities":["spark.memory.write","spark.memory.share"]}).json()["credential"]
+    second=client.post(f"/v1/platform/tenants/{tenant}/applications/{source}/credentials",headers=owner(),
+        json={"principal_id":"principal-2","capabilities":["spark.memory.write","spark.memory.share"]}).json()["credential"]
+    destination_token=client.post(f"/v1/platform/tenants/{tenant}/applications/{destination}/credentials",headers=owner(),
+        json={"principal_id":"principal-2","capabilities":["spark.memory.read_shared"]}).json()["credential"]
+    source_headers={"Authorization":"Bearer "+first}
+    destination_headers={"Authorization":"Bearer "+destination_token}
+    assert client.post("/v1/platform/memories",headers=source_headers,json={"content":"Grant stays while another key is live","category":"project"}).status_code==201
+    grant=client.post("/v1/platform/memory-sharing-grants",headers=source_headers,json={
+        "destination_application_id":destination,"categories":["project"],"purpose":"Authorized continuity"
+    })
+    assert grant.status_code==201
+    first_id=first.split(".",1)[0]
+    assert client.delete(f"/v1/platform/credentials/{first_id}",headers=owner()).status_code==200
+    assert client.get(f"/v1/platform/shared-memories/{source}",headers=destination_headers).json()["data"]
+    # Keep the second credential live for the full test; it is intentionally not revoked.
+    assert second
