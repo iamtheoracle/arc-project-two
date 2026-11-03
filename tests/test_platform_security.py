@@ -183,3 +183,32 @@ def test_agent_task_requires_dispatch_and_each_requested_capability(tmp_path):
         tenant,app,"p1",["agent.oracle.dispatch"]))
     with pytest.raises(AuthorizationError):
         store.create_scoped_task(identity,"oracle",["reasoning"],{"prompt":"no grant"})
+
+
+def test_last_source_app_credential_revocation_invalidates_spark_grants(tmp_path):
+    store = TenantSecurityStore(tmp_path / "arc.sqlite3")
+    tenant = store.create_tenant("Tenant")
+    source_app = store.create_application(tenant, "Source")
+    destination_app = store.create_application(tenant, "Destination")
+    caps = ["spark.memory.read", "spark.memory.write", "spark.memory.share"]
+    token_a = store.issue_credential(tenant, source_app, "principal-1", caps)
+    token_b = store.issue_credential(tenant, source_app, "principal-1", caps)
+    destination_token = store.issue_credential(
+        tenant, destination_app, "principal-1",
+        ["spark.memory.read", "spark.memory.read_shared"],
+    )
+    source = store.authenticate(token_a)
+    destination = store.authenticate(destination_token)
+    memory_id = store.save_memory(source, "Only authorized source app", "project")
+    grant = store.share_memory(source, destination_app, ["project"], "Authorized project continuity")
+    assert [row["memory_id"] for row in store.shared_memories(destination, source_app)] == [memory_id]
+
+    # Revoking one of two source-app credentials must not prematurely revoke the grant.
+    assert store.revoke_credential(source.credential_id)
+    source_b = store.authenticate(token_b)
+    assert [row["memory_id"] for row in store.shared_memories(destination, source_app)] == [memory_id]
+
+    assert store.revoke_credential(source_b.credential_id)
+    assert store.shared_memories(destination, source_app) == []
+    with pytest.raises(AuthorizationError):
+        store.authenticate(token_b)
