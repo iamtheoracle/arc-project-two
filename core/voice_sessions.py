@@ -6,6 +6,7 @@ only lifecycle metadata and event details; callers must apply capability checks.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 import time
@@ -44,6 +45,9 @@ class VoiceSessionStore:
             raise ValueError("VoiceSessionStore requires a durable database path")
         Path(self.path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.initialize()
+        # Voice-session metadata is principal-scoped and must not be world-readable
+        # when the process umask is permissive.
+        os.chmod(self.path, 0o600)
 
     @contextmanager
     def _db(self):
