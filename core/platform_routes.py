@@ -434,9 +434,10 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
         # Every accepted ORBITS asset is quarantined and malware-scanned before
         # the isolated processor receives its bytes. This applies to images and
         # audio as well as the dedicated document-upload path.
-        stored = DocumentQuarantineStore(
+        quarantine = DocumentQuarantineStore(
             database, scanner=clamav_scan
-        ).ingest(identity, asset, raw, body.retention_seconds)
+        )
+        stored = quarantine.ingest(identity, asset, raw, body.retention_seconds)
         registry = build_default_orbits_registry()
         result = registry.process(body.processor_id, asset, raw)
         response = {"asset_id": asset.asset_id, "sha256": asset.sha256,
@@ -458,6 +459,7 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
                 body.classification,
                 body.retention_seconds,
             )
+            quarantine.link_document(identity, asset.asset_id, document_id)
             response["document_id"] = document_id
             response["indexed"] = True
         return response
