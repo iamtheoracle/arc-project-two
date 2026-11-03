@@ -330,3 +330,30 @@ def test_remote_model_routes_require_verified_provider_regions_and_public_data(t
                        json.dumps({"openrouter": ["us-east-1"]}))
     with pytest.raises(PermissionError, match="no longer verified"):
         cp.resolve_model_route(identity, "remote-public", "public", "eu-west-1")
+
+
+def test_remote_execution_submission_rechecks_region_attestation(tmp_path, monkeypatch):
+    _, _, identity, cp = setup(tmp_path)
+    monkeypatch.setenv(
+        "ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+        json.dumps({"groq": ["provider-region-1"]}),
+    )
+    cp.configure_model_route(
+        identity, "remote-public", "groq", "llama-3.3-70b",
+        ["public"], ["provider-region-1"],
+    )
+    cp.set_quota(identity, window_seconds=60, max_executions=5,
+                 max_concurrent=2, max_input_bytes=2048)
+    cp.register_agent(identity, "remote-research", "1.0.0", {
+        **manifest(), "model_routes": ["remote-public"],
+    })
+
+    # Attestation can be withdrawn after route setup. Submission must not queue
+    # a remote execution using a now-unverified destination.
+    monkeypatch.delenv("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS")
+    with pytest.raises(PermissionError, match="region is not verified"):
+        cp.submit_execution(
+            identity, "remote-research", "1.0.0", "remote-public",
+            {"prompt": "Public information only"},
+            classification="public", region="provider-region-1",
+        )
