@@ -380,7 +380,7 @@ class TenantSecurityStore:
             remaining = db.execute(
                 """SELECT capabilities_json FROM arc_credentials
                    WHERE tenant_id=? AND application_id=? AND principal_id=?
-                     AND revoked_at IS NULL AND expires_at>?""",
+                     AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)""",
                 (credential["tenant_id"], credential["application_id"],
                  credential["principal_id"], now),
             ).fetchall()
