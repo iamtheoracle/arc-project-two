@@ -323,12 +323,13 @@ class TenantSecurityStore:
         import json
         if status not in {"succeeded","failed","cancelled"} or not isinstance(result,dict):
             raise ValueError("Invalid task completion")
+        self.require(identity,"agent.tasks.complete")
         with self._session() as db:
             row=db.execute(
                 "SELECT agent_id,required_capabilities_json FROM arc_scoped_tasks "
-                "WHERE task_id=? AND tenant_id=? AND application_id=? AND principal_id=? "
+                "WHERE task_id=? AND tenant_id=? AND application_id=? "
                 "AND worker_id=? AND status='running'",
-                (task_id,identity.tenant_id,identity.application_id,identity.principal_id,worker_id)
+                (task_id,identity.tenant_id,identity.application_id,worker_id)
             ).fetchone()
             if not row:
                 return False
