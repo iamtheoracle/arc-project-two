@@ -410,3 +410,62 @@ def test_document_upload_fails_closed_when_malware_scanner_is_unavailable(client
             "title": "Safe", "source_uri": "arc://uploads/safe",
         })
     assert response.status_code == 503
+
+
+def test_generic_orbits_endpoint_cannot_bypass_document_quarantine(client, monkeypatch):
+    import core.platform_routes as platform_routes
+
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Quarantine bypass tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Quarantine bypass app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "principal-bypass", "capabilities": [
+            "orbits.process", "document.extract", "document.index"
+        ]},
+    ).json()["credential"]
+
+    class MustNotRun:
+        def process(self, processor_id, asset, data):
+            pytest.fail("Document processor ran without quarantine and malware scanning")
+
+    monkeypatch.setattr(platform_routes, "build_default_orbits_registry", lambda: MustNotRun())
+    response = client.post("/v1/platform/orbits/process",
+        headers={"Authorization": "Bearer " + token}, json={
+            "processor_id": "document.extract",
+            "filename": "unscanned.txt",
+            "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"unscanned document").decode("ascii"),
+        })
+    assert response.status_code == 422
+    assert "documents/upload" in response.json()["detail"]
+
+
+def test_generic_orbits_rejects_document_media_even_for_other_processor(client, monkeypatch):
+    import core.platform_routes as platform_routes
+
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Quarantine media tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Quarantine media app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "principal-media", "capabilities": [
+            "orbits.process", "document.extract"
+        ]},
+    ).json()["credential"]
+
+    class MustNotRun:
+        def process(self, processor_id, asset, data):
+            pytest.fail("Document media reached a generic ORBITS processor")
+
+    monkeypatch.setattr(platform_routes, "build_default_orbits_registry", lambda: MustNotRun())
+    response = client.post("/v1/platform/orbits/process",
+        headers={"Authorization": "Bearer " + token}, json={
+            "processor_id": "image.ocr",
+            "filename": "document.txt",
+            "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"document text").decode("ascii"),
+        })
+    assert response.status_code == 422
