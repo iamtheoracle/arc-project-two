@@ -421,6 +421,11 @@ class PlatformControlPlane:
                 raise PermissionError("Model route is not approved for this data classification")
             if region not in json.loads(route["regions_json"]):
                 raise PermissionError("Model route is not approved for this execution region")
+            if route["provider_id"] != "ollama":
+                if classification != "public":
+                    raise PermissionError("Remote model providers are restricted to public data classifications")
+                if region not in _verified_remote_regions(route["provider_id"]):
+                    raise PermissionError("Remote model execution region is not verified")
             request_digest = hashlib.sha256(input_json.encode("utf-8")).hexdigest()
             if idempotency_key is not None:
                 existing = db.execute("""SELECT execution_id,request_digest FROM arc_executions
