@@ -457,6 +457,12 @@ def submit_voice_response(session_id: str, body: AudioRespondRequest,
             execution_payload, body.classification, body.region, 2,
             "voice-" + session_id + "-" + digest[:24],
         )
+        turn_id = "turn_" + hashlib.sha256(
+            (session_id + ":" + execution_id).encode("utf-8")
+        ).hexdigest()[:24]
+        sessions.record_event(identity, session_id, "oracle.execution.queued", {
+            "turn_id": turn_id, "execution_id": execution_id,
+        })
         return {
             "session_id": session_id, "execution_id": execution_id,
             "status": "queued", "next_action": "poll_execution_then_speak",
