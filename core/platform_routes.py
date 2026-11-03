@@ -564,6 +564,9 @@ def acknowledge_voice_playback(session_id: str, body: AudioPlaybackRequest,
                 sessions.transition(identity, session_id, "playing", "audio.playback.started")
             result = sessions.transition(identity, session_id, "completed", "audio.playback.completed")
         else:
+            current = sessions.get(identity, session_id)
+            if current and current["state"] == "ready":
+                sessions.transition(identity, session_id, "playing", "audio.playback.started")
             result = sessions.transition(identity, session_id, "interrupted", "audio.playback.interrupted")
         return result
     except VoiceSessionError as exc:
