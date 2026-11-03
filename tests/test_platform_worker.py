@@ -608,3 +608,53 @@ def test_tool_invocation_audit_is_tenant_and_application_scoped(tmp_path):
     other_application = identities.create_application(other_tenant, "Other audit client")
     assert grants.invocation_audit(other_tenant, other_application) == []
     assert len(grants.invocation_audit(identity.tenant_id, identity.application_id)) == 1
+
+
+def test_worker_rejects_oversized_model_response_before_persisting(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, _, _, _, _, _, _, _, worker_token = provision(tmp_path, tool=False)
+
+    class OversizedGateway:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            return {"message": {"content": "x" * 100_001, "tool_calls": []}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", OversizedGateway)
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    with pytest.raises(ValueError, match="model_response_size_limit_exceeded"):
+        worker.run_once()
+
+
+def test_worker_rejects_oversized_registered_tool_result(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, _, _, _, _, _, _, _, worker_token = provision(tmp_path, tool=True)
+
+    class OversizedPlugins:
+        def execute(self, name, arguments):
+            return "x" * 32_001
+
+    class ToolCallingGateway:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            return {"message": {"content": "", "tool_calls": [{
+                "id": "call_large_tool",
+                "function": {"name": "tool_calculate", "arguments": {"expression": "6 * 7"}},
+            }]}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", ToolCallingGateway)
+    broker = build_platform_tool_broker(plugin_registry=OversizedPlugins())
+    worker = PlatformWorker(database, worker_token, tool_broker=broker)
+    with pytest.raises(ValueError, match="tool_result_size_limit_exceeded"):
+        worker.run_once()
