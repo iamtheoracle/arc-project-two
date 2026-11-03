@@ -94,7 +94,7 @@ def test_document_ingestion_api_requires_document_capability_and_rejects_unsafe_
     assert unsafe.status_code==422
 
 
-def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,monkeypatch):
+def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,monkeypatch,tmp_path):
     import base64
     import core.platform_routes as routes
     from core.orbits import build_default_orbits_registry
@@ -104,7 +104,7 @@ def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,
                        json={"name":"ORBITS app"}).json()["application_id"]
     token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
         headers=owner(),json={"principal_id":"student-1","capabilities":[
-            "orbits.process","document.index","document.search"
+            "orbits.process","image.ocr","document.index","document.search"
         ]}).json()["credential"]
     headers={"Authorization":"Bearer "+token}
     registry=build_default_orbits_registry(
@@ -114,6 +114,8 @@ def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,
         }
     )
     monkeypatch.setattr(routes,"build_default_orbits_registry",lambda:registry)
+    monkeypatch.setattr(routes,"clamav_scan",lambda path:"ClamAV clean")
+    monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR",str(tmp_path/"quarantine"))
     raw=b"\x89PNG\r\n\x1a\nmock-image"
     response=client.post("/v1/platform/orbits/process",headers=headers,json={
         "processor_id":"image.ocr","filename":"handbook.png","mime_type":"image/png",
@@ -121,6 +123,8 @@ def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,
         "title":"Campus handbook","source_uri":"arc://uploads/campus-handbook",
     })
     assert response.status_code==200
+    assert response.json()["quarantine_status"]=="clean"
+    assert response.json()["expires_at"]>0
     assert response.json()["indexed"] is True
     assert response.json()["result"]["text"].startswith("The campus handbook")
     found=client.get("/v1/platform/documents/search",headers=headers,
@@ -129,6 +133,55 @@ def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,
     assert found.json()["count"]==1
     assert found.json()["data"][0]["source_uri"]=="arc://uploads/campus-handbook"
 
+
+def test_orbits_api_scans_image_before_processing_and_fails_closed_on_malware(client,monkeypatch,tmp_path):
+    import base64
+    import core.platform_routes as routes
+    from core.orbits import build_default_orbits_registry
+
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Scan tenant"}).json()["tenant_id"]
+    app_id=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"Scan app"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),json={"principal_id":"student-scan","capabilities":["orbits.process","image.ocr"]}).json()["credential"]
+    invoked={"processor":False}
+    registry=build_default_orbits_registry(runner=lambda processor_id,data: invoked.update(processor=True) or {
+        "media_type":"image","format":"image-ocr","width":2,"height":2,"text":"never reached"
+    })
+    monkeypatch.setattr(routes,"build_default_orbits_registry",lambda:registry)
+    monkeypatch.setattr(routes,"clamav_scan",lambda path: (_ for _ in ()).throw(routes.MalwareDetected("test malware")))
+    monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR",str(tmp_path/"infected"))
+    raw=b"\\x89PNG\\r\\n\\x1a\\nscan-me"
+    response=client.post("/v1/platform/orbits/process",headers={"Authorization":"Bearer "+token},json={
+        "processor_id":"image.ocr","filename":"scan.png","mime_type":"image/png",
+        "data_base64":base64.b64encode(raw).decode("ascii"),
+    })
+    assert response.status_code==422
+    assert invoked["processor"] is False
+
+
+def test_orbits_api_scanner_unavailable_fails_closed_before_processing(client,monkeypatch,tmp_path):
+    import base64
+    import core.platform_routes as routes
+    from core.orbits import build_default_orbits_registry
+
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Offline scanner tenant"}).json()["tenant_id"]
+    app_id=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"Offline scanner app"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),json={"principal_id":"student-offline","capabilities":["orbits.process","image.ocr"]}).json()["credential"]
+    invoked={"processor":False}
+    registry=build_default_orbits_registry(runner=lambda processor_id,data: invoked.update(processor=True) or {
+        "media_type":"image","format":"image-ocr","width":2,"height":2,"text":"never reached"
+    })
+    monkeypatch.setattr(routes,"build_default_orbits_registry",lambda:registry)
+    monkeypatch.setattr(routes,"clamav_scan",lambda path: (_ for _ in ()).throw(routes.MalwareScannerUnavailable("offline")))
+    monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR",str(tmp_path/"offline"))
+    raw=b"\\x89PNG\\r\\n\\x1a\\nscan-me"
+    response=client.post("/v1/platform/orbits/process",headers={"Authorization":"Bearer "+token},json={
+        "processor_id":"image.ocr","filename":"scan.png","mime_type":"image/png",
+        "data_base64":base64.b64encode(raw).decode("ascii"),
+    })
+    assert response.status_code==503
+    assert invoked["processor"] is False
 
 def test_orbits_api_denies_processing_without_explicit_capability(client):
     import base64
@@ -164,9 +217,9 @@ def test_revoked_application_credential_is_rejected(client):
 
 def test_scoped_agent_task_api_enforces_application_boundary(client):
     tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Tenant"}).json()["tenant_id"]
-    app_a=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"A"}).json()["application_id"]
-    app_b=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"B"}).json()["application_id"]
-    caps=["agent.oracle.dispatch","reasoning"]
+    app_a=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"App A"}).json()["application_id"]
+    app_b=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"App B"}).json()["application_id"]
+    caps=["agent.oracle.dispatch","agent.tasks.claim","agent.tasks.complete","reasoning"]
     token_a=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_a}/credentials",
         headers=owner(),json={"principal_id":"p1","capabilities":caps}).json()["credential"]
     token_b=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_b}/credentials",
@@ -380,12 +433,18 @@ def test_document_upload_quarantines_scans_extracts_indexes_and_audits(client, m
     audit = client.get(f"/v1/platform/documents/quarantine/{asset_id}/audit", headers=headers)
     assert audit.status_code == 200
     assert [event["action"] for event in audit.json()["events"]] == [
-        "quarantined", "scanner_clean"
+        "quarantined", "scanner_clean", "indexed_document_linked"
     ]
     deleted = client.delete(f"/v1/platform/documents/quarantine/{asset_id}", headers=headers)
     assert deleted.status_code == 200
+    assert client.get("/v1/platform/documents/search", headers=headers,
+                      params={"query": "ingestion evidence"}).json()["count"] == 0
     audit = client.get(f"/v1/platform/documents/quarantine/{asset_id}/audit", headers=headers)
     assert audit.json()["events"][-1]["action"] == "owner_requested_bytes_deleted"
+    after_delete = client.get("/v1/platform/documents/search", headers=headers,
+                               params={"query": "ingestion evidence"})
+    assert after_delete.status_code == 200
+    assert after_delete.json()["count"] == 0
 
 
 def test_document_upload_fails_closed_when_malware_scanner_is_unavailable(client, monkeypatch):
@@ -410,3 +469,134 @@ def test_document_upload_fails_closed_when_malware_scanner_is_unavailable(client
             "title": "Safe", "source_uri": "arc://uploads/safe",
         })
     assert response.status_code == 503
+
+
+def test_generic_orbits_endpoint_cannot_bypass_document_quarantine(client, monkeypatch):
+    import core.platform_routes as platform_routes
+
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Quarantine bypass tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Quarantine bypass app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "principal-bypass", "capabilities": [
+            "orbits.process", "document.extract", "document.index"
+        ]},
+    ).json()["credential"]
+
+    class MustNotRun:
+        def process(self, processor_id, asset, data):
+            pytest.fail("Document processor ran without quarantine and malware scanning")
+
+    monkeypatch.setattr(platform_routes, "build_default_orbits_registry", lambda: MustNotRun())
+    response = client.post("/v1/platform/orbits/process",
+        headers={"Authorization": "Bearer " + token}, json={
+            "processor_id": "document.extract",
+            "filename": "unscanned.txt",
+            "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"unscanned document").decode("ascii"),
+        })
+    assert response.status_code == 422
+    assert "documents/upload" in response.json()["detail"]
+
+
+def test_generic_orbits_rejects_document_media_even_for_other_processor(client, monkeypatch):
+    import core.platform_routes as platform_routes
+
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Quarantine media tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Quarantine media app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "principal-media", "capabilities": [
+            "orbits.process", "document.extract"
+        ]},
+    ).json()["credential"]
+
+    class MustNotRun:
+        def process(self, processor_id, asset, data):
+            pytest.fail("Document media reached a generic ORBITS processor")
+
+    monkeypatch.setattr(platform_routes, "build_default_orbits_registry", lambda: MustNotRun())
+    response = client.post("/v1/platform/orbits/process",
+        headers={"Authorization": "Bearer " + token}, json={
+            "processor_id": "image.ocr",
+            "filename": "document.txt",
+            "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"document text").decode("ascii"),
+        })
+    assert response.status_code == 422
+
+
+def test_generic_orbits_document_extraction_cannot_bypass_quarantine(client, monkeypatch):
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Quarantine enforcement"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Document workflow"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "document-user", "capabilities": [
+            "orbits.process", "document.extract", "document.index"
+        ]},
+    ).json()["credential"]
+    response = client.post("/v1/platform/orbits/process",
+        headers={"Authorization": "Bearer " + token}, json={
+            "processor_id": "document.extract",
+            "filename": "unscanned.txt", "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"must be quarantined first").decode(),
+            "index_text": True,
+        })
+    assert response.status_code == 403
+    assert "quarantined document upload workflow" in response.json()["detail"]
+
+def test_spark_grant_is_revoked_when_last_source_credential_is_revoked(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"SPARK revoke tenant"}).json()["tenant_id"]
+    source=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"SPARK source"}).json()["application_id"]
+    destination=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"SPARK destination"}).json()["application_id"]
+    source_token=client.post(f"/v1/platform/tenants/{tenant}/applications/{source}/credentials",headers=owner(),
+        json={"principal_id":"principal-1","capabilities":["spark.memory.write","spark.memory.share"]}).json()["credential"]
+    destination_token=client.post(f"/v1/platform/tenants/{tenant}/applications/{destination}/credentials",headers=owner(),
+        json={"principal_id":"principal-1","capabilities":["spark.memory.read_shared"]}).json()["credential"]
+    source_headers={"Authorization":"Bearer "+source_token}
+    destination_headers={"Authorization":"Bearer "+destination_token}
+    saved=client.post("/v1/platform/memories",headers=source_headers,json={"content":"Only this principal may share this memory","category":"project"})
+    assert saved.status_code==201
+    grant=client.post("/v1/platform/memory-sharing-grants",headers=source_headers,json={
+        "destination_application_id":destination,"categories":["project"],"purpose":"Authorized project continuity"
+    })
+    assert grant.status_code==201
+    assert client.get(f"/v1/platform/shared-memories/{source}",headers=destination_headers).json()["data"]
+    credential_id=source_token.split(".",1)[0]
+    assert client.delete(f"/v1/platform/credentials/{credential_id}",headers=owner()).status_code==200
+    assert client.get(f"/v1/platform/shared-memories/{source}",headers=destination_headers).json()["data"]==[]
+
+
+def test_spark_grant_survives_revocation_when_source_has_another_live_credential(client):
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"SPARK multi-key tenant"}).json()["tenant_id"]
+    source=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"SPARK multi-key source"}).json()["application_id"]
+    destination=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"SPARK multi-key destination"}).json()["application_id"]
+    first=client.post(f"/v1/platform/tenants/{tenant}/applications/{source}/credentials",headers=owner(),
+        json={"principal_id":"principal-2","capabilities":["spark.memory.write","spark.memory.share"]}).json()["credential"]
+    second=client.post(f"/v1/platform/tenants/{tenant}/applications/{source}/credentials",headers=owner(),
+        json={"principal_id":"principal-2","capabilities":["spark.memory.write","spark.memory.share"]}).json()["credential"]
+    # NULL expiry represents a credential that does not expire; it remains active.
+    import os, sqlite3
+    with sqlite3.connect(os.environ["ORACLE_ARC_DB_PATH"]) as db:
+        db.execute("UPDATE arc_credentials SET expires_at=NULL WHERE credential_id=?",
+                   (second.split(".",1)[0],))
+    destination_token=client.post(f"/v1/platform/tenants/{tenant}/applications/{destination}/credentials",headers=owner(),
+        json={"principal_id":"principal-2","capabilities":["spark.memory.read_shared"]}).json()["credential"]
+    source_headers={"Authorization":"Bearer "+first}
+    destination_headers={"Authorization":"Bearer "+destination_token}
+    assert client.post("/v1/platform/memories",headers=source_headers,json={"content":"Grant stays while another key is live","category":"project"}).status_code==201
+    grant=client.post("/v1/platform/memory-sharing-grants",headers=source_headers,json={
+        "destination_application_id":destination,"categories":["project"],"purpose":"Authorized continuity"
+    })
+    assert grant.status_code==201
+    first_id=first.split(".",1)[0]
+    assert client.delete(f"/v1/platform/credentials/{first_id}",headers=owner()).status_code==200
+    assert client.get(f"/v1/platform/shared-memories/{source}",headers=destination_headers).json()["data"]
+    # The second source credential remains valid, so its principal-owned grant survives.
+    assert client.get("/v1/platform/identity",headers={"Authorization":"Bearer "+second}).status_code==200

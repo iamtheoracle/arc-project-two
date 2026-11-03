@@ -91,9 +91,14 @@ def test_local_llm_uses_gateway_compatibility_facade(monkeypatch):
             self.calls.append(kwargs)
             return {"message": {"content": "local answer"}}
 
-    gateway = FakeGateway()
-    monkeypatch.setattr("core.llm.ModelGateway", lambda: gateway)
+    created = []
+    def fake_gateway(**kwargs):
+        gateway = FakeGateway(**kwargs)
+        created.append(gateway)
+        return gateway
+    monkeypatch.setattr("core.llm.ModelGateway", fake_gateway)
     llm = LocalLLM(model="qwen-local", temperature=0.3, host="http://127.0.0.1:11435")
+    gateway = created[0]
     assert gateway.host == "http://127.0.0.1:11435"
     result = llm.chat([{"role": "user", "content": "hello"}])
     assert result["message"]["content"] == "local answer"
@@ -136,7 +141,7 @@ def test_gateway_rejects_malformed_messages():
     registry = ProviderRegistry()
     registry.register(FakeProvider())
     gateway = ModelGateway(registry=registry, provider_id="fake")
-    with pytest.raises(ValueError, match="supported role and string content"):
+    with pytest.raises(ValueError, match="supported role and non-empty text"):
         gateway.chat("m", [{"role": "developer", "content": "bad"}])
 
 def test_registry_rejects_provider_without_manifest_or_chat():
@@ -159,14 +164,14 @@ def test_remote_model_adapter_preserves_tool_calls_and_usage(monkeypatch):
                     "tool_calls": [{
                         "id": "call_123",
                         "type": "function",
-                        "function": {"name": "tool_calculate", "arguments": "{\\"expression\\":\\"6 * 7\\"}"},
+                        "function": {"name": "tool_calculate", "arguments": '{"expression":"6 * 7"}'},
                     }],
                 },
                 "prompt_eval_count": 12,
                 "eval_count": 3,
             }
 
-    monkeypatch.setattr("core.model_gateway.OpenAICompatibleProvider", lambda config: FakeRemoteClient())
+    monkeypatch.setattr("core.model_gateway.OpenAICompatibleProvider", lambda config, **kwargs: FakeRemoteClient())
     config = ProviderConfig("openrouter", "https://openrouter.ai/api/v1/chat/completions",
                             "ORACLE_ARC_OPENROUTER_API_KEY", "ORACLE_ARC_OPENROUTER_MODEL",
                             "openai/gpt-4o-mini")

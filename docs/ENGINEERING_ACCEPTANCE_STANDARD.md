@@ -43,7 +43,7 @@ This standard governs architecture, implementation, testing and release decision
 4. Isolation tests: verify actual container UID, capabilities, filesystem, network, resource limits and timeout behavior.
 5. Adversarial tests: prompt injection, MIME spoofing, malformed media, cross-tenant/application/principal access, revocation races and oversized payloads.
 6. Recovery tests: provider timeout, worker crash, cancellation, lease expiry, retry and database restore/migration.
-7. Real-runtime verification: pull and run the actual local Ollama model; build and execute actual ORBITS worker images; verify provider and tool calls against the configured host.
+7. Real-runtime verification: pull and run the actual local Ollama model; build and execute actual ORBITS worker images; verify provider and tool calls against the configured host; run actual local ASR and TTS workers with pinned model assets and representative audio fixtures; verify synthesis API authorization and end-to-end spoken-turn behavior.
 8. Release evidence: the latest commit's complete CI suite is green, migration/restore checks pass, operational configuration is documented, and no unresolved critical/high security issue remains.
 
 ## Inference and data policy
@@ -59,5 +59,6 @@ This standard governs architecture, implementation, testing and release decision
 - ORACLE emits bounded structured decision traces; it does not persist private chain-of-thought.
 - SPARK enforces credential-scoped memory and explicit cross-application grants.
 - ORBITS provides isolated PDF/plain-text extraction, image OCR and audio metadata inspection. A separate offline faster-whisper worker and pinned-model provisioning path are implemented; speech-to-text is not advertised until a complete local model is installed. Real transcription remains unverified until a target-host audio integration test passes.
+- Voice/audio is a first-class acceptance domain. Initial isolated local Piper TTS worker, pinned-model provisioning and a capability-scoped synthesis API are implemented, but real voice-model inference is not yet verified on the target host. ASR target-host inference remains unverified. Durable voice sessions, microphone capture, live streaming, VAD turn-taking, playback UX and end-to-end spoken conversation remain outstanding. These capabilities must follow the [voice and audio architecture](VOICE_AUDIO_ARCHITECTURE.md), with separate local workers, scoped permissions, explicit retention, cancellation and real-runtime evidence.
 - Document ingestion/search is permission-scoped and source-attributed. Retrieved passages remain untrusted.
 - Production readiness remains blocked until the latest complete CI suite and real-host Ollama/ORBITS verification have passed.

@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -53,6 +54,27 @@ class Execution:
     output_json: str | None
     error_code: str | None
     lease_expires_at: int | None
+
+
+def _verified_remote_regions(provider_id: str) -> set[str]:
+    """Operator-attested provider regions; absent configuration means no remote egress."""
+    raw = os.environ.get("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS", "")
+    if not raw:
+        return set()
+    try:
+        configured = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return set()
+    if not isinstance(configured, dict):
+        return set()
+    regions = configured.get(provider_id, [])
+    if not isinstance(regions, list):
+        return set()
+    return {
+        item for item in regions
+        if isinstance(item, str) and item and len(item) <= 64
+        and item == item.strip()
+    }
 
 
 class PlatformControlPlane:
@@ -293,14 +315,20 @@ class PlatformControlPlane:
             any(x not in allowed for x in classifications) or len(set(classifications)) != len(classifications)):
             raise ValueError("Invalid route data classifications")
         # Remote provider endpoints are not an approved data-residency boundary.
-        # Until a provider-specific DPA/region policy is configured, only public
-        # data may leave the local Oracle Arc runtime.
-        if provider_id != "ollama" and set(classifications) != {"public"}:
-            raise PermissionError("Remote model providers are restricted to public data classifications")
+        # Require both public-only data and explicit operator-attested provider
+        # regions. A caller-supplied region label is not evidence of residency.
+        if provider_id != "ollama":
+            if set(classifications) != {"public"}:
+                raise PermissionError("Remote model providers are restricted to public data classifications")
+            verified_regions = _verified_remote_regions(provider_id)
+            if not verified_regions:
+                raise PermissionError("Remote model provider has no verified execution regions configured")
         if (not isinstance(regions, list) or not regions or
             any(not isinstance(x, str) or not x.strip() or len(x) > 64 for x in regions) or
             len(set(regions)) != len(regions)):
             raise ValueError("At least one unique execution region is required")
+        if provider_id != "ollama" and not set(regions).issubset(verified_regions):
+            raise PermissionError("Remote model route includes an unverified provider execution region")
         with self._session() as db:
             db.execute("""INSERT INTO arc_model_routes VALUES(?,?,?,?,?,?,?,1)
                 ON CONFLICT(tenant_id,application_id,route_id) DO UPDATE SET
@@ -321,8 +349,11 @@ class PlatformControlPlane:
             raise LookupError("Model route not found")
         if classification not in json.loads(row["data_classifications_json"]):
             raise PermissionError("Model route is not approved for this data classification")
-        if row["provider_id"] != "ollama" and classification != "public":
-            raise PermissionError("Remote model providers cannot process non-public data without an approved egress policy")
+        if row["provider_id"] != "ollama":
+            if classification != "public":
+                raise PermissionError("Remote model providers cannot process non-public data without an approved egress policy")
+            if region not in _verified_remote_regions(row["provider_id"]):
+                raise PermissionError("Remote model execution region is no longer verified")
         if region not in json.loads(row["regions_json"]):
             raise PermissionError("Model route is not approved for this execution region")
         return {"provider_id": row["provider_id"], "model_id": row["model_id"]}
@@ -390,6 +421,11 @@ class PlatformControlPlane:
                 raise PermissionError("Model route is not approved for this data classification")
             if region not in json.loads(route["regions_json"]):
                 raise PermissionError("Model route is not approved for this execution region")
+            if route["provider_id"] != "ollama":
+                if classification != "public":
+                    raise PermissionError("Remote model providers are restricted to public data classifications")
+                if region not in _verified_remote_regions(route["provider_id"]):
+                    raise PermissionError("Remote model execution region is not verified")
             request_digest = hashlib.sha256(input_json.encode("utf-8")).hexdigest()
             if idempotency_key is not None:
                 existing = db.execute("""SELECT execution_id,request_digest FROM arc_executions

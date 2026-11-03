@@ -52,10 +52,14 @@ def execute(payload: dict) -> dict:
         condition_on_previous_text=False, word_timestamps=False,
     )
     text_parts = []
+    transcript_size = 0
     for segment in segments:
-        text_parts.append(segment.text)
-        if sum(map(len, text_parts)) > 100_000:
+        if not isinstance(segment.text, str):
+            raise ValueError("ASR model returned a non-text segment")
+        transcript_size += len(segment.text)
+        if transcript_size > 100_000:
             raise ValueError("ASR transcript exceeds 100 KB")
+        text_parts.append(segment.text)
     return {
         "media_type": "audio", "format": "local-faster-whisper",
         "language": info.language, "language_probability": round(float(info.language_probability), 4),

@@ -89,6 +89,11 @@ class DocumentUploadRequest(BaseModel):
     classification:str="private"
     retention_seconds:int=Field(default=604800,ge=60,le=31536000)
 
+class AudioSynthesizeRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    voice_id: str = Field(default="local-default", min_length=1, max_length=64)
+
+
 class OrbitProcessRequest(BaseModel):
     processor_id:str=Field(min_length=1,max_length=64)
     filename:str=Field(min_length=1,max_length=180)
@@ -98,6 +103,7 @@ class OrbitProcessRequest(BaseModel):
     title:str|None=Field(default=None,min_length=1,max_length=240)
     source_uri:str|None=Field(default=None,min_length=1,max_length=2048)
     classification:str="private"
+    retention_seconds:int=Field(default=604800,ge=60,le=31536000)
 
 class TaskCreate(BaseModel):
     agent_id:str=Field(min_length=1,max_length=64)
@@ -227,6 +233,9 @@ def upload_platform_document(body: DocumentUploadRequest, identity=Depends(requi
             identity, body.title, body.source_uri, extracted, body.classification,
             body.retention_seconds
         )
+        # Bind the extracted record to its scanned source so explicit deletion and
+        # retention expiry remove both the quarantined bytes and indexed text.
+        quarantine.link_document(identity, asset.asset_id, document_id)
         return {
             "asset_id": asset.asset_id, "sha256": asset.sha256,
             "quarantine_status": stored["status"], "expires_at": stored["expires_at"],
@@ -312,37 +321,145 @@ def delete_platform_document(document_id: str, identity=Depends(require_applicat
         raise HTTPException(403, str(exc))
 
 
+@router.get("/audio/voices")
+def list_local_audio_voices(identity=Depends(require_application)):
+    if "audio.synthesize" not in identity.capabilities:
+        raise HTTPException(403, "Audio synthesis capability is not granted")
+    # Only this server-reviewed identifier is currently supported.
+    return {"voices": [{"voice_id": "local-default", "engine": "piper",
+                        "availability": "configured" if os.environ.get("ORACLE_ARC_TTS_MODEL_DIR") else "not_configured",
+                        "inference_location": "local"}]}
+
+
+@router.post("/audio/synthesize", status_code=200)
+def synthesize_platform_audio(body: AudioSynthesizeRequest, identity=Depends(require_application)):
+    """Synthesize a short response using the separately installed local TTS worker."""
+    if "audio.synthesize" not in identity.capabilities:
+        raise HTTPException(403, "Audio synthesis capability is not granted")
+    if body.voice_id != "local-default":
+        raise HTTPException(422, "Requested voice is not in the reviewed local voice catalogue")
+    try:
+        from core.orbits_tts_runtime import run_local_tts
+        result = run_local_tts(body.text, body.voice_id)
+        return {"voice_id": body.voice_id, "audio": result,
+                "delivery": "ephemeral", "retained": False}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        raise HTTPException(503, "Local speech synthesis is unavailable or failed")
+
+
+@router.post("/audio/sessions", status_code=201)
+def create_voice_session(identity=Depends(require_application)):
+    """Create a durable, principal-scoped voice session; raw audio is not retained."""
+    if "audio.capture" not in identity.capabilities:
+        raise HTTPException(403, "Audio capture capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    return VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).create(identity)
+
+
+@router.get("/audio/sessions/{session_id}")
+def get_voice_session(session_id: str, identity=Depends(require_application)):
+    if "audio.read" not in identity.capabilities:
+        raise HTTPException(403, "Audio session read capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    session = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    return session
+
+
+@router.get("/audio/sessions/{session_id}/events")
+def get_voice_session_events(session_id: str, after: int = 0, limit: int = 100,
+                              identity=Depends(require_application)):
+    if "audio.read" not in identity.capabilities:
+        raise HTTPException(403, "Audio session read capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    try:
+        events = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).events(
+            identity, session_id, after, limit)
+        return {"events": events, "count": len(events)}
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/cancel")
+def cancel_voice_session(session_id: str, identity=Depends(require_application)):
+    if "audio.cancel" not in identity.capabilities:
+        raise HTTPException(403, "Audio session cancellation capability is not granted")
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    try:
+        return VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).cancel(
+            identity, session_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
+
+
 @router.post("/orbits/process", status_code=200)
 def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_application)):
     """Run a verified media processor in the isolated ORBITS container."""
     if "orbits.process" not in identity.capabilities:
         raise HTTPException(403, "ORBITS processing capability is not granted")
+    processor_capabilities = {
+        "audio.transcribe": "audio.transcribe",
+        "audio.inspect": "audio.inspect",
+        "document.extract": "document.extract",
+        "image.ocr": "image.ocr",
+    }
+    required_processor_capability = processor_capabilities.get(body.processor_id)
+    if required_processor_capability and required_processor_capability not in identity.capabilities:
+        raise HTTPException(403, f"{required_processor_capability} capability is not granted")
+    # Document extraction must pass through /documents/upload so bytes are
+    # quarantined and malware-scanned before any parser sees them.
+    if body.processor_id == "document.extract":
+        raise HTTPException(403, "Document extraction requires the quarantined document upload workflow")
     if body.index_text and body.processor_id == "audio.inspect":
         raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
+    if body.index_text and "document.index" not in identity.capabilities:
+        raise HTTPException(403, "Document indexing capability is not granted")
     try:
         raw = base64.b64decode(body.data_base64, validate=True)
         asset = validate_asset(raw, body.filename, body.mime_type)
+        # Documents must pass the dedicated quarantine -> malware scan -> extraction
+        # pipeline. The generic processor endpoint must never offer a scan bypass,
+        # even when the caller has document.extract or document.index permissions.
+        if asset.media_type == "document" or body.processor_id == "document.extract":
+            raise HTTPException(
+                422,
+                "Documents must use /documents/upload so quarantine and malware scanning run before extraction",
+            )
+        database = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+        # Every accepted ORBITS asset is quarantined and malware-scanned before
+        # the isolated processor receives its bytes. This applies to images and
+        # audio as well as the dedicated document-upload path.
+        quarantine = DocumentQuarantineStore(
+            database, scanner=clamav_scan
+        )
+        stored = quarantine.ingest(identity, asset, raw, body.retention_seconds)
         registry = build_default_orbits_registry()
         result = registry.process(body.processor_id, asset, raw)
         response = {"asset_id": asset.asset_id, "sha256": asset.sha256,
                     "media_type": asset.media_type, "processor_id": body.processor_id,
-                    "result": result}
+                    "quarantine_status": stored["status"],
+                    "expires_at": stored["expires_at"], "result": result}
         if body.index_text:
             if asset.media_type == "audio":
                 raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
-            if "document.index" not in identity.capabilities:
-                raise HTTPException(403, "Document indexing capability is not granted")
             extracted = result.get("text")
             if not isinstance(extracted, str) or not extracted.strip():
                 raise HTTPException(422, "The processor did not produce indexable text")
-            store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+            store = DocumentRetrievalStore(database)
             document_id = store.index_text(
                 identity,
                 body.title or body.filename,
                 body.source_uri or f"arc://orbits/{asset.asset_id}",
                 extracted,
                 body.classification,
+                body.retention_seconds,
             )
+            quarantine.link_document(identity, asset.asset_id, document_id)
             response["document_id"] = document_id
             response["indexed"] = True
         return response
@@ -352,6 +469,10 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
         raise HTTPException(422, str(exc))
     except AuthorizationError as exc:
         raise HTTPException(403, str(exc))
+    except MalwareDetected as exc:
+        raise HTTPException(422, str(exc))
+    except (MalwareScannerUnavailable, QuarantineError) as exc:
+        raise HTTPException(503, str(exc))
     except OrbitProcessorUnavailable as exc:
         raise HTTPException(503, str(exc))
     except (RuntimeError, TimeoutError, OSError) as exc:
@@ -660,6 +781,64 @@ def submit_platform_execution(body: ExecutionCreate,
         raise HTTPException(409, str(exc))
 
 
+@router.get("/executions/events")
+async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
+        authorization: str | None = Header(default=None)):
+    """Stream durable event-log updates; every reconnect revalidates the bearer credential."""
+    if not isinstance(after, int) or after < 0:
+        raise HTTPException(422, "Event cursor must be a non-negative integer")
+    if not isinstance(duration_seconds, int) or not 1 <= duration_seconds <= 50:
+        raise HTTPException(422, "Stream duration must be between 1 and 50 seconds")
+    identity = require_application(authorization)
+    if "agent.execution.read" not in identity.capabilities:
+        raise HTTPException(403, "Execution read capability is not granted")
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(401, "Application credential required")
+    cp = _control_plane()
+
+    async def events():
+        cursor = after
+        started = time.monotonic()
+        last_heartbeat = started
+        last_auth_check = started
+        yield "retry: 2000\n\n"
+        # Netlify and common reverse proxies impose bounded response lifetimes.
+        # The client reconnects using the last durable event ID.
+        while time.monotonic() - started < duration_seconds:
+            if time.monotonic() - last_auth_check >= 10:
+                try:
+                    live_identity = _store().authenticate(token)
+                except AuthorizationError:
+                    yield "event: auth.expired\ndata: {\"reason\":\"credential_expired_or_revoked\"}\n\n"
+                    return
+                if (live_identity.tenant_id != identity.tenant_id
+                        or live_identity.application_id != identity.application_id
+                        or live_identity.principal_id != identity.principal_id):
+                    yield "event: auth.expired\ndata: {\"reason\":\"identity_scope_changed\"}\n\n"
+                    return
+                last_auth_check = time.monotonic()
+            try:
+                batch = cp.list_execution_events(identity, cursor, 100)
+            except (PermissionError, ValueError):
+                yield "event: stream.error\ndata: {\"reason\":\"execution_event_access_denied\"}\n\n"
+                return
+            for item in batch:
+                cursor = item["event_id"]
+                yield (f"id: {cursor}\nevent: execution\ndata: "
+                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n\n")
+            now = time.monotonic()
+            if not batch and now - last_heartbeat >= 15:
+                yield ": keepalive\n\n"
+                last_heartbeat = now
+            await asyncio.sleep(0.75)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-store, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+
 @router.get("/executions/{execution_id}")
 def read_platform_execution(execution_id: str, identity=Depends(require_application)):
     try:
@@ -766,62 +945,4 @@ def list_platform_executions(limit:int=50,identity=Depends(require_application))
             WHERE tenant_id=? AND application_id=? AND principal_id=?""",
             (identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()[0]
     return {"data":[asdict(cp._execution(x)) for x in rows],"event_cursor":int(cursor)}
-
-@router.get("/executions/events")
-async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
-        authorization: str | None = Header(default=None)):
-    """Stream durable event-log updates; every reconnect revalidates the bearer credential."""
-    if not isinstance(after, int) or after < 0:
-        raise HTTPException(422, "Event cursor must be a non-negative integer")
-    if not isinstance(duration_seconds, int) or not 1 <= duration_seconds <= 50:
-        raise HTTPException(422, "Stream duration must be between 1 and 50 seconds")
-    identity = require_application(authorization)
-    if "agent.execution.read" not in identity.capabilities:
-        raise HTTPException(403, "Execution read capability is not granted")
-    scheme, _, token = (authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(401, "Application credential required")
-    cp = _control_plane()
-
-    async def events():
-        cursor = after
-        started = time.monotonic()
-        last_heartbeat = started
-        last_auth_check = started
-        yield "retry: 2000\n\n"
-        # Netlify and common reverse proxies impose bounded response lifetimes.
-        # The client reconnects using the last durable event ID.
-        while time.monotonic() - started < duration_seconds:
-            if time.monotonic() - last_auth_check >= 10:
-                try:
-                    live_identity = _store().authenticate(token)
-                except AuthorizationError:
-                    yield "event: auth.expired\ndata: {\"reason\":\"credential_expired_or_revoked\"}\n\n"
-                    return
-                if (live_identity.tenant_id != identity.tenant_id
-                        or live_identity.application_id != identity.application_id
-                        or live_identity.principal_id != identity.principal_id):
-                    yield "event: auth.expired\ndata: {\"reason\":\"identity_scope_changed\"}\n\n"
-                    return
-                last_auth_check = time.monotonic()
-            try:
-                batch = cp.list_execution_events(identity, cursor, 100)
-            except (PermissionError, ValueError):
-                yield "event: stream.error\ndata: {\"reason\":\"execution_event_access_denied\"}\n\n"
-                return
-            for item in batch:
-                cursor = item["event_id"]
-                yield (f"id: {cursor}\nevent: execution\ndata: "
-                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n\n")
-            now = time.monotonic()
-            if not batch and now - last_heartbeat >= 15:
-                yield ": keepalive\n\n"
-                last_heartbeat = now
-            await asyncio.sleep(0.75)
-
-    return StreamingResponse(events(), media_type="text/event-stream", headers={
-        "Cache-Control": "no-store, no-transform",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    })
 

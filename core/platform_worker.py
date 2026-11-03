@@ -8,6 +8,7 @@ agent-supplied code is never imported or evaluated.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -16,11 +17,17 @@ from typing import Any
 from core.model_gateway import ModelGateway
 from core.reasoning import assess_request, build_reasoning_context
 from core.tenant_security import TenantSecurityStore
-from core.platform_control_plane import PlatformControlPlane
+from core.platform_control_plane import PlatformControlPlane, _verified_remote_regions
 from core.platform_tool_registry import build_platform_tool_broker
 from core.scoped_tool_broker import ScopedToolBroker, ToolContext
 from core.tool_grants import ToolGrantStore
 from core.worker_identity import WorkerIdentityStore
+
+MAX_MODEL_RESPONSE_BYTES = 100_000
+MAX_TOOL_RESULT_BYTES = 32_000
+MAX_MODEL_CONTEXT_BYTES = 2_000_000
+
+logger = logging.getLogger(__name__)
 
 
 class PlatformWorker:
@@ -75,6 +82,14 @@ class PlatformWorker:
         regions = json.loads(row["regions_json"])
         if row["classification"] not in classifications or row["region"] not in regions:
             raise PermissionError("Model route no longer permits this classification or region")
+        if row["model_provider"] != "ollama":
+            if row["classification"] != "public":
+                raise PermissionError("Remote model execution is restricted to public data")
+            # Revalidate operator-attested residency at execution time. A route that
+            # was configured while a region was trusted must fail closed if that
+            # attestation is removed or changed before the worker sends data.
+            if row["region"] not in _verified_remote_regions(row["model_provider"]):
+                raise PermissionError("Remote model execution region is no longer verified")
         return dict(row), {
             "manifest": manifest,
             "route": {"provider_id": row["model_provider"], "model_id": row["model_id"]},
@@ -280,6 +295,11 @@ class PlatformWorker:
                 owner_policy=owner_policy,
                 worker_capabilities=worker_capabilities,
             )
+            effective_tools = manifest_tools & app_grants & owner_policy & worker_capabilities
+            if manifest_tools and not effective_tools:
+                raise PermissionError(
+                    "Execution worker has no tools with complete live application, owner and worker grants"
+                )
             if len(messages) > 100:
                 raise ValueError("execution_message_history_limit_exceeded")
             remaining = deadline - time.monotonic()
@@ -288,6 +308,11 @@ class PlatformWorker:
             set_timeout = getattr(gateway, "set_timeout_seconds", None)
             if callable(set_timeout):
                 set_timeout(min(remaining, provider_timeout))
+            context_bytes = len(json.dumps(
+                messages, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8"))
+            if context_bytes > MAX_MODEL_CONTEXT_BYTES:
+                raise ValueError("execution_model_context_size_limit_exceeded")
             response = gateway.chat(
                 model, messages, tools=schemas or None, temperature=0.2
             )
@@ -305,6 +330,8 @@ class PlatformWorker:
             content = self._field(message, "content", "")
             if not isinstance(content, str):
                 content = ""
+            if len(content.encode("utf-8")) > MAX_MODEL_RESPONSE_BYTES:
+                raise ValueError("model_response_size_limit_exceeded")
             calls = self._field(message, "tool_calls", []) or []
             if not calls:
                 if not content.strip():
@@ -374,9 +401,12 @@ class PlatformWorker:
                         owner_policy=owner_policy,
                         worker_capabilities=worker_capabilities,
                     )
+                tool_content = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+                if len(tool_content.encode("utf-8")) > MAX_TOOL_RESULT_BYTES:
+                    raise ValueError("tool_result_size_limit_exceeded")
                 tool_message = {
                     "role": "tool",
-                    "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                    "content": tool_content,
                 }
                 if provider_id == "ollama":
                     tool_message["name"] = function_name
@@ -438,14 +468,10 @@ class PlatformWorker:
             payload = json.loads(row["input_json"])
             messages = self._messages(payload, context["manifest"])
             reasoning_context, reasoning_trace = self._reasoning_policy(messages)
-            messages[0]["content"] += "
-
-" + reasoning_context
+            messages[0]["content"] += "\n\n" + reasoning_context
             memory_context, memory_trace = self._spark_memory_context(row, payload)
             if memory_context:
-                messages[0]["content"] += "
-
-" + memory_context
+                messages[0]["content"] += "\n\n" + memory_context
             self.identities.validate(self.identity, "execution.complete")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -492,8 +518,16 @@ class PlatformWorker:
                     "output": result, "usage": usage}
         except Exception as exc:
             policy_failure = isinstance(exc, (PermissionError, ValueError))
-            raw_code = str(exc).lower().replace(" ", "_")
-            code = raw_code if raw_code.replace("_", "").replace("-", "").isalnum() and len(raw_code) <= 80 else "worker_execution_failed"
+            # Persist only fixed, non-sensitive error categories. Exception messages may
+            # contain provider payloads, document excerpts or user-supplied text.
+            if isinstance(exc, PermissionError):
+                code = "permission_denied"
+            elif isinstance(exc, ValueError):
+                code = "invalid_execution_request"
+            elif isinstance(exc, TimeoutError):
+                code = "execution_timeout"
+            else:
+                code = "worker_execution_failed"
             if not lost.is_set():
                 try:
                     self.control.fail_execution(
@@ -521,7 +555,13 @@ class PlatformWorker:
                 result = self.run_once(lease_seconds=lease_seconds)
                 if result is None:
                     stop_event.wait(poll_interval)
-            except Exception:
+            except Exception as exc:
+                # Emit operational evidence without logging provider payloads, prompts,
+                # document excerpts or exception messages that may contain user data.
+                logger.error(
+                    "platform_worker_iteration_failed error_type=%s worker_id=%s",
+                    type(exc).__name__, self.identity.worker_id,
+                )
                 stop_event.wait(min(5.0, max(poll_interval, 0.5)))
 
 

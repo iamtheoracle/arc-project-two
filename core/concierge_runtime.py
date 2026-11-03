@@ -47,7 +47,7 @@ class ConciergeWorkflowStore:
             db.close()
 
     def plan(self, identity, action: dict[str,Any], ttl_seconds: int=900) -> dict:
-        if "concierge.workflow" not in set(getattr(identity, "capabilities", ())):
+        if "concierge.workflow.plan" not in set(getattr(identity, "capabilities", ())):
             raise ConciergeError("CONCIERGE workflow capability is not granted")
         required={"kind","provider","parameters","consequential"}
         if not isinstance(action,dict) or not required.issubset(action):
@@ -70,7 +70,7 @@ class ConciergeWorkflowStore:
 
     def confirm_and_execute(self, identity, workflow_id: str, confirmed_fingerprint: str,
                             executor: Callable[[dict[str,Any],str],dict[str,Any]]) -> dict:
-        if "concierge.action.confirm" not in set(getattr(identity, "capabilities", ())):
+        if "concierge.action.execute" not in set(getattr(identity, "capabilities", ())):
             raise ConciergeError("CONCIERGE action-confirmation capability is not granted")
         with self._session() as db:
             db.row_factory=sqlite3.Row

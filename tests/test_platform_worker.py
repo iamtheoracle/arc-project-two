@@ -608,3 +608,147 @@ def test_tool_invocation_audit_is_tenant_and_application_scoped(tmp_path):
     other_application = identities.create_application(other_tenant, "Other audit client")
     assert grants.invocation_audit(other_tenant, other_application) == []
     assert len(grants.invocation_audit(identity.tenant_id, identity.application_id)) == 1
+
+
+def test_worker_rejects_oversized_model_response_before_persisting(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, _, _, _, _, _, _, _, worker_token = provision(tmp_path, tool=False)
+
+    class OversizedGateway:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            return {"message": {"content": "x" * 100_001, "tool_calls": []}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", OversizedGateway)
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    with pytest.raises(ValueError, match="model_response_size_limit_exceeded"):
+        worker.run_once()
+
+
+def test_worker_rejects_oversized_registered_tool_result(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, _, _, _, _, _, _, _, worker_token = provision(tmp_path, tool=True)
+
+    class OversizedPlugins:
+        def execute(self, name, arguments):
+            return "x" * 32_001
+
+    class ToolCallingGateway:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            return {"message": {"content": "", "tool_calls": [{
+                "id": "call_large_tool",
+                "function": {"name": "tool_calculate", "arguments": {"expression": "6 * 7"}},
+            }]}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", ToolCallingGateway)
+    broker = build_platform_tool_broker(plugin_registry=OversizedPlugins())
+    worker = PlatformWorker(database, worker_token, tool_broker=broker)
+    with pytest.raises(ValueError, match="tool_result_size_limit_exceeded"):
+        worker.run_once()
+
+
+def test_worker_persists_only_non_sensitive_error_categories(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, _, identity, control, _, execution_id, _, _, worker_token = provision(
+        tmp_path, tool=False
+    )
+
+    class SensitiveProviderFailure:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            raise RuntimeError("private-user-secret@example.com")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", SensitiveProviderFailure)
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    with pytest.raises(RuntimeError, match="private-user-secret"):
+        worker.run_once()
+
+    execution = control.get_execution(identity, execution_id)
+    assert execution.error_code == "worker_execution_failed"
+    assert "private" not in execution.error_code
+    assert "example" not in execution.error_code
+
+
+def test_worker_loop_logs_failure_type_without_sensitive_exception_text(tmp_path, caplog):
+    import logging
+
+    database, _, _, _, _, _, _, worker_id, worker_token = provision(tmp_path, tool=False)
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+
+    class StopAfterOneWait:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, timeout):
+            self.stopped = True
+            return True
+
+    def fail_once(**_kwargs):
+        raise RuntimeError("private-user-prompt-and-secret")
+
+    worker.run_once = fail_once
+    stop = StopAfterOneWait()
+    with caplog.at_level(logging.ERROR):
+        worker.run_forever(stop, poll_interval=0.1)
+
+    assert "RuntimeError" in caplog.text
+    assert worker_id in caplog.text
+    assert "private-user-prompt-and-secret" not in caplog.text
+
+
+def test_worker_rejects_remote_route_when_region_attestation_is_removed(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+        json.dumps({"groq": ["provider-region-1"]}),
+    )
+    database, _, identity, control, _, execution_id, _, worker_id, worker_token = provision(
+        tmp_path, tool=False, provider_id="groq",
+        classification="public", region="provider-region-1",
+    )
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+
+    # The route was valid at configuration and queue time. Remove the operator's
+    # residency attestation before the worker is allowed to transmit prompt data.
+    monkeypatch.delenv("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS")
+    with pytest.raises(PermissionError, match="region is no longer verified"):
+        worker._execution_context(execution_id, worker_id)
+
+
+def test_worker_rejects_remote_route_for_non_public_classification(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+        json.dumps({"groq": ["provider-region-1"]}),
+    )
+    database, _, identity, control, _, execution_id, _, worker_id, worker_token = provision(
+        tmp_path, tool=False, provider_id="groq",
+        classification="public", region="provider-region-1",
+    )
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "UPDATE arc_executions SET classification='private' WHERE execution_id=?",
+            (execution_id,),
+        )
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    with pytest.raises(PermissionError, match="public data"):
+        worker._execution_context(execution_id, worker_id)
