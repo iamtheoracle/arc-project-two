@@ -22,6 +22,10 @@ from core.scoped_tool_broker import ScopedToolBroker, ToolContext
 from core.tool_grants import ToolGrantStore
 from core.worker_identity import WorkerIdentityStore
 
+MAX_MODEL_RESPONSE_BYTES = 100_000
+MAX_TOOL_RESULT_BYTES = 32_000
+MAX_MODEL_CONTEXT_BYTES = 2_000_000
+
 
 class PlatformWorker:
     def __init__(self, database_path: str, worker_token: str,
@@ -293,6 +297,11 @@ class PlatformWorker:
             set_timeout = getattr(gateway, "set_timeout_seconds", None)
             if callable(set_timeout):
                 set_timeout(min(remaining, provider_timeout))
+            context_bytes = sum(
+                len(str(item.get("content", "")).encode("utf-8")) for item in messages
+            )
+            if context_bytes > MAX_MODEL_CONTEXT_BYTES:
+                raise ValueError("execution_model_context_size_limit_exceeded")
             response = gateway.chat(
                 model, messages, tools=schemas or None, temperature=0.2
             )
@@ -314,6 +323,8 @@ class PlatformWorker:
             if not calls:
                 if not content.strip():
                     raise RuntimeError("model_empty_response")
+                if len(content.encode("utf-8")) > MAX_MODEL_RESPONSE_BYTES:
+                    raise ValueError("model_response_size_limit_exceeded")
                 return content, usage
             if round_index >= max_tool_rounds:
                 raise RuntimeError("tool_call_round_limit_exceeded")
@@ -379,9 +390,12 @@ class PlatformWorker:
                         owner_policy=owner_policy,
                         worker_capabilities=worker_capabilities,
                     )
+                tool_content = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+                if len(tool_content.encode("utf-8")) > MAX_TOOL_RESULT_BYTES:
+                    raise ValueError("tool_result_size_limit_exceeded")
                 tool_message = {
                     "role": "tool",
-                    "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                    "content": tool_content,
                 }
                 if provider_id == "ollama":
                     tool_message["name"] = function_name
