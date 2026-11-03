@@ -280,11 +280,10 @@ class PlatformWorker:
                 owner_policy=owner_policy,
                 worker_capabilities=worker_capabilities,
             )
-            if manifest_tools and not manifest_tools.issubset(
-                app_grants & owner_policy & worker_capabilities
-            ):
+            effective_tools = manifest_tools & app_grants & owner_policy & worker_capabilities
+            if manifest_tools and not effective_tools:
                 raise PermissionError(
-                    "Execution worker lacks the complete live application, owner and worker tool grants"
+                    "Execution worker has no tools with complete live application, owner and worker grants"
                 )
             if len(messages) > 100:
                 raise ValueError("execution_message_history_limit_exceeded")
