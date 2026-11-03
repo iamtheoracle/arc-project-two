@@ -153,11 +153,8 @@ class DocumentQuarantineStore:
                 (current,),
             ).fetchall()
             for row in rows:
-                path = self._path(row["stored_name"])
-                try:
-                    path.unlink(missing_ok=True)
-                except OSError as exc:
-                    raise QuarantineError("Could not enforce quarantine retention") from exc
+                # Tombstone indexed text in the same transaction before unlinking
+                # source bytes. If unlink fails, the DB transaction rolls back too.
                 if row["document_id"]:
                     document = db.execute(
                         """SELECT content_sha256 FROM arc_documents WHERE document_id=?
@@ -176,6 +173,11 @@ class DocumentQuarantineStore:
                              row["principal_id"], "quarantine_retention_expired",
                              document["content_sha256"], 0, current),
                         )
+                path = self._path(row["stored_name"])
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    raise QuarantineError("Could not enforce quarantine retention") from exc
                 db.execute(
                     "UPDATE arc_document_quarantine SET status='expired',deleted_at=? "
                     "WHERE asset_id=?",
