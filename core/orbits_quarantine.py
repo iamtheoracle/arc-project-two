@@ -105,6 +105,9 @@ class DocumentQuarantineStore:
                     occurred_at INTEGER NOT NULL
                 );
             """)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(arc_document_quarantine)")}
+            if "document_id" not in columns:
+                db.execute("ALTER TABLE arc_document_quarantine ADD COLUMN document_id TEXT")
         try:
             Path(self.database_path).chmod(0o600)
         except OSError as exc:
@@ -155,6 +158,24 @@ class DocumentQuarantineStore:
                     path.unlink(missing_ok=True)
                 except OSError as exc:
                     raise QuarantineError("Could not enforce quarantine retention") from exc
+                if row["document_id"]:
+                    document = db.execute(
+                        """SELECT content_sha256 FROM arc_documents WHERE document_id=?
+                           AND tenant_id=? AND application_id=? AND principal_id=? AND status='active'""",
+                        (row["document_id"], row["tenant_id"], row["application_id"],
+                         row["principal_id"]),
+                    ).fetchone()
+                    if document is not None:
+                        db.execute(
+                            "UPDATE arc_documents SET status='deleted',content='',updated_at=? WHERE document_id=? AND status='active'",
+                            (current, row["document_id"]),
+                        )
+                        db.execute(
+                            "INSERT INTO arc_document_access_audit VALUES(?,?,?,?,?,?,?,?)",
+                            ("daud_" + uuid.uuid4().hex, row["tenant_id"], row["application_id"],
+                             row["principal_id"], "quarantine_retention_expired",
+                             document["content_sha256"], 0, current),
+                        )
                 db.execute(
                     "UPDATE arc_document_quarantine SET status='expired',deleted_at=? "
                     "WHERE asset_id=?",
@@ -251,6 +272,36 @@ class DocumentQuarantineStore:
         return {"asset_id": asset.asset_id, "sha256": digest, "status": "clean",
                 "expires_at": now + retention_seconds}
 
+    def link_document(self, identity, asset_id: str, document_id: str) -> bool:
+        from core.document_retrieval import DocumentRetrievalStore
+        documents = DocumentRetrievalStore(self.database_path)
+        current = documents._reauthorize(identity)
+        documents.security.require(current, "document.index")
+        if not isinstance(asset_id, str) or not re.fullmatch(r"orb_[a-f0-9]{32}", asset_id):
+            raise ValueError("Invalid quarantine asset identifier")
+        if not isinstance(document_id, str) or not re.fullmatch(r"doc_[a-f0-9]{32}", document_id):
+            raise ValueError("Invalid indexed document identifier")
+        with self._db() as db:
+            asset = db.execute(
+                """SELECT status,document_id FROM arc_document_quarantine
+                   WHERE asset_id=? AND tenant_id=? AND application_id=? AND principal_id=?""",
+                (asset_id, current.tenant_id, current.application_id, current.principal_id),
+            ).fetchone()
+            document = db.execute(
+                """SELECT 1 FROM arc_documents WHERE document_id=? AND tenant_id=?
+                   AND application_id=? AND principal_id=? AND status='active'""",
+                (document_id, current.tenant_id, current.application_id, current.principal_id),
+            ).fetchone()
+            if asset is None or asset["status"] != "clean" or document is None:
+                raise QuarantineError("Only clean, principal-scoped quarantine assets can link to active indexed documents")
+            if asset["document_id"] not in (None, document_id):
+                raise QuarantineError("Quarantine asset is already linked to another indexed document")
+            db.execute(
+                "UPDATE arc_document_quarantine SET document_id=? WHERE asset_id=?",
+                (document_id, asset_id),
+            )
+        return True
+
     def delete(self, identity, asset_id: str) -> bool:
         from core.document_retrieval import DocumentRetrievalStore
         documents = DocumentRetrievalStore(self.database_path)
@@ -267,8 +318,26 @@ class DocumentQuarantineStore:
             ).fetchone()
             if row is None:
                 return False
-            self._path(row["stored_name"]).unlink(missing_ok=True)
             now = int(time.time())
+            if row["document_id"]:
+                document = db.execute(
+                    """SELECT content_sha256 FROM arc_documents WHERE document_id=?
+                       AND tenant_id=? AND application_id=? AND principal_id=? AND status='active'""",
+                    (row["document_id"], identity.tenant_id, identity.application_id,
+                     identity.principal_id),
+                ).fetchone()
+                if document is not None:
+                    db.execute(
+                        "UPDATE arc_documents SET status='deleted',content='',updated_at=? WHERE document_id=? AND status='active'",
+                        (now, row["document_id"]),
+                    )
+                    db.execute(
+                        "INSERT INTO arc_document_access_audit VALUES(?,?,?,?,?,?,?,?)",
+                        ("daud_" + uuid.uuid4().hex, identity.tenant_id, identity.application_id,
+                         identity.principal_id, "quarantine_asset_deleted",
+                         document["content_sha256"], 0, now),
+                    )
+            self._path(row["stored_name"]).unlink(missing_ok=True)
             db.execute("UPDATE arc_document_quarantine SET status='deleted',deleted_at=? WHERE asset_id=?",
                        (now, asset_id))
             self._audit(db, row, "owner_requested_bytes_deleted", now)
