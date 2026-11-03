@@ -100,6 +100,20 @@ class AudioTranscribeRequest(BaseModel):
     data_base64: str = Field(min_length=4, max_length=36000000)
 
 
+class AudioRespondRequest(BaseModel):
+    transcript: str = Field(min_length=1, max_length=100000)
+    agent_id: str = Field(min_length=2, max_length=64)
+    agent_version: str = Field(min_length=5, max_length=80)
+    route_id: str = Field(min_length=2, max_length=64)
+    classification: str = Field(default="private", min_length=1, max_length=32)
+    region: str = Field(default="local", min_length=1, max_length=64)
+
+
+class AudioSpeakRequest(BaseModel):
+    execution_id: str = Field(min_length=8, max_length=128)
+    voice_id: str = Field(default="local-default", min_length=1, max_length=64)
+
+
 class OrbitProcessRequest(BaseModel):
     processor_id:str=Field(min_length=1,max_length=64)
     filename:str=Field(min_length=1,max_length=180)
@@ -401,6 +415,127 @@ def cancel_voice_session(session_id: str, identity=Depends(require_application))
         raise HTTPException(404, str(exc))
     except VoiceSessionError as exc:
         raise HTTPException(409, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/respond", status_code=202)
+def submit_voice_response(session_id: str, body: AudioRespondRequest,
+                          identity=Depends(require_application)):
+    """Queue a spoken turn through the normal authenticated ORACLE execution worker."""
+    if "audio.transcribe" not in identity.capabilities:
+        raise HTTPException(403, "Audio transcription capability is not granted")
+    if "agent.execute" not in identity.capabilities:
+        raise HTTPException(403, "Agent execution capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    sessions = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    session = sessions.get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    if session["state"] != "awaiting_model":
+        raise HTTPException(409, "Voice session must have a completed transcript before model execution")
+    transcript = body.transcript.strip()
+    if not transcript:
+        raise HTTPException(422, "Transcript cannot be blank")
+    digest = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+    execution_payload = {
+        "prompt": transcript,
+        "input_mode": "voice",
+        "voice_session_id": session_id,
+        "response_contract": {
+            "format": "plain_text",
+            "max_characters": 4000,
+            "instruction": "Respond naturally and conversationally. Do not include markup or hidden reasoning."
+        }
+    }
+    try:
+        execution_id = _control_plane().submit_execution(
+            identity, body.agent_id, body.agent_version, body.route_id,
+            execution_payload, body.classification, body.region, 2,
+            "voice-" + session_id + "-" + digest[:24],
+        )
+        return {
+            "session_id": session_id, "execution_id": execution_id,
+            "status": "queued", "next_action": "poll_execution_then_speak",
+        }
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except LookupError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/speak", status_code=200)
+def synthesize_voice_response(session_id: str, body: AudioSpeakRequest,
+                              identity=Depends(require_application)):
+    """Read a completed principal-owned ORACLE execution and synthesize it locally."""
+    if "audio.synthesize" not in identity.capabilities:
+        raise HTTPException(403, "Audio synthesis capability is not granted")
+    if "agent.execution.read" not in identity.capabilities:
+        raise HTTPException(403, "Execution read capability is not granted")
+    if body.voice_id != "local-default":
+        raise HTTPException(422, "Requested voice is not in the reviewed local voice catalogue")
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    sessions = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    session = sessions.get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    if session["state"] != "awaiting_model":
+        raise HTTPException(409, "Voice session is not awaiting an ORACLE response")
+    try:
+        execution = _control_plane().get_execution(identity, body.execution_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except LookupError as exc:
+        raise HTTPException(404, "ORACLE execution not found in this principal scope")
+    if execution.status != "succeeded" or not execution.output_json:
+        if execution.status in {"queued", "running"}:
+            raise HTTPException(409, "ORACLE execution is still running")
+        raise HTTPException(409, "ORACLE execution did not complete successfully")
+    try:
+        output = json.loads(execution.output_json)
+    except (TypeError, ValueError):
+        raise HTTPException(502, "ORACLE execution returned an invalid response")
+    response_text = output.get("content") if isinstance(output, dict) else None
+    if not isinstance(response_text, str) or not response_text.strip() or len(response_text) > 4000:
+        raise HTTPException(502, "ORACLE response is empty or exceeds the speech response limit")
+    turn_id = "turn_" + hashlib.sha256(
+        (session_id + ":" + body.execution_id).encode("utf-8")
+    ).hexdigest()[:24]
+    try:
+        sessions.transition(identity, session_id, "synthesizing",
+                            "oracle.response.ready", {
+                                "turn_id": turn_id, "provider_id": execution.model_provider,
+                                "model_id": execution.model_id,
+                            })
+        from core.orbits_tts_runtime import run_local_tts
+        audio = run_local_tts(response_text, body.voice_id)
+        sessions.transition(identity, session_id, "ready",
+                            "audio.speech.ready", {
+                                "turn_id": turn_id, "processor_id": "audio.synthesize",
+                            })
+        return {
+            "session_id": session_id, "execution_id": body.execution_id,
+            "turn_id": turn_id, "state": "ready",
+            "text": response_text, "voice_id": body.voice_id,
+            "audio": audio, "delivery": "ephemeral", "retained": False,
+            "inference_location": "local",
+        }
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        try:
+            sessions.transition(identity, session_id, "failed", "audio.speech.failed",
+                                {"error_code": "invalid_speech_response"})
+        except Exception:
+            pass
+        raise HTTPException(422, str(exc))
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        try:
+            sessions.transition(identity, session_id, "failed", "audio.speech.failed",
+                                {"error_code": "local_speech_unavailable"})
+        except Exception:
+            pass
+        raise HTTPException(503, "Local speech synthesis is unavailable or failed")
 
 
 @router.post("/audio/sessions/{session_id}/transcribe", status_code=200)
