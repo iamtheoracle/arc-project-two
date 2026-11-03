@@ -94,6 +94,12 @@ class AudioSynthesizeRequest(BaseModel):
     voice_id: str = Field(default="local-default", min_length=1, max_length=64)
 
 
+class AudioTranscribeRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=180)
+    mime_type: str | None = Field(default=None, max_length=128)
+    data_base64: str = Field(min_length=4, max_length=36000000)
+
+
 class OrbitProcessRequest(BaseModel):
     processor_id:str=Field(min_length=1,max_length=64)
     filename:str=Field(min_length=1,max_length=180)
@@ -395,6 +401,129 @@ def cancel_voice_session(session_id: str, identity=Depends(require_application))
         raise HTTPException(404, str(exc))
     except VoiceSessionError as exc:
         raise HTTPException(409, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/transcribe", status_code=200)
+def transcribe_voice_session(session_id: str, body: AudioTranscribeRequest,
+                             identity=Depends(require_application)):
+    """Transcribe a session upload using the installed offline ASR processor.
+
+    The transcript is returned to the authenticated caller but is never written
+    to the voice event journal. Clean source bytes are purged immediately after
+    processing; infected or indeterminate scans remain quarantined for audit.
+    """
+    if "audio.transcribe" not in identity.capabilities:
+        raise HTTPException(403, "Audio transcription capability is not granted")
+    if "orbits.process" not in identity.capabilities:
+        raise HTTPException(403, "ORBITS processing capability is not granted")
+
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    database = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+    sessions = VoiceSessionStore(database)
+    session = sessions.get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    initial_state = session["state"]
+    if initial_state not in {"created", "interrupted", "capturing", "uploaded"}:
+        raise HTTPException(409, "Voice session is not ready to accept an audio upload")
+
+    quarantine = None
+    asset = None
+    stored = None
+    try:
+        raw = base64.b64decode(body.data_base64, validate=True)
+        asset = validate_asset(raw, body.filename, body.mime_type)
+        if asset.media_type != "audio":
+            raise HTTPException(422, "Voice transcription accepts recognized audio files only")
+
+        if initial_state in {"created", "interrupted"}:
+            sessions.transition(identity, session_id, "capturing")
+        quarantine = DocumentQuarantineStore(database, scanner=clamav_scan)
+        # The quarantine retention is a fallback cleanup window. A clean upload
+        # is purged immediately after inference; malware/indeterminate scans
+        # remain quarantined and auditable until this short expiry.
+        stored = quarantine.ingest(identity, asset, raw, 60)
+        if initial_state != "uploaded":
+            sessions.transition(identity, session_id, "uploaded", "audio.uploaded", {
+                "format": asset.mime_type, "size_bytes": asset.size_bytes,
+                "audio_sha256": asset.sha256, "retention_seconds": 60,
+            })
+        sessions.transition(identity, session_id, "transcribing", "audio.transcription.started", {
+            "processor_id": "audio.transcribe", "format": asset.mime_type,
+            "size_bytes": asset.size_bytes,
+        })
+
+        registry = build_default_orbits_registry()
+        result = registry.process("audio.transcribe", asset, raw)
+        transcript = result.get("text") if isinstance(result, dict) else None
+        if not isinstance(transcript, str) or not transcript.strip() or len(transcript) > 100000:
+            raise RuntimeError("Local ASR returned an invalid transcript contract")
+
+        details = {
+            "processor_id": "audio.transcribe", "format": asset.mime_type,
+            "size_bytes": asset.size_bytes,
+        }
+        if isinstance(result.get("language"), str):
+            details["language"] = result["language"]
+        if isinstance(result.get("duration_seconds"), (int, float)) and not isinstance(result.get("duration_seconds"), bool):
+            details["duration_seconds"] = result["duration_seconds"]
+        details["audio_sha256"] = asset.sha256
+        sessions.transition(identity, session_id, "awaiting_model", "audio.transcription.completed", details)
+        return {
+            "session_id": session_id, "state": "awaiting_model",
+            "transcript": transcript, "language": result.get("language"),
+            "duration_seconds": result.get("duration_seconds"),
+            "inference_location": "local", "audio_retained": False,
+            "quarantine_status": stored["status"],
+        }
+    except HTTPException:
+        try:
+            current = sessions.get(identity, session_id)
+            if current and current["state"] not in {"cancelled", "failed", "completed", "awaiting_model"}:
+                sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                    {"error_code": "invalid_audio_request"})
+        except Exception:
+            pass
+        raise
+    except MalwareDetected as exc:
+        try:
+            sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                {"error_code": "malware_detected"})
+        except Exception:
+            pass
+        raise HTTPException(422, str(exc))
+    except MalwareScannerUnavailable as exc:
+        try:
+            sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                {"error_code": "malware_scanner_unavailable"})
+        except Exception:
+            pass
+        raise HTTPException(503, str(exc))
+    except (OrbitAssetRejected, ValueError) as exc:
+        try:
+            current = sessions.get(identity, session_id)
+            if current and current["state"] not in {"cancelled", "failed", "completed", "awaiting_model"}:
+                sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                    {"error_code": "invalid_audio"})
+        except Exception:
+            pass
+        raise HTTPException(422, str(exc))
+    except (AuthorizationError, PermissionError) as exc:
+        raise HTTPException(403, str(exc))
+    except (OrbitProcessorUnavailable, QuarantineError, RuntimeError, TimeoutError, OSError) as exc:
+        try:
+            current = sessions.get(identity, session_id)
+            if current and current["state"] not in {"cancelled", "failed", "completed", "awaiting_model"}:
+                sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                    {"error_code": "local_transcription_unavailable"})
+        except Exception:
+            pass
+        raise HTTPException(503, "Local audio transcription is unavailable or failed")
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
+    finally:
+        if quarantine is not None and asset is not None and stored is not None and stored.get("status") == "clean":
+            quarantine.purge_processed_asset(identity, asset.asset_id)
 
 
 @router.post("/orbits/process", status_code=200)
