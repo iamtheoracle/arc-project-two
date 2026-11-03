@@ -104,7 +104,7 @@ def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,
                        json={"name":"ORBITS app"}).json()["application_id"]
     token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
         headers=owner(),json={"principal_id":"student-1","capabilities":[
-            "orbits.process","document.index","document.search"
+            "orbits.process","image.ocr","document.index","document.search"
         ]}).json()["credential"]
     headers={"Authorization":"Bearer "+token}
     registry=build_default_orbits_registry(
@@ -114,6 +114,8 @@ def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,
         }
     )
     monkeypatch.setattr(routes,"build_default_orbits_registry",lambda:registry)
+    monkeypatch.setattr(routes,"clamav_scan",lambda path:"ClamAV clean")
+    monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR",str(tmp_path/"quarantine"))
     raw=b"\x89PNG\r\n\x1a\nmock-image"
     response=client.post("/v1/platform/orbits/process",headers=headers,json={
         "processor_id":"image.ocr","filename":"handbook.png","mime_type":"image/png",
@@ -121,6 +123,8 @@ def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,
         "title":"Campus handbook","source_uri":"arc://uploads/campus-handbook",
     })
     assert response.status_code==200
+    assert response.json()["quarantine_status"]=="clean"
+    assert response.json()["expires_at"]>0
     assert response.json()["indexed"] is True
     assert response.json()["result"]["text"].startswith("The campus handbook")
     found=client.get("/v1/platform/documents/search",headers=headers,
@@ -129,6 +133,55 @@ def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,
     assert found.json()["count"]==1
     assert found.json()["data"][0]["source_uri"]=="arc://uploads/campus-handbook"
 
+
+def test_orbits_api_scans_image_before_processing_and_fails_closed_on_malware(client,monkeypatch,tmp_path):
+    import base64
+    import core.platform_routes as routes
+    from core.orbits import build_default_orbits_registry
+
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Scan tenant"}).json()["tenant_id"]
+    app_id=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"Scan app"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),json={"principal_id":"student-scan","capabilities":["orbits.process","image.ocr"]}).json()["credential"]
+    invoked={"processor":False}
+    registry=build_default_orbits_registry(runner=lambda processor_id,data: invoked.update(processor=True) or {
+        "media_type":"image","format":"image-ocr","width":2,"height":2,"text":"never reached"
+    })
+    monkeypatch.setattr(routes,"build_default_orbits_registry",lambda:registry)
+    monkeypatch.setattr(routes,"clamav_scan",lambda path: (_ for _ in ()).throw(routes.MalwareDetected("test malware")))
+    monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR",str(tmp_path/"infected"))
+    raw=b"\\x89PNG\\r\\n\\x1a\\nscan-me"
+    response=client.post("/v1/platform/orbits/process",headers={"Authorization":"Bearer "+token},json={
+        "processor_id":"image.ocr","filename":"scan.png","mime_type":"image/png",
+        "data_base64":base64.b64encode(raw).decode("ascii"),
+    })
+    assert response.status_code==422
+    assert invoked["processor"] is False
+
+
+def test_orbits_api_scanner_unavailable_fails_closed_before_processing(client,monkeypatch,tmp_path):
+    import base64
+    import core.platform_routes as routes
+    from core.orbits import build_default_orbits_registry
+
+    tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Offline scanner tenant"}).json()["tenant_id"]
+    app_id=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"Offline scanner app"}).json()["application_id"]
+    token=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),json={"principal_id":"student-offline","capabilities":["orbits.process","image.ocr"]}).json()["credential"]
+    invoked={"processor":False}
+    registry=build_default_orbits_registry(runner=lambda processor_id,data: invoked.update(processor=True) or {
+        "media_type":"image","format":"image-ocr","width":2,"height":2,"text":"never reached"
+    })
+    monkeypatch.setattr(routes,"build_default_orbits_registry",lambda:registry)
+    monkeypatch.setattr(routes,"clamav_scan",lambda path: (_ for _ in ()).throw(routes.MalwareScannerUnavailable("offline")))
+    monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR",str(tmp_path/"offline"))
+    raw=b"\\x89PNG\\r\\n\\x1a\\nscan-me"
+    response=client.post("/v1/platform/orbits/process",headers={"Authorization":"Bearer "+token},json={
+        "processor_id":"image.ocr","filename":"scan.png","mime_type":"image/png",
+        "data_base64":base64.b64encode(raw).decode("ascii"),
+    })
+    assert response.status_code==503
+    assert invoked["processor"] is False
 
 def test_orbits_api_denies_processing_without_explicit_capability(client):
     import base64
