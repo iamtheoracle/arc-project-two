@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import base64
 import hmac
+import hashlib
 import os
 from pathlib import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -112,6 +113,10 @@ class AudioRespondRequest(BaseModel):
 class AudioSpeakRequest(BaseModel):
     execution_id: str = Field(min_length=8, max_length=128)
     voice_id: str = Field(default="local-default", min_length=1, max_length=64)
+
+
+class AudioPlaybackRequest(BaseModel):
+    outcome: str = Field(min_length=1, max_length=16)
 
 
 class OrbitProcessRequest(BaseModel):
@@ -536,6 +541,33 @@ def synthesize_voice_response(session_id: str, body: AudioSpeakRequest,
         except Exception:
             pass
         raise HTTPException(503, "Local speech synthesis is unavailable or failed")
+
+
+@router.post("/audio/sessions/{session_id}/playback", status_code=200)
+def acknowledge_voice_playback(session_id: str, body: AudioPlaybackRequest,
+                               identity=Depends(require_application)):
+    """Record only playback outcome metadata; audio bytes and spoken text are not stored."""
+    if "audio.read" not in identity.capabilities:
+        raise HTTPException(403, "Audio session capability is not granted")
+    if body.outcome not in {"started", "completed", "interrupted"}:
+        raise HTTPException(422, "Playback outcome must be started, completed or interrupted")
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    sessions = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    if sessions.get(identity, session_id) is None:
+        raise HTTPException(404, "Voice session not found")
+    try:
+        if body.outcome == "started":
+            result = sessions.transition(identity, session_id, "playing", "audio.playback.started")
+        elif body.outcome == "completed":
+            current = sessions.get(identity, session_id)
+            if current and current["state"] == "ready":
+                sessions.transition(identity, session_id, "playing", "audio.playback.started")
+            result = sessions.transition(identity, session_id, "completed", "audio.playback.completed")
+        else:
+            result = sessions.transition(identity, session_id, "interrupted", "audio.playback.interrupted")
+        return result
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
 
 
 @router.post("/audio/sessions/{session_id}/transcribe", status_code=200)
