@@ -407,6 +407,10 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
     required_processor_capability = processor_capabilities.get(body.processor_id)
     if required_processor_capability and required_processor_capability not in identity.capabilities:
         raise HTTPException(403, f"{required_processor_capability} capability is not granted")
+    # Document extraction must pass through /documents/upload so bytes are
+    # quarantined and malware-scanned before any parser sees them.
+    if body.processor_id == "document.extract":
+        raise HTTPException(403, "Document extraction requires the quarantined document upload workflow")
     if body.index_text and body.processor_id == "audio.inspect":
         raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
     try:
