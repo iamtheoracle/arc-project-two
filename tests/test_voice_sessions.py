@@ -87,7 +87,7 @@ def test_voice_session_event_metadata_is_bounded_and_scalar(tmp_path):
     store = VoiceSessionStore(tmp_path / "voice.sqlite3")
     who = identity()
     session_id = store.create(who)["session_id"]
-    with pytest.raises(ValueError, match="metadata string is invalid"):
+    with pytest.raises(ValueError, match="metadata identifier is invalid"):
         store.transition(
             who, session_id, "capturing", details={"format": "x" * 129},
         )
