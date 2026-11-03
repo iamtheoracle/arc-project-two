@@ -575,6 +575,11 @@ def test_spark_grant_survives_revocation_when_source_has_another_live_credential
         json={"principal_id":"principal-2","capabilities":["spark.memory.write","spark.memory.share"]}).json()["credential"]
     second=client.post(f"/v1/platform/tenants/{tenant}/applications/{source}/credentials",headers=owner(),
         json={"principal_id":"principal-2","capabilities":["spark.memory.write","spark.memory.share"]}).json()["credential"]
+    # NULL expiry represents a credential that does not expire; it remains active.
+    import os, sqlite3
+    with sqlite3.connect(os.environ["ORACLE_ARC_DB_PATH"]) as db:
+        db.execute("UPDATE arc_credentials SET expires_at=NULL WHERE credential_id=?",
+                   (second.split(".",1)[0],))
     destination_token=client.post(f"/v1/platform/tenants/{tenant}/applications/{destination}/credentials",headers=owner(),
         json={"principal_id":"principal-2","capabilities":["spark.memory.read_shared"]}).json()["credential"]
     source_headers={"Authorization":"Bearer "+first}
