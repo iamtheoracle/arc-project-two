@@ -300,6 +300,11 @@ class DocumentQuarantineStore:
                 "UPDATE arc_document_quarantine SET document_id=? WHERE asset_id=?",
                 (document_id, asset_id),
             )
+            row = db.execute(
+                "SELECT * FROM arc_document_quarantine WHERE asset_id=?",
+                (asset_id,),
+            ).fetchone()
+            self._audit(db, row, "indexed_document_linked", int(time.time()))
         return True
 
     def delete(self, identity, asset_id: str) -> bool:
