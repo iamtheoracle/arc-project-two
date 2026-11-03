@@ -872,3 +872,34 @@ def test_voice_response_refuses_queued_or_failed_execution_without_synthesizing(
     assert response.status_code == 409
     assert called["tts"] is False
     assert sessions.get(identity, session_id)["state"] == "awaiting_model"
+
+
+
+def test_voice_session_cannot_speak_an_execution_from_another_turn(client, monkeypatch):
+    import core.platform_routes as routes
+
+    headers, token = _voice_app_identity(client, [
+        "audio.capture", "audio.read", "audio.synthesize", "agent.execution.read"
+    ])
+    session_id, identity, sessions = _voice_session_awaiting_model(client, headers, token)
+    sessions.record_event(identity, session_id, "oracle.execution.queued", {
+        "execution_id": "exec_voice_87654321", "turn_id": "turn_87654321",
+    })
+
+    class MustNotReadExecution:
+        def get_execution(self, *args):
+            raise AssertionError("Unlinked execution must not be read")
+
+    monkeypatch.setattr(routes, "_control_plane", lambda: MustNotReadExecution())
+    called = {"tts": False}
+    monkeypatch.setattr(
+        "core.orbits_tts_runtime.run_local_tts",
+        lambda *args: called.update(tts=True),
+    )
+    response = client.post(
+        f"/v1/platform/audio/sessions/{session_id}/speak",
+        headers=headers, json={"execution_id": "exec_voice_12345678"},
+    )
+    assert response.status_code == 404
+    assert called["tts"] is False
+    assert sessions.get(identity, session_id)["state"] == "awaiting_model"
