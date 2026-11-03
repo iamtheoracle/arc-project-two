@@ -442,14 +442,13 @@ def submit_voice_response(session_id: str, body: AudioRespondRequest,
         raise HTTPException(422, "Transcript cannot be blank")
     digest = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
     execution_payload = {
-        "prompt": transcript,
+        "prompt": (
+            "This is a spoken conversation. Reply in natural, concise spoken language. "
+            "Avoid Markdown, tables, code blocks and visual-only formatting. Keep the "
+            "spoken reply under 4,000 characters.\n\nUser said: " + transcript
+        ),
         "input_mode": "voice",
         "voice_session_id": session_id,
-        "response_contract": {
-            "format": "plain_text",
-            "max_characters": 4000,
-            "instruction": "Respond naturally and conversationally. Do not include markup or hidden reasoning."
-        }
     }
     try:
         execution_id = _control_plane().submit_execution(
