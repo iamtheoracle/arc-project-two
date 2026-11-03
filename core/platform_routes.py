@@ -424,11 +424,19 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
                 422,
                 "Documents must use /documents/upload so quarantine and malware scanning run before extraction",
             )
+        database = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+        # Every accepted ORBITS asset is quarantined and malware-scanned before
+        # the isolated processor receives its bytes. This applies to images and
+        # audio as well as the dedicated document-upload path.
+        stored = DocumentQuarantineStore(
+            database, scanner=clamav_scan
+        ).ingest(identity, asset, raw, body.retention_seconds)
         registry = build_default_orbits_registry()
         result = registry.process(body.processor_id, asset, raw)
         response = {"asset_id": asset.asset_id, "sha256": asset.sha256,
                     "media_type": asset.media_type, "processor_id": body.processor_id,
-                    "result": result}
+                    "quarantine_status": stored["status"],
+                    "expires_at": stored["expires_at"], "result": result}
         if body.index_text:
             if asset.media_type == "audio":
                 raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
@@ -437,13 +445,14 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
             extracted = result.get("text")
             if not isinstance(extracted, str) or not extracted.strip():
                 raise HTTPException(422, "The processor did not produce indexable text")
-            store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+            store = DocumentRetrievalStore(database)
             document_id = store.index_text(
                 identity,
                 body.title or body.filename,
                 body.source_uri or f"arc://orbits/{asset.asset_id}",
                 extracted,
                 body.classification,
+                body.retention_seconds,
             )
             response["document_id"] = document_id
             response["indexed"] = True
@@ -454,6 +463,10 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
         raise HTTPException(422, str(exc))
     except AuthorizationError as exc:
         raise HTTPException(403, str(exc))
+    except MalwareDetected as exc:
+        raise HTTPException(422, str(exc))
+    except (MalwareScannerUnavailable, QuarantineError) as exc:
+        raise HTTPException(503, str(exc))
     except OrbitProcessorUnavailable as exc:
         raise HTTPException(503, str(exc))
     except (RuntimeError, TimeoutError, OSError) as exc:
