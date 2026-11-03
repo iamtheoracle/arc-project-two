@@ -71,8 +71,8 @@ class DocumentQuarantineStore:
         self.root = self.root.resolve()
         try:
             self.root.chmod(0o700)
-        except OSError:
-            pass
+        except OSError as exc:
+            raise QuarantineError("Could not secure the quarantine storage directory") from exc
         self.scanner = scanner
         with self._db() as db:
             db.executescript("""
@@ -107,10 +107,8 @@ class DocumentQuarantineStore:
             """)
         try:
             Path(self.database_path).chmod(0o600)
-        except OSError:
-            # Existing database locations may be read-only; the storage service
-            # must still fail closed when actual access is denied by the OS.
-            pass
+        except OSError as exc:
+            raise QuarantineError("Could not secure quarantine metadata database permissions") from exc
 
     @contextmanager
     def _db(self):
