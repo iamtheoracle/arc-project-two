@@ -523,7 +523,12 @@ def transcribe_voice_session(session_id: str, body: AudioTranscribeRequest,
         raise HTTPException(409, str(exc))
     finally:
         if quarantine is not None and asset is not None and stored is not None and stored.get("status") == "clean":
-            quarantine.purge_processed_asset(identity, asset.asset_id)
+            try:
+                quarantine.purge_processed_asset(identity, asset.asset_id)
+            except AuthorizationError as exc:
+                raise HTTPException(403, "Application authorization changed during audio processing") from exc
+            except QuarantineError as exc:
+                raise HTTPException(503, "Transient audio could not be securely removed") from exc
 
 
 @router.post("/orbits/process", status_code=200)
