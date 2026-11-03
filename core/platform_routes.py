@@ -417,6 +417,8 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
         raise HTTPException(403, "Document extraction requires the quarantined document upload workflow")
     if body.index_text and body.processor_id == "audio.inspect":
         raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
+    if body.index_text and "document.index" not in identity.capabilities:
+        raise HTTPException(403, "Document indexing capability is not granted")
     try:
         raw = base64.b64decode(body.data_base64, validate=True)
         asset = validate_asset(raw, body.filename, body.mime_type)
@@ -444,8 +446,6 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
         if body.index_text:
             if asset.media_type == "audio":
                 raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
-            if "document.index" not in identity.capabilities:
-                raise HTTPException(403, "Document indexing capability is not granted")
             extracted = result.get("text")
             if not isinstance(extracted, str) or not extracted.strip():
                 raise HTTPException(422, "The processor did not produce indexable text")
