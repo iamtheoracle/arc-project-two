@@ -1,4 +1,5 @@
 import pytest
+import stat
 
 from core.orbits import validate_asset
 from core.orbits_quarantine import (
@@ -28,6 +29,9 @@ def test_quarantine_requires_clean_scan_before_reporting_success(tmp_path):
     who = provision_identity(tmp_path / "db.sqlite3")
     result = store.ingest(who, asset, b"safe document text", retention_seconds=120)
     assert result["status"] == "clean"
+    assert stat.S_IMODE((tmp_path / "db.sqlite3").stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / "quarantine").stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / "quarantine" / (asset.asset_id + ".bin")).stat().st_mode) == 0o600
     assert (tmp_path / "quarantine" / (asset.asset_id + ".bin")).exists()
     actions = [x["action"] for x in store.audit(who, asset.asset_id)]
     assert actions == ["quarantined", "scanner_clean"]
