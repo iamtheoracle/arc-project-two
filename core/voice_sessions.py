@@ -206,6 +206,18 @@ class VoiceSessionStore:
         return {"session_id": session_id, "state": row["state"], "recorded": True,
                 "occurred_at": now}
 
+    def execution_linked(self, identity, session_id: str, execution_id: str) -> bool:
+        """Confirm an ORACLE execution was queued from this exact owned voice session."""
+        if not isinstance(execution_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", execution_id):
+            return False
+        with self._db() as db:
+            row = db.execute("""SELECT 1 FROM arc_voice_events
+              WHERE session_id=? AND tenant_id=? AND application_id=? AND principal_id=?
+              AND event_type='oracle.execution.queued'
+              AND json_extract(details_json, '$.execution_id')=? LIMIT 1""",
+              (session_id, *self._scope(identity), execution_id)).fetchone()
+        return row is not None
+
     def cancel(self, identity, session_id: str) -> dict[str, Any]:
         existing = self.get(identity, session_id)
         if existing is None:
