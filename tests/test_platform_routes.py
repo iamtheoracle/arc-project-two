@@ -587,5 +587,5 @@ def test_spark_grant_survives_revocation_when_source_has_another_live_credential
     first_id=first.split(".",1)[0]
     assert client.delete(f"/v1/platform/credentials/{first_id}",headers=owner()).status_code==200
     assert client.get(f"/v1/platform/shared-memories/{source}",headers=destination_headers).json()["data"]
-    # Keep the second credential live for the full test; it is intentionally not revoked.
-    assert second
+    # The second source credential remains valid, so its principal-owned grant survives.
+    assert client.get("/v1/platform/identity",headers={"Authorization":"Bearer "+second}).status_code==200
