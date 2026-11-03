@@ -507,8 +507,16 @@ class PlatformWorker:
                     "output": result, "usage": usage}
         except Exception as exc:
             policy_failure = isinstance(exc, (PermissionError, ValueError))
-            raw_code = str(exc).lower().replace(" ", "_")
-            code = raw_code if raw_code.replace("_", "").replace("-", "").isalnum() and len(raw_code) <= 80 else "worker_execution_failed"
+            # Persist only fixed, non-sensitive error categories. Exception messages may
+            # contain provider payloads, document excerpts or user-supplied text.
+            if isinstance(exc, PermissionError):
+                code = "permission_denied"
+            elif isinstance(exc, ValueError):
+                code = "invalid_execution_request"
+            elif isinstance(exc, TimeoutError):
+                code = "execution_timeout"
+            else:
+                code = "worker_execution_failed"
             if not lost.is_set():
                 try:
                     self.control.fail_execution(
