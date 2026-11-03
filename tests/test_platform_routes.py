@@ -433,12 +433,16 @@ def test_document_upload_quarantines_scans_extracts_indexes_and_audits(client, m
     audit = client.get(f"/v1/platform/documents/quarantine/{asset_id}/audit", headers=headers)
     assert audit.status_code == 200
     assert [event["action"] for event in audit.json()["events"]] == [
-        "quarantined", "scanner_clean"
+        "quarantined", "scanner_clean", "indexed_document_linked"
     ]
     deleted = client.delete(f"/v1/platform/documents/quarantine/{asset_id}", headers=headers)
     assert deleted.status_code == 200
     audit = client.get(f"/v1/platform/documents/quarantine/{asset_id}/audit", headers=headers)
     assert audit.json()["events"][-1]["action"] == "owner_requested_bytes_deleted"
+    after_delete = client.get("/v1/platform/documents/search", headers=headers,
+                               params={"query": "ingestion evidence"})
+    assert after_delete.status_code == 200
+    assert after_delete.json()["count"] == 0
 
 
 def test_document_upload_fails_closed_when_malware_scanner_is_unavailable(client, monkeypatch):
