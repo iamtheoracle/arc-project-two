@@ -6,6 +6,7 @@ from core.orbits_quarantine import (
     DocumentQuarantineStore, MalwareDetected, MalwareScannerUnavailable,
 )
 from core.tenant_security import TenantSecurityStore
+from core.document_retrieval import DocumentRetrievalStore
 
 
 def provision_identity(database_path, principal="principal-a"):
@@ -14,7 +15,7 @@ def provision_identity(database_path, principal="principal-a"):
     app = security.create_application(tenant, "Application")
     token = security.issue_credential(
         tenant, app, principal,
-        ["orbits.process", "document.index", "document.delete", "document.audit"],
+        ["orbits.process", "document.index", "document.search", "document.delete", "document.audit"],
         ttl_seconds=3600,
     )
     return security.authenticate(token)
@@ -133,3 +134,25 @@ def test_clamav_scan_rejects_unbounded_timeouts(tmp_path):
     from core.orbits_quarantine import clamav_scan
     with pytest.raises(ValueError, match="between 1 and 120"):
         clamav_scan(tmp_path / "document.txt", timeout_seconds=10_000)
+
+
+def test_quarantine_retention_also_deletes_linked_indexed_document(tmp_path):
+    data = b"private retained document content"
+    asset = validate_asset(data, "linked.txt")
+    database = tmp_path / "db.sqlite3"
+    store = DocumentQuarantineStore(
+        str(database), str(tmp_path / "quarantine"), scanner=lambda path: "clean"
+    )
+    who = provision_identity(database)
+    stored = store.ingest(who, asset, data, retention_seconds=60)
+    documents = DocumentRetrievalStore(str(database))
+    document_id = documents.index_text(
+        who, "Linked document", "arc://linked", data.decode(),
+        classification="private", retention_seconds=3600,
+    )
+    assert store.link_document(who, asset.asset_id, document_id) is True
+    assert len(documents.search(who, "retained document")) == 1
+
+    assert store.expire_due(now=stored["expires_at"] + 1) == 1
+    assert documents.search(who, "retained document") == []
+    assert store.audit(who, asset.asset_id)[-1]["action"] == "retention_expired_and_bytes_deleted"
