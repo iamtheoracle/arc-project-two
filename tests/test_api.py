@@ -867,7 +867,7 @@ def test_remote_model_fallback_is_disabled_even_when_credentials_exist_by_defaul
     assert any(provider.startswith("ollama") for provider in providers)
 
 
-def test_remote_model_fallback_requires_explicit_server_opt_in(client, monkeypatch):
+def test_legacy_agent_registry_never_attaches_remote_fallback_even_with_global_opt_in(client, monkeypatch):
     monkeypatch.setenv("ORACLE_ARC_ENABLE_REMOTE_PROVIDER_FALLBACK", "true")
     monkeypatch.setenv("ORACLE_ARC_OPENROUTER_API_KEY", "test-openrouter-key")
     monkeypatch.delenv("ORACLE_ARC_GROQ_API_KEY", raising=False)
@@ -881,9 +881,8 @@ def test_remote_model_fallback_requires_explicit_server_opt_in(client, monkeypat
         for agent in registry.list_agents()
         for connector in agent["connectors"]
     }
-    assert "openrouter" in providers
-    assert "groq" not in providers
-    assert "gemini" not in providers
+    # Remote inference must use a request-scoped privacy policy, not a process-wide fallback flag.
+    assert not {"openrouter", "groq", "gemini"} & providers
 
 
 def test_tool_approval_is_bound_to_current_source_and_schema_fingerprint(client):
