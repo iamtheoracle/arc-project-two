@@ -100,28 +100,38 @@ class VoiceSessionStore:
             details = {}
         if not isinstance(details, dict):
             raise ValueError("Voice event details must be a metadata object")
-        allowed = {
-            "processor_id", "format", "duration_seconds", "size_bytes", "error_code",
-            "model_id", "provider_id", "language", "turn_id", "audio_sha256",
-            "retention_seconds",
+        string_patterns = {
+            "processor_id": r"[a-z][a-z0-9._-]{0,63}",
+            "format": r"[A-Za-z0-9.+/-]{1,64}",
+            "error_code": r"[a-z][a-z0-9_.-]{0,79}",
+            "model_id": r"[A-Za-z0-9._:/@+-]{1,128}",
+            "provider_id": r"[a-z][a-z0-9._-]{0,63}",
+            "language": r"[A-Za-z-]{2,12}",
+            "turn_id": r"[A-Za-z0-9_-]{1,128}",
+            "audio_sha256": r"[0-9a-f]{64}",
         }
+        numeric_fields = {"duration_seconds", "size_bytes", "retention_seconds"}
+        allowed = set(string_patterns) | numeric_fields
         safe_details = {}
         for key, value in details.items():
             if key not in allowed:
                 raise ValueError("Voice events cannot persist transcript, prompt or arbitrary user content")
-            if isinstance(value, str):
-                if len(value) > 128 or any(ord(char) < 32 for char in value):
-                    raise ValueError("Voice event metadata string is invalid")
-            elif isinstance(value, bool) or value is None:
-                pass
-            elif isinstance(value, int):
-                if abs(value) > 2**53:
-                    raise ValueError("Voice event metadata integer is out of range")
-            elif isinstance(value, float):
+            if key in string_patterns:
+                if not isinstance(value, str) or not re.fullmatch(string_patterns[key], value):
+                    raise ValueError("Voice event metadata identifier is invalid")
+            elif key in numeric_fields:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError("Voice event metadata must contain bounded numeric values")
                 if not math.isfinite(value) or abs(value) > 2**53:
                     raise ValueError("Voice event metadata number is out of range")
-            else:
-                raise ValueError("Voice event metadata must contain only bounded scalar values")
+                if key == "duration_seconds" and not 0 < value <= 5 * 60 * 60:
+                    raise ValueError("Voice event duration is outside its limit")
+                if key == "size_bytes" and not 0 <= value <= 25 * 1024 * 1024:
+                    raise ValueError("Voice event size is outside its limit")
+                if key == "retention_seconds" and (
+                    not isinstance(value, int) or not 60 <= value <= 31536000
+                ):
+                    raise ValueError("Voice event retention is outside its limit")
             safe_details[key] = value
         encoded = json.dumps(safe_details, separators=(",", ":"), ensure_ascii=False)
         if len(encoded.encode("utf-8")) > 2048:
