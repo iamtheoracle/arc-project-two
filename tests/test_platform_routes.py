@@ -774,6 +774,9 @@ def test_voice_response_is_queued_through_oracle_execution_control_plane(client,
     assert args[8].startswith("voice-" + session_id + "-")
     assert sessions.get(identity, session_id)["state"] == "awaiting_model"
     events = sessions.events(identity, session_id)
+    assert events[-1]["event_type"] == "oracle.execution.queued"
+    assert events[-1]["details"]["execution_id"] == "exec_voice_12345678"
+    assert events[-1]["details"]["turn_id"].startswith("turn_")
     assert all("course registration" not in str(event) for event in events)
 
 
