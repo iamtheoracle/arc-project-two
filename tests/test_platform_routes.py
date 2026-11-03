@@ -710,3 +710,156 @@ def test_voice_session_transcription_fails_closed_when_scanner_is_unavailable(cl
     assert invoked["asr"] is False
     session = client.get(f"/v1/platform/audio/sessions/{session_id}", headers=headers).json()
     assert session["state"] == "failed"
+
+
+
+def _voice_app_identity(client, capabilities):
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "ORACLE voice turn tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "ORACLE voice turn app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),
+        json={"principal_id": "voice-turn-owner", "capabilities": capabilities},
+    ).json()["credential"]
+    return {"Authorization": "Bearer " + token}, token
+
+
+def _voice_session_awaiting_model(client, headers, token):
+    import core.platform_routes as routes
+    from core.voice_sessions import VoiceSessionStore
+    session_id = client.post("/v1/platform/audio/sessions", headers=headers).json()["session_id"]
+    identity = routes._store().authenticate(token)
+    sessions = VoiceSessionStore(routes.os.environ["ORACLE_ARC_DB_PATH"])
+    for state in ("capturing", "uploaded", "transcribing", "awaiting_model"):
+        sessions.transition(identity, session_id, state)
+    return session_id, identity, sessions
+
+
+def test_voice_response_is_queued_through_oracle_execution_control_plane(client, monkeypatch):
+    import core.platform_routes as routes
+
+    headers, token = _voice_app_identity(client, [
+        "audio.capture", "audio.read", "audio.transcribe", "agent.execute"
+    ])
+    session_id, identity, sessions = _voice_session_awaiting_model(client, headers, token)
+    captured = {}
+
+    class FakeControlPlane:
+        def submit_execution(self, *args):
+            captured["args"] = args
+            return "exec_voice_12345678"
+
+    monkeypatch.setattr(routes, "_control_plane", lambda: FakeControlPlane())
+    response = client.post(
+        f"/v1/platform/audio/sessions/{session_id}/respond",
+        headers=headers,
+        json={
+            "transcript": "What is the deadline for course registration?",
+            "agent_id": "oracle-agent", "agent_version": "1.0.0",
+            "route_id": "local-default",
+        },
+    )
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload["execution_id"] == "exec_voice_12345678"
+    assert payload["status"] == "queued"
+    args = captured["args"]
+    assert args[0] == identity
+    assert args[4]["prompt"] == "What is the deadline for course registration?"
+    assert args[4]["input_mode"] == "voice"
+    assert args[4]["voice_session_id"] == session_id
+    assert args[7] == 2
+    assert args[8].startswith("voice-" + session_id + "-")
+    assert sessions.get(identity, session_id)["state"] == "awaiting_model"
+    events = sessions.events(identity, session_id)
+    assert all("course registration" not in str(event) for event in events)
+
+
+def test_voice_response_synthesizes_only_completed_scoped_oracle_output(client, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    import core.platform_routes as routes
+
+    headers, token = _voice_app_identity(client, [
+        "audio.capture", "audio.read", "audio.synthesize", "agent.execution.read"
+    ])
+    session_id, identity, sessions = _voice_session_awaiting_model(client, headers, token)
+    requested = {}
+
+    class FakeControlPlane:
+        def get_execution(self, who, execution_id):
+            requested["identity"] = who
+            requested["execution_id"] = execution_id
+            return SimpleNamespace(
+                status="succeeded",
+                output_json=json.dumps({"content": "Your registration deadline is Friday."}),
+                model_provider="ollama", model_id="qwen2.5:7b",
+            )
+
+    monkeypatch.setattr(routes, "_control_plane", lambda: FakeControlPlane())
+    monkeypatch.setattr(
+        "core.orbits_tts_runtime.run_local_tts",
+        lambda text, voice_id: {
+            "format": "audio/wav", "audio_base64": "UklGRg==",
+            "sha256": "a" * 64, "inference_location": "local",
+        },
+    )
+    response = client.post(
+        f"/v1/platform/audio/sessions/{session_id}/speak",
+        headers=headers,
+        json={"execution_id": "exec_voice_12345678"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["text"] == "Your registration deadline is Friday."
+    assert payload["state"] == "ready"
+    assert payload["inference_location"] == "local"
+    assert payload["retained"] is False
+    assert requested["identity"] == identity
+    assert requested["execution_id"] == "exec_voice_12345678"
+    assert sessions.get(identity, session_id)["state"] == "ready"
+
+    started = client.post(
+        f"/v1/platform/audio/sessions/{session_id}/playback",
+        headers=headers, json={"outcome": "started"},
+    )
+    assert started.status_code == 200
+    completed = client.post(
+        f"/v1/platform/audio/sessions/{session_id}/playback",
+        headers=headers, json={"outcome": "completed"},
+    )
+    assert completed.status_code == 200
+    assert completed.json()["state"] == "completed"
+    events = sessions.events(identity, session_id)
+    assert [event["state"] for event in events[-4:]] == [
+        "synthesizing", "ready", "playing", "completed"
+    ]
+
+
+def test_voice_response_refuses_queued_or_failed_execution_without_synthesizing(client, monkeypatch):
+    from types import SimpleNamespace
+    import core.platform_routes as routes
+
+    headers, token = _voice_app_identity(client, [
+        "audio.capture", "audio.read", "audio.synthesize", "agent.execution.read"
+    ])
+    session_id, identity, sessions = _voice_session_awaiting_model(client, headers, token)
+    class FakeControlPlane:
+        def get_execution(self, who, execution_id):
+            return SimpleNamespace(status="running", output_json=None,
+                                   model_provider="ollama", model_id="qwen2.5:7b")
+    monkeypatch.setattr(routes, "_control_plane", lambda: FakeControlPlane())
+    called = {"tts": False}
+    monkeypatch.setattr(
+        "core.orbits_tts_runtime.run_local_tts",
+        lambda *args: called.update(tts=True),
+    )
+    response = client.post(
+        f"/v1/platform/audio/sessions/{session_id}/speak",
+        headers=headers, json={"execution_id": "exec_voice_12345678"},
+    )
+    assert response.status_code == 409
+    assert called["tts"] is False
+    assert sessions.get(identity, session_id)["state"] == "awaiting_model"
