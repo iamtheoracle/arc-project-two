@@ -398,6 +398,15 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
     """Run a verified media processor in the isolated ORBITS container."""
     if "orbits.process" not in identity.capabilities:
         raise HTTPException(403, "ORBITS processing capability is not granted")
+    processor_capabilities = {
+        "audio.transcribe": "audio.transcribe",
+        "audio.inspect": "audio.inspect",
+        "document.extract": "document.extract",
+        "image.ocr": "image.ocr",
+    }
+    required_processor_capability = processor_capabilities.get(body.processor_id)
+    if required_processor_capability and required_processor_capability not in identity.capabilities:
+        raise HTTPException(403, f"{required_processor_capability} capability is not granted")
     if body.index_text and body.processor_id == "audio.inspect":
         raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
     try:
