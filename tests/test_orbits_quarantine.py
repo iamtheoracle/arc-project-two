@@ -101,3 +101,31 @@ def test_quarantine_rechecks_credential_revocation_before_storing_bytes(tmp_path
     with pytest.raises(AuthorizationError):
         store.ingest(who, asset, data)
     assert not (tmp_path / "quarantine" / (asset.asset_id + ".bin")).exists()
+
+
+def test_clamav_scan_requires_exact_clean_or_infected_status_suffix(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import core.orbits_quarantine as quarantine
+
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="diagnostic says NOT OK but no file result", stderr="")
+    monkeypatch.setattr(quarantine.subprocess, "run", fake_run)
+    with pytest.raises(MalwareScannerUnavailable):
+        quarantine.clamav_scan(tmp_path / "document.txt")
+
+    monkeypatch.setattr(quarantine.subprocess, "run", lambda command, **kwargs:
+        SimpleNamespace(returncode=0, stdout=f"{command[-1]}: OK", stderr=""))
+    assert quarantine.clamav_scan(tmp_path / "document.txt").endswith(": OK")
+
+    monkeypatch.setattr(quarantine.subprocess, "run", lambda command, **kwargs:
+        SimpleNamespace(returncode=1, stdout=f"{command[-1]}: Eicar-Test-Signature FOUND", stderr=""))
+    with pytest.raises(MalwareDetected):
+        quarantine.clamav_scan(tmp_path / "document.txt")
+
+
+def test_clamav_scan_rejects_unbounded_timeouts(tmp_path):
+    from core.orbits_quarantine import clamav_scan
+    with pytest.raises(ValueError, match="between 1 and 120"):
+        clamav_scan(tmp_path / "document.txt", timeout_seconds=10_000)
