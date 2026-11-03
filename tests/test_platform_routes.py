@@ -94,7 +94,7 @@ def test_document_ingestion_api_requires_document_capability_and_rejects_unsafe_
     assert unsafe.status_code==422
 
 
-def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,monkeypatch):
+def test_orbits_api_runs_registered_processor_and_indexes_extracted_text(client,monkeypatch,tmp_path):
     import base64
     import core.platform_routes as routes
     from core.orbits import build_default_orbits_registry
