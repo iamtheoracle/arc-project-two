@@ -6,7 +6,9 @@ only lifecycle metadata and event details; callers must apply capability checks.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 import time
@@ -92,11 +94,42 @@ class VoiceSessionStore:
         return (identity.tenant_id, identity.application_id, identity.principal_id)
 
     def _event(self, db, identity, session_id, event_type, state, details=None):
+        if not isinstance(event_type, str) or not re.fullmatch(r"[a-z][a-z0-9._-]{0,63}", event_type):
+            raise ValueError("Voice event type is not a normalized identifier")
+        if details is None:
+            details = {}
+        if not isinstance(details, dict):
+            raise ValueError("Voice event details must be a metadata object")
+        allowed = {
+            "processor_id", "format", "duration_seconds", "size_bytes", "error_code",
+            "model_id", "provider_id", "language", "turn_id", "audio_sha256",
+            "retention_seconds",
+        }
+        safe_details = {}
+        for key, value in details.items():
+            if key not in allowed:
+                raise ValueError("Voice events cannot persist transcript, prompt or arbitrary user content")
+            if isinstance(value, str):
+                if len(value) > 128 or any(ord(char) < 32 for char in value):
+                    raise ValueError("Voice event metadata string is invalid")
+            elif isinstance(value, bool) or value is None:
+                pass
+            elif isinstance(value, int):
+                if abs(value) > 2**53:
+                    raise ValueError("Voice event metadata integer is out of range")
+            elif isinstance(value, float):
+                if not math.isfinite(value) or abs(value) > 2**53:
+                    raise ValueError("Voice event metadata number is out of range")
+            else:
+                raise ValueError("Voice event metadata must contain only bounded scalar values")
+            safe_details[key] = value
+        encoded = json.dumps(safe_details, separators=(",", ":"), ensure_ascii=False)
+        if len(encoded.encode("utf-8")) > 2048:
+            raise ValueError("Voice event metadata exceeds its storage limit")
         db.execute("""INSERT INTO arc_voice_events
           (session_id,tenant_id,application_id,principal_id,event_type,state,details_json,created_at)
           VALUES(?,?,?,?,?,?,?,?)""",
-          (session_id, *self._scope(identity), event_type, state,
-           json.dumps(details or {}, separators=(",", ":"), ensure_ascii=False), int(time.time())))
+          (session_id, *self._scope(identity), event_type, state, encoded, int(time.time())))
 
     def create(self, identity) -> dict[str, Any]:
         now = int(time.time())
