@@ -8,6 +8,7 @@ agent-supplied code is never imported or evaluated.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -25,6 +26,8 @@ from core.worker_identity import WorkerIdentityStore
 MAX_MODEL_RESPONSE_BYTES = 100_000
 MAX_TOOL_RESULT_BYTES = 32_000
 MAX_MODEL_CONTEXT_BYTES = 2_000_000
+
+logger = logging.getLogger(__name__)
 
 
 class PlatformWorker:
@@ -544,7 +547,13 @@ class PlatformWorker:
                 result = self.run_once(lease_seconds=lease_seconds)
                 if result is None:
                     stop_event.wait(poll_interval)
-            except Exception:
+            except Exception as exc:
+                # Emit operational evidence without logging provider payloads, prompts,
+                # document excerpts or exception messages that may contain user data.
+                logger.error(
+                    "platform_worker_iteration_failed error_type=%s worker_id=%s",
+                    type(exc).__name__, self.identity.worker_id,
+                )
                 stop_event.wait(min(5.0, max(poll_interval, 0.5)))
 
 
