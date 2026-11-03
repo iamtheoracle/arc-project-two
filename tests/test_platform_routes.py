@@ -789,6 +789,9 @@ def test_voice_response_synthesizes_only_completed_scoped_oracle_output(client, 
         "audio.capture", "audio.read", "audio.synthesize", "agent.execution.read"
     ])
     session_id, identity, sessions = _voice_session_awaiting_model(client, headers, token)
+    sessions.record_event(identity, session_id, "oracle.execution.queued", {
+        "execution_id": "exec_voice_12345678", "turn_id": "turn_12345678",
+    })
     requested = {}
 
     class FakeControlPlane:
@@ -849,6 +852,9 @@ def test_voice_response_refuses_queued_or_failed_execution_without_synthesizing(
         "audio.capture", "audio.read", "audio.synthesize", "agent.execution.read"
     ])
     session_id, identity, sessions = _voice_session_awaiting_model(client, headers, token)
+    sessions.record_event(identity, session_id, "oracle.execution.queued", {
+        "execution_id": "exec_voice_12345678", "turn_id": "turn_12345678",
+    })
     class FakeControlPlane:
         def get_execution(self, who, execution_id):
             return SimpleNamespace(status="running", output_json=None,
