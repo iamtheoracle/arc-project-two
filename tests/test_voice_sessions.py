@@ -68,3 +68,31 @@ def test_voice_session_database_is_private_to_the_service_user(tmp_path):
     store = VoiceSessionStore(database)
     assert stat.S_IMODE(database.stat().st_mode) == 0o600
     assert store.create(identity())["raw_audio_retained"] is False
+
+
+def test_voice_session_events_reject_transcripts_and_arbitrary_user_content(tmp_path):
+    store = VoiceSessionStore(tmp_path / "voice.sqlite3")
+    who = identity()
+    session_id = store.create(who)["session_id"]
+    with pytest.raises(ValueError, match="cannot persist transcript"):
+        store.transition(
+            who, session_id, "capturing", event_type="session.capture",
+            details={"transcript": "private spoken content"},
+        )
+    assert store.get(who, session_id)["state"] == "created"
+    assert len(store.events(who, session_id)) == 1
+
+
+def test_voice_session_event_metadata_is_bounded_and_scalar(tmp_path):
+    store = VoiceSessionStore(tmp_path / "voice.sqlite3")
+    who = identity()
+    session_id = store.create(who)["session_id"]
+    with pytest.raises(ValueError, match="metadata string is invalid"):
+        store.transition(
+            who, session_id, "capturing", details={"format": "x" * 129},
+        )
+    with pytest.raises(ValueError, match="metadata number is out of range"):
+        store.transition(
+            who, session_id, "capturing", details={"duration_seconds": float("inf")},
+        )
+    assert store.get(who, session_id)["state"] == "created"
