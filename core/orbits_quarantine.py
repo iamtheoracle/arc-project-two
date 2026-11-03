@@ -32,7 +32,11 @@ class QuarantineError(RuntimeError):
 
 def clamav_scan(path: Path, timeout_seconds: int = 60) -> str:
     """Return a scanner signature on clean input; fail closed on all scanner errors."""
-    executable = os.environ.get("ORACLE_ARC_CLAMSCAN", "clamscan")
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not 1 <= timeout_seconds <= 120:
+        raise ValueError("ClamAV timeout must be between 1 and 120 seconds")
+    executable = os.environ.get("ORACLE_ARC_CLAMSCAN", "clamscan").strip()
+    if not executable or "\x00" in executable:
+        raise MalwareScannerUnavailable("ClamAV executable is not configured safely")
     try:
         result = subprocess.run(
             [executable, "--no-summary", "--stdout", str(path)],
@@ -45,9 +49,12 @@ def clamav_scan(path: Path, timeout_seconds: int = 60) -> str:
     except subprocess.TimeoutExpired as exc:
         raise MalwareScannerUnavailable("ClamAV scan exceeded its deadline") from exc
     output = (result.stdout + "\n" + result.stderr).strip()
-    if result.returncode == 0 and "OK" in output:
-        return output[-500:]
-    if result.returncode == 1 and "FOUND" in output:
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    # Match ClamAV's complete per-file status suffix, not arbitrary occurrences
+    # of words such as "OK" or "FOUND" in filenames or diagnostic messages.
+    if result.returncode == 0 and any(line.endswith(": OK") for line in lines):
+        return "\n".join(lines[-3:])[-500:]
+    if result.returncode == 1 and any(line.endswith(" FOUND") for line in lines):
         raise MalwareDetected("Malware detected; file remains quarantined")
     raise MalwareScannerUnavailable("ClamAV returned an indeterminate scan result")
 
@@ -98,6 +105,12 @@ class DocumentQuarantineStore:
                     occurred_at INTEGER NOT NULL
                 );
             """)
+        try:
+            Path(self.database_path).chmod(0o600)
+        except OSError:
+            # Existing database locations may be read-only; the storage service
+            # must still fail closed when actual access is denied by the OS.
+            pass
 
     @contextmanager
     def _db(self):
