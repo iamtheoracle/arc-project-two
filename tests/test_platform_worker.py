@@ -686,3 +686,32 @@ def test_worker_persists_only_non_sensitive_error_categories(tmp_path, monkeypat
     assert execution.error_code == "worker_execution_failed"
     assert "private" not in execution.error_code
     assert "example" not in execution.error_code
+
+
+def test_worker_loop_logs_failure_type_without_sensitive_exception_text(tmp_path, caplog):
+    import logging
+
+    database, _, _, _, _, _, _, worker_id, worker_token = provision(tmp_path, tool=False)
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+
+    class StopAfterOneWait:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, timeout):
+            self.stopped = True
+            return True
+
+    def fail_once(**_kwargs):
+        raise RuntimeError("private-user-prompt-and-secret")
+
+    worker.run_once = fail_once
+    stop = StopAfterOneWait()
+    with caplog.at_level(logging.ERROR):
+        worker.run_forever(stop, poll_interval=0.1)
+
+    assert "RuntimeError" in caplog.text
+    assert worker_id in caplog.text
+    assert "private-user-prompt-and-secret" not in caplog.text
