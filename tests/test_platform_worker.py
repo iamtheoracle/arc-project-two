@@ -715,3 +715,40 @@ def test_worker_loop_logs_failure_type_without_sensitive_exception_text(tmp_path
     assert "RuntimeError" in caplog.text
     assert worker_id in caplog.text
     assert "private-user-prompt-and-secret" not in caplog.text
+
+
+def test_worker_rejects_remote_route_when_region_attestation_is_removed(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+        json.dumps({"groq": ["provider-region-1"]}),
+    )
+    database, _, identity, control, _, execution_id, _, worker_id, worker_token = provision(
+        tmp_path, tool=False, provider_id="groq",
+        classification="public", region="provider-region-1",
+    )
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+
+    # The route was valid at configuration and queue time. Remove the operator's
+    # residency attestation before the worker is allowed to transmit prompt data.
+    monkeypatch.delenv("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS")
+    with pytest.raises(PermissionError, match="region is no longer verified"):
+        worker._execution_context(execution_id, worker_id)
+
+
+def test_worker_rejects_remote_route_for_non_public_classification(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+        json.dumps({"groq": ["provider-region-1"]}),
+    )
+    database, _, identity, control, _, execution_id, _, worker_id, worker_token = provision(
+        tmp_path, tool=False, provider_id="groq",
+        classification="public", region="provider-region-1",
+    )
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "UPDATE arc_executions SET classification='private' WHERE execution_id=?",
+            (execution_id,),
+        )
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    with pytest.raises(PermissionError, match="public data"):
+        worker._execution_context(execution_id, worker_id)
