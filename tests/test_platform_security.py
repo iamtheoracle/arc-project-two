@@ -212,3 +212,31 @@ def test_last_source_app_credential_revocation_invalidates_spark_grants(tmp_path
     assert store.shared_memories(destination, source_app) == []
     with pytest.raises(AuthorizationError):
         store.authenticate(token_b)
+
+
+def test_credential_without_share_capability_does_not_preserve_spark_grants(tmp_path):
+    store = TenantSecurityStore(tmp_path / "arc.sqlite3")
+    tenant = store.create_tenant("Tenant")
+    source_app = store.create_application(tenant, "Source")
+    destination_app = store.create_application(tenant, "Destination")
+    source_token = store.issue_credential(
+        tenant, source_app, "principal-1",
+        ["spark.memory.read", "spark.memory.write", "spark.memory.share"],
+    )
+    non_share_token = store.issue_credential(
+        tenant, source_app, "principal-1",
+        ["spark.memory.read", "spark.memory.write"],
+    )
+    destination_token = store.issue_credential(
+        tenant, destination_app, "principal-1",
+        ["spark.memory.read", "spark.memory.read_shared"],
+    )
+    source = store.authenticate(source_token)
+    destination = store.authenticate(destination_token)
+    store.save_memory(source, "Scoped source memory", "project")
+    store.share_memory(source, destination_app, ["project"], "Authorized continuity")
+    assert store.shared_memories(destination, source_app)
+    assert store.revoke_credential(source.credential_id)
+    assert store.shared_memories(destination, source_app) == []
+    # The unrelated active credential remains valid, but cannot preserve grants.
+    assert store.authenticate(non_share_token).principal_id == "principal-1"
