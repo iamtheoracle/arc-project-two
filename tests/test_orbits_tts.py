@@ -35,7 +35,7 @@ def _valid_tts_result():
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(22050)
-        wav_file.writeframes(b"\\x00\\x00" * 2205)
+        wav_file.writeframes(b"\x00\x00" * 2205)
     audio = audio_buffer.getvalue()
     return {
         "synthesis_status": "completed", "inference_location": "local",
@@ -57,7 +57,7 @@ def _fake_piper(monkeypatch):
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
             wav_file.setframerate(22050)
-            wav_file.writeframes(b"\\x00\\x00" * 2205)
+            wav_file.writeframes(b"\x00\x00" * 2205)
 
     monkeypatch.setitem(sys.modules, "piper", types.SimpleNamespace(PiperVoice=FakeVoice))
 
