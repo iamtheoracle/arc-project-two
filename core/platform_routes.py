@@ -416,6 +416,14 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
     try:
         raw = base64.b64decode(body.data_base64, validate=True)
         asset = validate_asset(raw, body.filename, body.mime_type)
+        # Documents must pass the dedicated quarantine -> malware scan -> extraction
+        # pipeline. The generic processor endpoint must never offer a scan bypass,
+        # even when the caller has document.extract or document.index permissions.
+        if asset.media_type == "document" or body.processor_id == "document.extract":
+            raise HTTPException(
+                422,
+                "Documents must use /documents/upload so quarantine and malware scanning run before extraction",
+            )
         registry = build_default_orbits_registry()
         result = registry.process(body.processor_id, asset, raw)
         response = {"asset_id": asset.asset_id, "sha256": asset.sha256,
