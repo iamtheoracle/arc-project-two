@@ -469,3 +469,25 @@ def test_generic_orbits_rejects_document_media_even_for_other_processor(client, 
             "data_base64": base64.b64encode(b"document text").decode("ascii"),
         })
     assert response.status_code == 422
+
+
+def test_generic_orbits_document_extraction_cannot_bypass_quarantine(client, monkeypatch):
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Quarantine enforcement"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Document workflow"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "document-user", "capabilities": [
+            "orbits.process", "document.extract", "document.index"
+        ]},
+    ).json()["credential"]
+    response = client.post("/v1/platform/orbits/process",
+        headers={"Authorization": "Bearer " + token}, json={
+            "processor_id": "document.extract",
+            "filename": "unscanned.txt", "mime_type": "text/plain",
+            "data_base64": base64.b64encode(b"must be quarantined first").decode(),
+            "index_text": True,
+        })
+    assert response.status_code == 403
+    assert "quarantined document upload workflow" in response.json()["detail"]
