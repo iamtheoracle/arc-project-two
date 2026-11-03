@@ -492,6 +492,8 @@ def synthesize_voice_response(session_id: str, body: AudioSpeakRequest,
         raise HTTPException(404, "Voice session not found")
     if session["state"] != "awaiting_model":
         raise HTTPException(409, "Voice session is not awaiting an ORACLE response")
+    if not sessions.execution_linked(identity, session_id, body.execution_id):
+        raise HTTPException(404, "ORACLE execution is not linked to this voice session")
     try:
         execution = _control_plane().get_execution(identity, body.execution_id)
     except PermissionError as exc:
