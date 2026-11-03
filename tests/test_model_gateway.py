@@ -91,9 +91,14 @@ def test_local_llm_uses_gateway_compatibility_facade(monkeypatch):
             self.calls.append(kwargs)
             return {"message": {"content": "local answer"}}
 
-    gateway = FakeGateway()
-    monkeypatch.setattr("core.llm.ModelGateway", lambda **kwargs: gateway)
+    created = []
+    def fake_gateway(**kwargs):
+        gateway = FakeGateway(**kwargs)
+        created.append(gateway)
+        return gateway
+    monkeypatch.setattr("core.llm.ModelGateway", fake_gateway)
     llm = LocalLLM(model="qwen-local", temperature=0.3, host="http://127.0.0.1:11435")
+    gateway = created[0]
     assert gateway.host == "http://127.0.0.1:11435"
     result = llm.chat([{"role": "user", "content": "hello"}])
     assert result["message"]["content"] == "local answer"
