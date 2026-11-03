@@ -297,9 +297,9 @@ class PlatformWorker:
             set_timeout = getattr(gateway, "set_timeout_seconds", None)
             if callable(set_timeout):
                 set_timeout(min(remaining, provider_timeout))
-            context_bytes = sum(
-                len(str(item.get("content", "")).encode("utf-8")) for item in messages
-            )
+            context_bytes = len(json.dumps(
+                messages, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8"))
             if context_bytes > MAX_MODEL_CONTEXT_BYTES:
                 raise ValueError("execution_model_context_size_limit_exceeded")
             response = gateway.chat(
@@ -319,12 +319,12 @@ class PlatformWorker:
             content = self._field(message, "content", "")
             if not isinstance(content, str):
                 content = ""
+            if len(content.encode("utf-8")) > MAX_MODEL_RESPONSE_BYTES:
+                raise ValueError("model_response_size_limit_exceeded")
             calls = self._field(message, "tool_calls", []) or []
             if not calls:
                 if not content.strip():
                     raise RuntimeError("model_empty_response")
-                if len(content.encode("utf-8")) > MAX_MODEL_RESPONSE_BYTES:
-                    raise ValueError("model_response_size_limit_exceeded")
                 return content, usage
             if round_index >= max_tool_rounds:
                 raise RuntimeError("tool_call_round_limit_exceeded")
