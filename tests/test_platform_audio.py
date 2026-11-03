@@ -48,3 +48,41 @@ def test_audio_voice_catalogue_is_capability_scoped():
         assert response.status_code == 403
     finally:
         app.dependency_overrides.pop(require_application, None)
+
+
+def test_orbits_transcription_requires_dedicated_capability():
+    identity = SimpleNamespace(capabilities={"orbits.process"})
+    app.dependency_overrides[require_application] = lambda: identity
+    try:
+        response = TestClient(app).post(
+            "/v1/platform/orbits/process",
+            json={
+                "processor_id": "audio.transcribe",
+                "filename": "meeting.wav",
+                "mime_type": "audio/wav",
+                "data_base64": base64.b64encode(b"audio").decode(),
+            },
+        )
+        assert response.status_code == 403
+        assert "audio.transcribe" in response.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(require_application, None)
+
+
+def test_orbits_audio_inspection_requires_dedicated_capability():
+    identity = SimpleNamespace(capabilities={"orbits.process"})
+    app.dependency_overrides[require_application] = lambda: identity
+    try:
+        response = TestClient(app).post(
+            "/v1/platform/orbits/process",
+            json={
+                "processor_id": "audio.inspect",
+                "filename": "meeting.wav",
+                "mime_type": "audio/wav",
+                "data_base64": base64.b64encode(b"audio").decode(),
+            },
+        )
+        assert response.status_code == 403
+        assert "audio.inspect" in response.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(require_application, None)
