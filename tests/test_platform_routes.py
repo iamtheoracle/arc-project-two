@@ -600,3 +600,113 @@ def test_spark_grant_survives_revocation_when_source_has_another_live_credential
     assert client.get(f"/v1/platform/shared-memories/{source}",headers=destination_headers).json()["data"]
     # The second source credential remains valid, so its principal-owned grant survives.
     assert client.get("/v1/platform/identity",headers={"Authorization":"Bearer "+second}).status_code==200
+
+
+
+def test_voice_session_transcription_uses_local_asr_and_purges_clean_audio(client, monkeypatch, tmp_path):
+    import base64
+    import core.platform_routes as routes
+
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Voice transcription tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Voice transcription app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),
+        json={"principal_id": "voice-owner", "capabilities": [
+            "audio.capture", "audio.transcribe", "audio.read", "orbits.process"
+        ]},
+    ).json()["credential"]
+    headers = {"Authorization": "Bearer " + token}
+    created = client.post("/v1/platform/audio/sessions", headers=headers)
+    assert created.status_code == 201
+    session_id = created.json()["session_id"]
+
+    scan_order = []
+    monkeypatch.setattr(routes, "clamav_scan", lambda path: scan_order.append("scan") or "ClamAV clean")
+    class LocalASRRegistry:
+        def process(self, processor_id, asset, data):
+            scan_order.append("asr")
+            assert processor_id == "audio.transcribe"
+            assert asset.media_type == "audio"
+            assert data.startswith(b"RIFF")
+            return {
+                "text": "The meeting starts at ten in the morning.",
+                "language": "en",
+                "duration_seconds": 3.2,
+                "inference_location": "local",
+            }
+
+    monkeypatch.setattr(routes, "build_default_orbits_registry", lambda: LocalASRRegistry())
+    quarantine_dir = tmp_path / "voice-quarantine"
+    monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR", str(quarantine_dir))
+    audio = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + (b"\x00" * 32)
+    response = client.post(
+        f"/v1/platform/audio/sessions/{session_id}/transcribe",
+        headers=headers,
+        json={
+            "filename": "voice.wav",
+            "mime_type": "audio/wav",
+            "data_base64": base64.b64encode(audio).decode("ascii"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["transcript"] == "The meeting starts at ten in the morning."
+    assert payload["inference_location"] == "local"
+    assert payload["audio_retained"] is False
+    assert payload["state"] == "awaiting_model"
+    assert scan_order == ["scan", "asr"]
+    assert list(quarantine_dir.iterdir()) == []
+
+    events = client.get(
+        f"/v1/platform/audio/sessions/{session_id}/events", headers=headers
+    ).json()["events"]
+    assert events[-1]["state"] == "awaiting_model"
+    assert all("transcript" not in str(event).lower() for event in events)
+    assert all("meeting starts" not in str(event) for event in events)
+
+
+def test_voice_session_transcription_fails_closed_when_scanner_is_unavailable(client, monkeypatch, tmp_path):
+    import base64
+    import core.platform_routes as routes
+
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Voice scanner tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Voice scanner app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(),
+        json={"principal_id": "voice-scanner", "capabilities": [
+            "audio.capture", "audio.transcribe", "audio.read", "orbits.process"
+        ]},
+    ).json()["credential"]
+    headers = {"Authorization": "Bearer " + token}
+    session_id = client.post("/v1/platform/audio/sessions", headers=headers).json()["session_id"]
+    invoked = {"asr": False}
+    class NeverASRRegistry:
+        def process(self, processor_id, asset, data):
+            invoked["asr"] = True
+            return {"text": "must not run"}
+
+    monkeypatch.setattr(routes, "build_default_orbits_registry", lambda: NeverASRRegistry())
+    monkeypatch.setattr(
+        routes, "clamav_scan",
+        lambda path: (_ for _ in ()).throw(routes.MalwareScannerUnavailable("offline")),
+    )
+    monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR", str(tmp_path / "voice-offline"))
+    audio = b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" + (b"\x00" * 32)
+    response = client.post(
+        f"/v1/platform/audio/sessions/{session_id}/transcribe",
+        headers=headers,
+        json={
+            "filename": "voice.wav", "mime_type": "audio/wav",
+            "data_base64": base64.b64encode(audio).decode("ascii"),
+        },
+    )
+    assert response.status_code == 503
+    assert invoked["asr"] is False
+    session = client.get(f"/v1/platform/audio/sessions/{session_id}", headers=headers).json()
+    assert session["state"] == "failed"
