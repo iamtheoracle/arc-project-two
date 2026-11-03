@@ -309,6 +309,34 @@ class DocumentQuarantineStore:
             self._audit(db, row, "indexed_document_linked", int(time.time()))
         return True
 
+    def purge_processed_asset(self, identity, asset_id: str) -> bool:
+        """Immediately remove clean transient media after its isolated processor returns."""
+        identity = self._reauthorize(identity)
+        if not isinstance(asset_id, str) or not re.fullmatch(r"orb_[a-f0-9]{32}", asset_id):
+            raise ValueError("Invalid quarantine asset identifier")
+        with self._db() as db:
+            row = db.execute(
+                """SELECT * FROM arc_document_quarantine WHERE asset_id=? AND tenant_id=?
+                   AND application_id=? AND principal_id=? AND status='clean'""",
+                (asset_id, identity.tenant_id, identity.application_id, identity.principal_id),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["document_id"]:
+                raise QuarantineError("A linked document cannot be purged as transient media")
+            path = self._path(row["stored_name"])
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise QuarantineError("Could not remove transient processed media") from exc
+            now = int(time.time())
+            db.execute(
+                "UPDATE arc_document_quarantine SET status='deleted',deleted_at=? WHERE asset_id=? AND status='clean'",
+                (now, asset_id),
+            )
+            self._audit(db, row, "transient_media_deleted_after_processing", now)
+            return True
+
     def delete(self, identity, asset_id: str) -> bool:
         from core.document_retrieval import DocumentRetrievalStore
         documents = DocumentRetrievalStore(self.database_path)

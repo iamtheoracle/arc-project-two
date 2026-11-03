@@ -108,6 +108,7 @@ class VoiceSessionStore:
             "provider_id": r"[a-z][a-z0-9._-]{0,63}",
             "language": r"[A-Za-z-]{2,12}",
             "turn_id": r"[A-Za-z0-9_-]{1,128}",
+            "execution_id": r"[A-Za-z0-9_-]{8,128}",
             "audio_sha256": r"[0-9a-f]{64}",
         }
         numeric_fields = {"duration_seconds", "size_bytes", "retention_seconds"}
@@ -189,6 +190,33 @@ class VoiceSessionStore:
                         target, details)
         return {"session_id": session_id, "state": target, "version": version,
                 "updated_at": now, "idempotent": False}
+
+    def record_event(self, identity, session_id: str, event_type: str,
+                     details: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Append bounded metadata to an owned session without changing its lifecycle state."""
+        now = int(time.time())
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("""SELECT state FROM arc_voice_sessions WHERE session_id=?
+              AND tenant_id=? AND application_id=? AND principal_id=?""",
+              (session_id, *self._scope(identity))).fetchone()
+            if row is None:
+                raise KeyError("Voice session not found in this principal scope")
+            self._event(db, identity, session_id, event_type, row["state"], details)
+        return {"session_id": session_id, "state": row["state"], "recorded": True,
+                "occurred_at": now}
+
+    def execution_linked(self, identity, session_id: str, execution_id: str) -> bool:
+        """Confirm an ORACLE execution was queued from this exact owned voice session."""
+        if not isinstance(execution_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", execution_id):
+            return False
+        with self._db() as db:
+            row = db.execute("""SELECT 1 FROM arc_voice_events
+              WHERE session_id=? AND tenant_id=? AND application_id=? AND principal_id=?
+              AND event_type='oracle.execution.queued'
+              AND json_extract(details_json, '$.execution_id')=? LIMIT 1""",
+              (session_id, *self._scope(identity), execution_id)).fetchone()
+        return row is not None
 
     def cancel(self, identity, session_id: str) -> dict[str, Any]:
         existing = self.get(identity, session_id)
