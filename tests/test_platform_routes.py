@@ -767,7 +767,8 @@ def test_voice_response_is_queued_through_oracle_execution_control_plane(client,
     assert payload["status"] == "queued"
     args = captured["args"]
     assert args[0] == identity
-    assert args[4]["prompt"] == "What is the deadline for course registration?"
+    assert "spoken conversation" in args[4]["prompt"]
+    assert args[4]["prompt"].endswith("User said: What is the deadline for course registration?")
     assert args[4]["input_mode"] == "voice"
     assert args[4]["voice_session_id"] == session_id
     assert args[7] == 2
