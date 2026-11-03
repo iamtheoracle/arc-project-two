@@ -158,8 +158,10 @@ class DocumentQuarantineStore:
         from core.document_retrieval import DocumentRetrievalStore
         documents = DocumentRetrievalStore(self.database_path)
         current = documents._reauthorize(identity)
+        # Quarantine is required for every ORBITS processor, not only document
+        # indexing. Indexing permissions are checked separately by the indexing
+        # endpoint/store so image and audio processing do not need that grant.
         documents.security.require(current, "orbits.process")
-        documents.security.require(current, "document.index")
         return current
 
     def ingest(self, identity, asset: OrbitAsset, data: bytes,
