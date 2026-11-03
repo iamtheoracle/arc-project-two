@@ -658,3 +658,31 @@ def test_worker_rejects_oversized_registered_tool_result(tmp_path, monkeypatch):
     worker = PlatformWorker(database, worker_token, tool_broker=broker)
     with pytest.raises(ValueError, match="tool_result_size_limit_exceeded"):
         worker.run_once()
+
+
+def test_worker_persists_only_non_sensitive_error_categories(tmp_path, monkeypatch):
+    import core.platform_worker as worker_module
+
+    database, _, identity, control, _, execution_id, _, _, worker_token = provision(
+        tmp_path, tool=False
+    )
+
+    class SensitiveProviderFailure:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            raise RuntimeError("private-user-secret@example.com")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_module, "ModelGateway", SensitiveProviderFailure)
+    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    with pytest.raises(RuntimeError, match="private-user-secret"):
+        worker.run_once()
+
+    execution = control.get_execution(identity, execution_id)
+    assert execution.error_code == "worker_execution_failed"
+    assert "private" not in execution.error_code
+    assert "example" not in execution.error_code
