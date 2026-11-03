@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -311,11 +312,21 @@ def test_expired_lease_recovery_is_application_scoped(tmp_path):
     assert status_b == "running"
 
 
-def test_remote_model_routes_are_public_data_only_until_egress_policy_is_approved(tmp_path):
+def test_remote_model_routes_require_verified_provider_regions_and_public_data(tmp_path, monkeypatch):
     _, _, identity, cp = setup(tmp_path)
     with pytest.raises(PermissionError, match="restricted to public"):
         cp.configure_model_route(identity, "remote-private", "openrouter", "openai/gpt-4o-mini",
-                                 ["public", "private"], ["remote"])
+                                 ["public", "private"], ["eu-west-1"])
+    with pytest.raises(PermissionError, match="no verified execution regions"):
+        cp.configure_model_route(identity, "remote-unverified", "openrouter", "openai/gpt-4o-mini",
+                                 ["public"], ["eu-west-1"])
+
+    monkeypatch.setenv("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+                       json.dumps({"openrouter": ["eu-west-1"]}))
     cp.configure_model_route(identity, "remote-public", "openrouter", "openai/gpt-4o-mini",
-                              ["public"], ["remote"])
-    assert cp.resolve_model_route(identity, "remote-public", "public", "remote")["provider_id"] == "openrouter"
+                              ["public"], ["eu-west-1"])
+    assert cp.resolve_model_route(identity, "remote-public", "public", "eu-west-1")["provider_id"] == "openrouter"
+    monkeypatch.setenv("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+                       json.dumps({"openrouter": ["us-east-1"]}))
+    with pytest.raises(PermissionError, match="no longer verified"):
+        cp.resolve_model_route(identity, "remote-public", "public", "eu-west-1")
