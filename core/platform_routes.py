@@ -510,6 +510,8 @@ def transcribe_voice_session(session_id: str, body: AudioTranscribeRequest,
         raise HTTPException(422, str(exc))
     except (AuthorizationError, PermissionError) as exc:
         raise HTTPException(403, str(exc))
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
     except (OrbitProcessorUnavailable, QuarantineError, RuntimeError, TimeoutError, OSError) as exc:
         try:
             current = sessions.get(identity, session_id)
@@ -519,8 +521,6 @@ def transcribe_voice_session(session_id: str, body: AudioTranscribeRequest,
         except Exception:
             pass
         raise HTTPException(503, "Local audio transcription is unavailable or failed")
-    except VoiceSessionError as exc:
-        raise HTTPException(409, str(exc))
     finally:
         if quarantine is not None and asset is not None and stored is not None and stored.get("status") == "clean":
             try:
