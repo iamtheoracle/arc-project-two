@@ -17,7 +17,7 @@ from typing import Any
 from core.model_gateway import ModelGateway
 from core.reasoning import assess_request, build_reasoning_context
 from core.tenant_security import TenantSecurityStore
-from core.platform_control_plane import PlatformControlPlane
+from core.platform_control_plane import PlatformControlPlane, _verified_remote_regions
 from core.platform_tool_registry import build_platform_tool_broker
 from core.scoped_tool_broker import ScopedToolBroker, ToolContext
 from core.tool_grants import ToolGrantStore
@@ -82,6 +82,14 @@ class PlatformWorker:
         regions = json.loads(row["regions_json"])
         if row["classification"] not in classifications or row["region"] not in regions:
             raise PermissionError("Model route no longer permits this classification or region")
+        if row["model_provider"] != "ollama":
+            if row["classification"] != "public":
+                raise PermissionError("Remote model execution is restricted to public data")
+            # Revalidate operator-attested residency at execution time. A route that
+            # was configured while a region was trusted must fail closed if that
+            # attestation is removed or changed before the worker sends data.
+            if row["region"] not in _verified_remote_regions(row["model_provider"]):
+                raise PermissionError("Remote model execution region is no longer verified")
         return dict(row), {
             "manifest": manifest,
             "route": {"provider_id": row["model_provider"], "model_id": row["model_id"]},
