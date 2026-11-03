@@ -7,6 +7,7 @@ bound server-side to one tenant, application, principal, and capability set.
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import contextmanager
 import hmac
 import secrets
@@ -377,13 +378,23 @@ class TenantSecurityStore:
             # Keep them only while that principal has another live credential
             # in the same app; credentials in unrelated apps do not keep them alive.
             remaining = db.execute(
-                """SELECT 1 FROM arc_credentials
+                """SELECT capabilities_json FROM arc_credentials
                    WHERE tenant_id=? AND application_id=? AND principal_id=?
-                     AND revoked_at IS NULL AND expires_at>? LIMIT 1""",
+                     AND revoked_at IS NULL AND expires_at>?""",
                 (credential["tenant_id"], credential["application_id"],
                  credential["principal_id"], now),
-            ).fetchone()
-            if remaining is None:
+            ).fetchall()
+            # A credential without the sharing capability cannot keep another
+            # credential's SPARK grants alive.
+            has_live_share_authority = False
+            for row in remaining:
+                try:
+                    if "spark.memory.share" in json.loads(row["capabilities_json"]):
+                        has_live_share_authority = True
+                        break
+                except (TypeError, json.JSONDecodeError):
+                    continue
+            if not has_live_share_authority:
                 db.execute(
                     """UPDATE arc_memory_grants
                        SET revoked_at=?, grant_version=grant_version+1
