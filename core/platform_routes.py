@@ -233,6 +233,9 @@ def upload_platform_document(body: DocumentUploadRequest, identity=Depends(requi
             identity, body.title, body.source_uri, extracted, body.classification,
             body.retention_seconds
         )
+        # Bind the extracted record to its scanned source so explicit deletion and
+        # retention expiry remove both the quarantined bytes and indexed text.
+        quarantine.link_document(identity, asset.asset_id, document_id)
         return {
             "asset_id": asset.asset_id, "sha256": asset.sha256,
             "quarantine_status": stored["status"], "expires_at": stored["expires_at"],
