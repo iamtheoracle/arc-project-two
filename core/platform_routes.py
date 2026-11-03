@@ -103,6 +103,7 @@ class OrbitProcessRequest(BaseModel):
     title:str|None=Field(default=None,min_length=1,max_length=240)
     source_uri:str|None=Field(default=None,min_length=1,max_length=2048)
     classification:str="private"
+    retention_seconds:int=Field(default=604800,ge=60,le=31536000)
 
 class TaskCreate(BaseModel):
     agent_id:str=Field(min_length=1,max_length=64)
