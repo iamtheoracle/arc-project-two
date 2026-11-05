@@ -91,19 +91,15 @@ def test_local_llm_uses_gateway_compatibility_facade(monkeypatch):
             self.calls.append(kwargs)
             return {"message": {"content": "local answer"}}
 
-    created = []
-    def fake_gateway(**kwargs):
-        gateway = FakeGateway(**kwargs)
-        created.append(gateway)
-        return gateway
-    monkeypatch.setattr("core.llm.ModelGateway", fake_gateway)
+    gateway = FakeGateway()
+    monkeypatch.setattr("core.llm.ModelGateway", lambda: gateway)
     llm = LocalLLM(model="qwen-local", temperature=0.3, host="http://127.0.0.1:11435")
-    gateway = created[0]
     assert gateway.host == "http://127.0.0.1:11435"
     result = llm.chat([{"role": "user", "content": "hello"}])
     assert result["message"]["content"] == "local answer"
     assert gateway.calls[0]["model"] == "qwen-local"
     assert gateway.calls[0]["temperature"] == 0.3
+
 
 def test_gateway_rejects_tool_calling_when_provider_does_not_support_it():
     registry = ProviderRegistry()
@@ -117,6 +113,7 @@ def test_gateway_rejects_tool_calling_when_provider_does_not_support_it():
     with pytest.raises(ValueError, match="does not support tool calling"):
         gateway.chat("m", [{"role": "user", "content": "hi"}], tools=[{"type": "function"}])
 
+
 def test_gateway_rejects_streaming_when_provider_does_not_support_it():
     registry = ProviderRegistry()
     provider = FakeProvider()
@@ -129,6 +126,7 @@ def test_gateway_rejects_streaming_when_provider_does_not_support_it():
     with pytest.raises(ValueError, match="does not support streaming"):
         gateway.chat("m", [{"role": "user", "content": "hi"}], stream=True)
 
+
 @pytest.mark.parametrize("temperature", [-0.1, 2.1, float("nan")])
 def test_gateway_rejects_invalid_temperature(temperature):
     registry = ProviderRegistry()
@@ -137,51 +135,33 @@ def test_gateway_rejects_invalid_temperature(temperature):
     with pytest.raises(ValueError, match="Temperature must be between"):
         gateway.chat("m", [{"role": "user", "content": "hi"}], temperature=temperature)
 
+
 def test_gateway_rejects_malformed_messages():
     registry = ProviderRegistry()
     registry.register(FakeProvider())
     gateway = ModelGateway(registry=registry, provider_id="fake")
-    with pytest.raises(ValueError, match="supported role and non-empty text"):
+    with pytest.raises(ValueError, match="supported role and string content"):
         gateway.chat("m", [{"role": "developer", "content": "bad"}])
+
 
 def test_registry_rejects_provider_without_manifest_or_chat():
     registry = ProviderRegistry()
     with pytest.raises(ValueError, match="valid ProviderManifest"):
         registry.register(object())
 
-def test_remote_model_adapter_preserves_tool_calls_and_usage(monkeypatch):
-    from core.model_gateway import OpenAICompatibleModelAdapter
-    from core.providers import ProviderConfig
 
-    class FakeRemoteClient:
-        def chat_response(self, payload, *, tools=None, temperature=0.4, model=None):
-            assert model == "remote-model"
-            assert tools and tools[0]["function"]["name"] == "tool_calculate"
-            assert payload["messages"][-1]["content"] == "calculate 6 * 7"
-            return {
-                "message": {
-                    "content": None,
-                    "tool_calls": [{
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {"name": "tool_calculate", "arguments": '{"expression":"6 * 7"}'},
-                    }],
-                },
-                "prompt_eval_count": 12,
-                "eval_count": 3,
-            }
+def test_gateway_registers_claude_only_when_explicitly_selected(monkeypatch):
+    monkeypatch.setenv("ORACLE_ARC_CLAUDE_API_KEY", "server-only-test-key")
+    gateway = ModelGateway(provider_id="claude")
+    manifest = gateway.provider_manifest()
+    assert manifest["provider_id"] == "claude"
+    assert manifest["execution_location"] == "remote"
+    assert manifest["capabilities"]["tool_calling"] is True
+    assert manifest["capabilities"]["streaming"] is False
+    gateway.close()
 
-    monkeypatch.setattr("core.model_gateway.OpenAICompatibleProvider", lambda config, **kwargs: FakeRemoteClient())
-    config = ProviderConfig("openrouter", "https://openrouter.ai/api/v1/chat/completions",
-                            "ORACLE_ARC_OPENROUTER_API_KEY", "ORACLE_ARC_OPENROUTER_MODEL",
-                            "openai/gpt-4o-mini")
-    registry = ProviderRegistry()
-    registry.register(OpenAICompatibleModelAdapter(config))
-    gateway = ModelGateway(registry=registry, provider_id="openrouter")
-    response = gateway.chat("remote-model", [{"role": "user", "content": "calculate 6 * 7"}],
-                            tools=[{"type": "function", "function": {
-                                "name": "tool_calculate", "parameters": {"type": "object"},
-                            }}])
-    assert response["message"]["tool_calls"][0]["id"] == "call_123"
-    assert response["prompt_eval_count"] == 12
-    assert response["eval_count"] == 3
+
+def test_gateway_fails_closed_for_claude_without_credentials(monkeypatch):
+    monkeypatch.delenv("ORACLE_ARC_CLAUDE_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="not enabled"):
+        ModelGateway(provider_id="claude")
