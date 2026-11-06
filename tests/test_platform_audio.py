@@ -86,3 +86,17 @@ def test_orbits_audio_inspection_requires_dedicated_capability():
         assert "audio.inspect" in response.json()["detail"]
     finally:
         app.dependency_overrides.pop(require_application, None)
+
+def test_voice_catalogue_does_not_claim_tts_ready_from_env_path(monkeypatch, tmp_path):
+    identity = SimpleNamespace(capabilities={"audio.synthesize"})
+    app.dependency_overrides[require_application] = lambda: identity
+    monkeypatch.setenv("ORACLE_ARC_TTS_MODEL_DIR", str(tmp_path / "missing-model"))
+    try:
+        response = TestClient(app).get("/v1/platform/audio/voices")
+        assert response.status_code == 200
+        voice = response.json()["voices"][0]
+        assert voice["configuration_status"] == "not_configured"
+        assert voice["runtime_health"] == "not_probed"
+        assert voice["real_inference_verified"] is False
+    finally:
+        app.dependency_overrides.pop(require_application, None)
