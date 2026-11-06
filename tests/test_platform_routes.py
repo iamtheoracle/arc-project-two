@@ -930,3 +930,26 @@ def test_concierge_workflow_status_api_returns_scoped_durable_history(client):
     assert history.json()["provider_outcome"] == "not_started"
     assert history.json()["retry_allowed"] is True
     assert history.json()["events"][0]["event_type"] == "workflow.planned"
+
+
+def test_concierge_cancel_api_requires_scoped_cancel_capability(client):
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Concierge cancellation tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Concierge cancellation app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "concierge-cancel-user", "capabilities": [
+            "concierge.workflow.plan", "concierge.workflow.read", "concierge.workflow.cancel"
+        ]},
+    ).json()["credential"]
+    headers = {"Authorization": "Bearer " + token}
+    planned = client.post("/v1/platform/concierge/workflows", headers=headers, json={
+        "action": {"kind": "booking.create", "provider": "provider",
+                   "parameters": {"slot": "slot-cancel"}, "consequential": True}
+    })
+    workflow_id = planned.json()["workflow_id"]
+    cancelled = client.post(f"/v1/platform/concierge/workflows/{workflow_id}/cancel", headers=headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert client.get(f"/v1/platform/concierge/workflows/{workflow_id}", headers=headers).json()["status"] == "cancelled"
