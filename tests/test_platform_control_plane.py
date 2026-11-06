@@ -16,10 +16,13 @@ CAPS = [
 ]
 
 
-def setup(tmp_path, name="Tenant A", app="APP"):
+def setup(tmp_path, name="Tenant A", app="APP", extra_capabilities=()):
     path = str(tmp_path / "platform.sqlite3")
     identities = TenantIdentityStore(path)
-    issued = identities.provision(name, app, "principal-" + name.lower().replace(" ", "-"), CAPS)
+    issued = identities.provision(
+        name, app, "principal-" + name.lower().replace(" ", "-"),
+        CAPS + list(extra_capabilities),
+    )
     identity = identities.authenticate(issued["secret"])
     # Tests model the separate owner grant plane; application capabilities alone
     # must not silently authorize a tool.
@@ -165,10 +168,9 @@ def test_worker_heartbeat_extends_only_current_unexpired_lease(tmp_path):
 
 
 def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
-    _, ids, identity, cp = setup(tmp_path)
-    issued = ids.provision("Tenant A", "APP", "principal-cancel",
-                           CAPS + ["agent.execution.cancel"])
-    identity = ids.authenticate(issued["secret"])
+    _, ids, identity, cp = setup(
+        tmp_path, extra_capabilities=["agent.execution.cancel"]
+    )
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
