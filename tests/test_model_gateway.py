@@ -161,6 +161,8 @@ def test_remote_model_adapter_preserves_tool_calls_and_usage(monkeypatch):
     from core.providers import ProviderConfig
 
     class FakeRemoteClient:
+        configured = True  # Mirrors a remote client with test credentials configured.
+
         def chat_response(self, payload, *, tools=None, temperature=0.4, model=None):
             assert model == "remote-model"
             assert tools and tools[0]["function"]["name"] == "tool_calculate"
