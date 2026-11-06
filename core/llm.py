@@ -14,8 +14,9 @@ class LocalLLM:
     ):
         self.model = model
         self.temperature = temperature
-        # Preserve test and downstream compatibility when no per-agent host is supplied.
-        self.gateway = ModelGateway(host=host) if host else ModelGateway()
+        # This compatibility facade is intentionally local-only. Remote providers must
+        # be selected through PrivacyAwareModelGateway or the policy-checked platform worker.
+        self.gateway = ModelGateway(provider_id="ollama", host=host)
 
     def chat(
         self,
