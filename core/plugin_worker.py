@@ -99,8 +99,9 @@ def main():
         result = execute_payload(payload)
         print(json.dumps({"result": result}, separators=(",", ":"), allow_nan=False))
     except (ValueError, ArithmeticError, TypeError, OverflowError):
-        # Return a bounded model-visible result, never the expression or host details.
-        print(json.dumps({"result": "Calculation error: invalid or out-of-range expression"}))
+        # A rejected expression is a failed tool call, never a successful result.
+        print(json.dumps({"error": "Calculation failed"}))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

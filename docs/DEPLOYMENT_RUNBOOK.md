@@ -41,7 +41,7 @@ The worker is the only process that should invoke Podman. Keep its Linux user, r
 - Keep `ORACLE_ARC_DB_PATH` and `ORACLE_ARC_TENANT_IDENTITY_DB_PATH` separate.
 - Use a persistent local disk with restrictive filesystem permissions and scheduled, tested SQLite backups.
 - Ollama is the local route for private data.
-- OpenRouter, Groq and Gemini routes are restricted to public-classified data until a provider-specific data-processing, residency and egress policy is approved.
+- OpenRouter, Groq, Gemini and Claude routes are restricted to public-classified data until a provider-specific data-processing, residency and egress policy is approved.
 - Do not interpret the execution `region` label as a guarantee of the remote provider's physical processing region.
 
 ## Project One owner BFF

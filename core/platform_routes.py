@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import base64
 import hmac
+import hashlib
 import os
 from pathlib import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -89,6 +90,35 @@ class DocumentUploadRequest(BaseModel):
     classification:str="private"
     retention_seconds:int=Field(default=604800,ge=60,le=31536000)
 
+class AudioSynthesizeRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    voice_id: str = Field(default="local-default", min_length=1, max_length=64)
+
+
+class AudioTranscribeRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=180)
+    mime_type: str | None = Field(default=None, max_length=128)
+    data_base64: str = Field(min_length=4, max_length=36000000)
+
+
+class AudioRespondRequest(BaseModel):
+    transcript: str = Field(min_length=1, max_length=100000)
+    agent_id: str = Field(min_length=2, max_length=64)
+    agent_version: str = Field(min_length=5, max_length=80)
+    route_id: str = Field(min_length=2, max_length=64)
+    classification: str = Field(default="private", min_length=1, max_length=32)
+    region: str = Field(default="local", min_length=1, max_length=64)
+
+
+class AudioSpeakRequest(BaseModel):
+    execution_id: str = Field(min_length=8, max_length=128)
+    voice_id: str = Field(default="local-default", min_length=1, max_length=64)
+
+
+class AudioPlaybackRequest(BaseModel):
+    outcome: str = Field(min_length=1, max_length=16)
+
+
 class OrbitProcessRequest(BaseModel):
     processor_id:str=Field(min_length=1,max_length=64)
     filename:str=Field(min_length=1,max_length=180)
@@ -98,6 +128,7 @@ class OrbitProcessRequest(BaseModel):
     title:str|None=Field(default=None,min_length=1,max_length=240)
     source_uri:str|None=Field(default=None,min_length=1,max_length=2048)
     classification:str="private"
+    retention_seconds:int=Field(default=604800,ge=60,le=31536000)
 
 class TaskCreate(BaseModel):
     agent_id:str=Field(min_length=1,max_length=64)
@@ -227,6 +258,9 @@ def upload_platform_document(body: DocumentUploadRequest, identity=Depends(requi
             identity, body.title, body.source_uri, extracted, body.classification,
             body.retention_seconds
         )
+        # Bind the extracted record to its scanned source so explicit deletion and
+        # retention expiry remove both the quarantined bytes and indexed text.
+        quarantine.link_document(identity, asset.asset_id, document_id)
         return {
             "asset_id": asset.asset_id, "sha256": asset.sha256,
             "quarantine_status": stored["status"], "expires_at": stored["expires_at"],
@@ -312,37 +346,445 @@ def delete_platform_document(document_id: str, identity=Depends(require_applicat
         raise HTTPException(403, str(exc))
 
 
+@router.get("/audio/voices")
+def list_local_audio_voices(identity=Depends(require_application)):
+    if "audio.synthesize" not in identity.capabilities:
+        raise HTTPException(403, "Audio synthesis capability is not granted")
+    # Presence of an environment variable is not proof that model assets,
+    # the worker image, or real inference are ready.
+    model_dir = os.environ.get("ORACLE_ARC_TTS_MODEL_DIR", "").strip()
+    model_path = Path(model_dir).expanduser()
+    required = ("voice.onnx", "voice.onnx.json", "oracle-arc-tts-manifest.json")
+    assets_present = (
+        bool(model_dir) and model_path.is_absolute() and model_path.is_dir()
+        and all((model_path / name).is_file() for name in required)
+    )
+    return {"voices": [{
+        "voice_id": "local-default",
+        "engine": "piper",
+        "configuration_status": "model_assets_present" if assets_present else "not_configured",
+        "runtime_health": "not_probed",
+        "real_inference_verified": False,
+        "inference_location": "local",
+    }]}
+
+
+@router.post("/audio/synthesize", status_code=200)
+def synthesize_platform_audio(body: AudioSynthesizeRequest, identity=Depends(require_application)):
+    """Synthesize a short response using the separately installed local TTS worker."""
+    if "audio.synthesize" not in identity.capabilities:
+        raise HTTPException(403, "Audio synthesis capability is not granted")
+    if body.voice_id != "local-default":
+        raise HTTPException(422, "Requested voice is not in the reviewed local voice catalogue")
+    try:
+        from core.orbits_tts_runtime import run_local_tts
+        result = run_local_tts(body.text, body.voice_id)
+        return {"voice_id": body.voice_id, "audio": result,
+                "delivery": "ephemeral", "retained": False}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        raise HTTPException(503, "Local speech synthesis is unavailable or failed")
+
+
+@router.post("/audio/sessions", status_code=201)
+def create_voice_session(identity=Depends(require_application)):
+    """Create a durable, principal-scoped voice session; raw audio is not retained."""
+    if "audio.capture" not in identity.capabilities:
+        raise HTTPException(403, "Audio capture capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    return VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).create(identity)
+
+
+@router.get("/audio/sessions/{session_id}")
+def get_voice_session(session_id: str, identity=Depends(require_application)):
+    if "audio.read" not in identity.capabilities:
+        raise HTTPException(403, "Audio session read capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    session = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    return session
+
+
+@router.get("/audio/sessions/{session_id}/events")
+def get_voice_session_events(session_id: str, after: int = 0, limit: int = 100,
+                              identity=Depends(require_application)):
+    if "audio.read" not in identity.capabilities:
+        raise HTTPException(403, "Audio session read capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    try:
+        events = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).events(
+            identity, session_id, after, limit)
+        return {"events": events, "count": len(events)}
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/cancel")
+def cancel_voice_session(session_id: str, identity=Depends(require_application)):
+    if "audio.cancel" not in identity.capabilities:
+        raise HTTPException(403, "Audio session cancellation capability is not granted")
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    try:
+        return VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).cancel(
+            identity, session_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/respond", status_code=202)
+def submit_voice_response(session_id: str, body: AudioRespondRequest,
+                          identity=Depends(require_application)):
+    """Queue a spoken turn through the normal authenticated ORACLE execution worker."""
+    if "audio.transcribe" not in identity.capabilities:
+        raise HTTPException(403, "Audio transcription capability is not granted")
+    if "agent.execute" not in identity.capabilities:
+        raise HTTPException(403, "Agent execution capability is not granted")
+    from core.voice_sessions import VoiceSessionStore
+    sessions = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    session = sessions.get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    if session["state"] != "awaiting_model":
+        raise HTTPException(409, "Voice session must have a completed transcript before model execution")
+    transcript = body.transcript.strip()
+    if not transcript:
+        raise HTTPException(422, "Transcript cannot be blank")
+    digest = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+    execution_payload = {
+        "prompt": (
+            "This is a spoken conversation. Reply in natural, concise spoken language. "
+            "Avoid Markdown, tables, code blocks and visual-only formatting. Keep the "
+            "spoken reply under 4,000 characters.\n\nUser said: " + transcript
+        ),
+        "input_mode": "voice",
+        "voice_session_id": session_id,
+    }
+    try:
+        execution_id = _control_plane().submit_execution(
+            identity, body.agent_id, body.agent_version, body.route_id,
+            execution_payload, body.classification, body.region, 2,
+            "voice-" + session_id + "-" + digest[:24],
+        )
+        turn_id = "turn_" + hashlib.sha256(
+            (session_id + ":" + execution_id).encode("utf-8")
+        ).hexdigest()[:24]
+        sessions.record_event(identity, session_id, "oracle.execution.queued", {
+            "turn_id": turn_id, "execution_id": execution_id,
+        })
+        return {
+            "session_id": session_id, "execution_id": execution_id,
+            "status": "queued", "next_action": "poll_execution_then_speak",
+        }
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except LookupError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/speak", status_code=200)
+def synthesize_voice_response(session_id: str, body: AudioSpeakRequest,
+                              identity=Depends(require_application)):
+    """Read a completed principal-owned ORACLE execution and synthesize it locally."""
+    if "audio.synthesize" not in identity.capabilities:
+        raise HTTPException(403, "Audio synthesis capability is not granted")
+    if "agent.execution.read" not in identity.capabilities:
+        raise HTTPException(403, "Execution read capability is not granted")
+    if body.voice_id != "local-default":
+        raise HTTPException(422, "Requested voice is not in the reviewed local voice catalogue")
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    sessions = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    session = sessions.get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    if session["state"] != "awaiting_model":
+        raise HTTPException(409, "Voice session is not awaiting an ORACLE response")
+    if not sessions.execution_linked(identity, session_id, body.execution_id):
+        raise HTTPException(404, "ORACLE execution is not linked to this voice session")
+    try:
+        execution = _control_plane().get_execution(identity, body.execution_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except LookupError as exc:
+        raise HTTPException(404, "ORACLE execution not found in this principal scope")
+    if execution.status != "succeeded" or not execution.output_json:
+        if execution.status in {"queued", "running"}:
+            raise HTTPException(409, "ORACLE execution is still running")
+        raise HTTPException(409, "ORACLE execution did not complete successfully")
+    try:
+        output = json.loads(execution.output_json)
+    except (TypeError, ValueError):
+        raise HTTPException(502, "ORACLE execution returned an invalid response")
+    response_text = output.get("content") if isinstance(output, dict) else None
+    if not isinstance(response_text, str) or not response_text.strip() or len(response_text) > 4000:
+        raise HTTPException(502, "ORACLE response is empty or exceeds the speech response limit")
+    turn_id = "turn_" + hashlib.sha256(
+        (session_id + ":" + body.execution_id).encode("utf-8")
+    ).hexdigest()[:24]
+    try:
+        sessions.transition(identity, session_id, "synthesizing",
+                            "oracle.response.ready", {
+                                "turn_id": turn_id, "provider_id": execution.model_provider,
+                                "model_id": execution.model_id,
+                            })
+        from core.orbits_tts_runtime import run_local_tts
+        audio = run_local_tts(response_text, body.voice_id)
+        sessions.transition(identity, session_id, "ready",
+                            "audio.speech.ready", {
+                                "turn_id": turn_id, "processor_id": "audio.synthesize",
+                            })
+        return {
+            "session_id": session_id, "execution_id": body.execution_id,
+            "turn_id": turn_id, "state": "ready",
+            "text": response_text, "voice_id": body.voice_id,
+            "audio": audio, "delivery": "ephemeral", "retained": False,
+            "inference_location": "local",
+        }
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        try:
+            sessions.transition(identity, session_id, "failed", "audio.speech.failed",
+                                {"error_code": "invalid_speech_response"})
+        except Exception:
+            pass
+        raise HTTPException(422, str(exc))
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        try:
+            sessions.transition(identity, session_id, "failed", "audio.speech.failed",
+                                {"error_code": "local_speech_unavailable"})
+        except Exception:
+            pass
+        raise HTTPException(503, "Local speech synthesis is unavailable or failed")
+
+
+@router.post("/audio/sessions/{session_id}/playback", status_code=200)
+def acknowledge_voice_playback(session_id: str, body: AudioPlaybackRequest,
+                               identity=Depends(require_application)):
+    """Record only playback outcome metadata; audio bytes and spoken text are not stored."""
+    if "audio.read" not in identity.capabilities:
+        raise HTTPException(403, "Audio session capability is not granted")
+    if body.outcome not in {"started", "completed", "interrupted"}:
+        raise HTTPException(422, "Playback outcome must be started, completed or interrupted")
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    sessions = VoiceSessionStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+    if sessions.get(identity, session_id) is None:
+        raise HTTPException(404, "Voice session not found")
+    try:
+        if body.outcome == "started":
+            result = sessions.transition(identity, session_id, "playing", "audio.playback.started")
+        elif body.outcome == "completed":
+            current = sessions.get(identity, session_id)
+            if current and current["state"] == "ready":
+                sessions.transition(identity, session_id, "playing", "audio.playback.started")
+            result = sessions.transition(identity, session_id, "completed", "audio.playback.completed")
+        else:
+            current = sessions.get(identity, session_id)
+            if current and current["state"] == "ready":
+                sessions.transition(identity, session_id, "playing", "audio.playback.started")
+            result = sessions.transition(identity, session_id, "interrupted", "audio.playback.interrupted")
+        return result
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/audio/sessions/{session_id}/transcribe", status_code=200)
+def transcribe_voice_session(session_id: str, body: AudioTranscribeRequest,
+                             identity=Depends(require_application)):
+    """Transcribe a session upload using the installed offline ASR processor.
+
+    The transcript is returned to the authenticated caller but is never written
+    to the voice event journal. Clean source bytes are purged immediately after
+    processing; infected or indeterminate scans remain quarantined for audit.
+    """
+    if "audio.transcribe" not in identity.capabilities:
+        raise HTTPException(403, "Audio transcription capability is not granted")
+    if "orbits.process" not in identity.capabilities:
+        raise HTTPException(403, "ORBITS processing capability is not granted")
+
+    from core.voice_sessions import VoiceSessionStore, VoiceSessionError
+    database = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+    sessions = VoiceSessionStore(database)
+    session = sessions.get(identity, session_id)
+    if session is None:
+        raise HTTPException(404, "Voice session not found")
+    initial_state = session["state"]
+    if initial_state not in {"created", "interrupted", "capturing", "uploaded"}:
+        raise HTTPException(409, "Voice session is not ready to accept an audio upload")
+
+    quarantine = None
+    asset = None
+    stored = None
+    try:
+        raw = base64.b64decode(body.data_base64, validate=True)
+        asset = validate_asset(raw, body.filename, body.mime_type)
+        if asset.media_type != "audio":
+            raise HTTPException(422, "Voice transcription accepts recognized audio files only")
+
+        if initial_state in {"created", "interrupted"}:
+            sessions.transition(identity, session_id, "capturing")
+        quarantine = DocumentQuarantineStore(database, scanner=clamav_scan)
+        # The quarantine retention is a fallback cleanup window. A clean upload
+        # is purged immediately after inference; malware/indeterminate scans
+        # remain quarantined and auditable until this short expiry.
+        stored = quarantine.ingest(identity, asset, raw, 60)
+        if initial_state != "uploaded":
+            sessions.transition(identity, session_id, "uploaded", "audio.uploaded", {
+                "format": asset.mime_type, "size_bytes": asset.size_bytes,
+                "audio_sha256": asset.sha256, "retention_seconds": 60,
+            })
+        sessions.transition(identity, session_id, "transcribing", "audio.transcription.started", {
+            "processor_id": "audio.transcribe", "format": asset.mime_type,
+            "size_bytes": asset.size_bytes,
+        })
+
+        registry = build_default_orbits_registry()
+        result = registry.process("audio.transcribe", asset, raw)
+        transcript = result.get("text") if isinstance(result, dict) else None
+        if not isinstance(transcript, str) or not transcript.strip() or len(transcript) > 100000:
+            raise RuntimeError("Local ASR returned an invalid transcript contract")
+
+        details = {
+            "processor_id": "audio.transcribe", "format": asset.mime_type,
+            "size_bytes": asset.size_bytes,
+        }
+        if isinstance(result.get("language"), str):
+            details["language"] = result["language"]
+        if isinstance(result.get("duration_seconds"), (int, float)) and not isinstance(result.get("duration_seconds"), bool):
+            details["duration_seconds"] = result["duration_seconds"]
+        details["audio_sha256"] = asset.sha256
+        sessions.transition(identity, session_id, "awaiting_model", "audio.transcription.completed", details)
+        return {
+            "session_id": session_id, "state": "awaiting_model",
+            "transcript": transcript, "language": result.get("language"),
+            "duration_seconds": result.get("duration_seconds"),
+            "inference_location": "local", "audio_retained": False,
+            "quarantine_status": stored["status"],
+        }
+    except HTTPException:
+        try:
+            current = sessions.get(identity, session_id)
+            if current and current["state"] not in {"cancelled", "failed", "completed", "awaiting_model"}:
+                sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                    {"error_code": "invalid_audio_request"})
+        except Exception:
+            pass
+        raise
+    except MalwareDetected as exc:
+        try:
+            sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                {"error_code": "malware_detected"})
+        except Exception:
+            pass
+        raise HTTPException(422, str(exc))
+    except MalwareScannerUnavailable as exc:
+        try:
+            sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                {"error_code": "malware_scanner_unavailable"})
+        except Exception:
+            pass
+        raise HTTPException(503, str(exc))
+    except (OrbitAssetRejected, ValueError) as exc:
+        try:
+            current = sessions.get(identity, session_id)
+            if current and current["state"] not in {"cancelled", "failed", "completed", "awaiting_model"}:
+                sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                    {"error_code": "invalid_audio"})
+        except Exception:
+            pass
+        raise HTTPException(422, str(exc))
+    except (AuthorizationError, PermissionError) as exc:
+        raise HTTPException(403, str(exc))
+    except VoiceSessionError as exc:
+        raise HTTPException(409, str(exc))
+    except (OrbitProcessorUnavailable, QuarantineError, RuntimeError, TimeoutError, OSError) as exc:
+        try:
+            current = sessions.get(identity, session_id)
+            if current and current["state"] not in {"cancelled", "failed", "completed", "awaiting_model"}:
+                sessions.transition(identity, session_id, "failed", "audio.transcription.failed",
+                                    {"error_code": "local_transcription_unavailable"})
+        except Exception:
+            pass
+        raise HTTPException(503, "Local audio transcription is unavailable or failed")
+    finally:
+        if quarantine is not None and asset is not None and stored is not None and stored.get("status") == "clean":
+            try:
+                if not quarantine.purge_processed_asset(identity, asset.asset_id):
+                    raise QuarantineError("Transient audio asset was not available for secure deletion")
+            except AuthorizationError as exc:
+                raise HTTPException(403, "Application authorization changed during audio processing") from exc
+            except QuarantineError as exc:
+                raise HTTPException(503, "Transient audio could not be securely removed") from exc
+
+
 @router.post("/orbits/process", status_code=200)
 def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_application)):
     """Run a verified media processor in the isolated ORBITS container."""
     if "orbits.process" not in identity.capabilities:
         raise HTTPException(403, "ORBITS processing capability is not granted")
+    processor_capabilities = {
+        "audio.transcribe": "audio.transcribe",
+        "audio.inspect": "audio.inspect",
+        "document.extract": "document.extract",
+        "image.ocr": "image.ocr",
+    }
+    required_processor_capability = processor_capabilities.get(body.processor_id)
+    if required_processor_capability and required_processor_capability not in identity.capabilities:
+        raise HTTPException(403, f"{required_processor_capability} capability is not granted")
+    # Document extraction must pass through /documents/upload so bytes are
+    # quarantined and malware-scanned before any parser sees them.
+    if body.processor_id == "document.extract":
+        raise HTTPException(403, "Document extraction requires the quarantined document upload workflow")
     if body.index_text and body.processor_id == "audio.inspect":
         raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
+    if body.index_text and "document.index" not in identity.capabilities:
+        raise HTTPException(403, "Document indexing capability is not granted")
     try:
         raw = base64.b64decode(body.data_base64, validate=True)
         asset = validate_asset(raw, body.filename, body.mime_type)
+        # Documents must pass the dedicated quarantine -> malware scan -> extraction
+        # pipeline. The generic processor endpoint must never offer a scan bypass,
+        # even when the caller has document.extract or document.index permissions.
+        if asset.media_type == "document" or body.processor_id == "document.extract":
+            raise HTTPException(
+                422,
+                "Documents must use /documents/upload so quarantine and malware scanning run before extraction",
+            )
+        database = os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")
+        # Every accepted ORBITS asset is quarantined and malware-scanned before
+        # the isolated processor receives its bytes. This applies to images and
+        # audio as well as the dedicated document-upload path.
+        quarantine = DocumentQuarantineStore(
+            database, scanner=clamav_scan
+        )
+        stored = quarantine.ingest(identity, asset, raw, body.retention_seconds)
         registry = build_default_orbits_registry()
         result = registry.process(body.processor_id, asset, raw)
         response = {"asset_id": asset.asset_id, "sha256": asset.sha256,
                     "media_type": asset.media_type, "processor_id": body.processor_id,
-                    "result": result}
+                    "quarantine_status": stored["status"],
+                    "expires_at": stored["expires_at"], "result": result}
         if body.index_text:
             if asset.media_type == "audio":
                 raise HTTPException(422, "Audio metadata inspection does not produce a transcript to index")
-            if "document.index" not in identity.capabilities:
-                raise HTTPException(403, "Document indexing capability is not granted")
             extracted = result.get("text")
             if not isinstance(extracted, str) or not extracted.strip():
                 raise HTTPException(422, "The processor did not produce indexable text")
-            store = DocumentRetrievalStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3"))
+            store = DocumentRetrievalStore(database)
             document_id = store.index_text(
                 identity,
                 body.title or body.filename,
                 body.source_uri or f"arc://orbits/{asset.asset_id}",
                 extracted,
                 body.classification,
+                body.retention_seconds,
             )
+            quarantine.link_document(identity, asset.asset_id, document_id)
             response["document_id"] = document_id
             response["indexed"] = True
         return response
@@ -352,6 +794,10 @@ def process_orbits_asset(body: OrbitProcessRequest, identity=Depends(require_app
         raise HTTPException(422, str(exc))
     except AuthorizationError as exc:
         raise HTTPException(403, str(exc))
+    except MalwareDetected as exc:
+        raise HTTPException(422, str(exc))
+    except (MalwareScannerUnavailable, QuarantineError) as exc:
+        raise HTTPException(503, str(exc))
     except OrbitProcessorUnavailable as exc:
         raise HTTPException(503, str(exc))
     except (RuntimeError, TimeoutError, OSError) as exc:
@@ -403,6 +849,27 @@ def plan_concierge_workflow(body:ConciergePlan,identity=Depends(require_applicat
         return result
     except ConciergeError as exc:
         raise HTTPException(422,str(exc))
+
+@router.post("/concierge/workflows/{workflow_id}/cancel")
+def cancel_concierge_workflow(workflow_id: str, identity=Depends(require_application)):
+    try:
+        return ConciergeWorkflowStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).cancel(
+            identity, workflow_id)
+    except ConciergeError as exc:
+        message = str(exc)
+        status_code = 403 if "capability" in message else 409 if "Only workflows" in message else 404
+        raise HTTPException(status_code, message)
+
+
+@router.get("/concierge/workflows/{workflow_id}")
+def read_concierge_workflow(workflow_id: str, identity=Depends(require_application)):
+    try:
+        return ConciergeWorkflowStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).get(
+            identity, workflow_id)
+    except ConciergeError as exc:
+        message = str(exc)
+        raise HTTPException(403 if "capability" in message else 404, message)
+
 
 @router.post("/concierge/workflows/{workflow_id}/confirm")
 def confirm_concierge_workflow(workflow_id:str,body:ConciergeConfirmation,
@@ -660,6 +1127,64 @@ def submit_platform_execution(body: ExecutionCreate,
         raise HTTPException(409, str(exc))
 
 
+@router.get("/executions/events")
+async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
+        authorization: str | None = Header(default=None)):
+    """Stream durable event-log updates; every reconnect revalidates the bearer credential."""
+    if not isinstance(after, int) or after < 0:
+        raise HTTPException(422, "Event cursor must be a non-negative integer")
+    if not isinstance(duration_seconds, int) or not 1 <= duration_seconds <= 50:
+        raise HTTPException(422, "Stream duration must be between 1 and 50 seconds")
+    identity = require_application(authorization)
+    if "agent.execution.read" not in identity.capabilities:
+        raise HTTPException(403, "Execution read capability is not granted")
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(401, "Application credential required")
+    cp = _control_plane()
+
+    async def events():
+        cursor = after
+        started = time.monotonic()
+        last_heartbeat = started
+        last_auth_check = started
+        yield "retry: 2000\n\n"
+        # Netlify and common reverse proxies impose bounded response lifetimes.
+        # The client reconnects using the last durable event ID.
+        while time.monotonic() - started < duration_seconds:
+            if time.monotonic() - last_auth_check >= 10:
+                try:
+                    live_identity = _store().authenticate(token)
+                except AuthorizationError:
+                    yield "event: auth.expired\ndata: {\"reason\":\"credential_expired_or_revoked\"}\n\n"
+                    return
+                if (live_identity.tenant_id != identity.tenant_id
+                        or live_identity.application_id != identity.application_id
+                        or live_identity.principal_id != identity.principal_id):
+                    yield "event: auth.expired\ndata: {\"reason\":\"identity_scope_changed\"}\n\n"
+                    return
+                last_auth_check = time.monotonic()
+            try:
+                batch = cp.list_execution_events(identity, cursor, 100)
+            except (PermissionError, ValueError):
+                yield "event: stream.error\ndata: {\"reason\":\"execution_event_access_denied\"}\n\n"
+                return
+            for item in batch:
+                cursor = item["event_id"]
+                yield (f"id: {cursor}\nevent: execution\ndata: "
+                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n\n")
+            now = time.monotonic()
+            if not batch and now - last_heartbeat >= 15:
+                yield ": keepalive\n\n"
+                last_heartbeat = now
+            await asyncio.sleep(0.75)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-store, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+
 @router.get("/executions/{execution_id}")
 def read_platform_execution(execution_id: str, identity=Depends(require_application)):
     try:
@@ -766,62 +1291,4 @@ def list_platform_executions(limit:int=50,identity=Depends(require_application))
             WHERE tenant_id=? AND application_id=? AND principal_id=?""",
             (identity.tenant_id,identity.application_id,identity.principal_id)).fetchone()[0]
     return {"data":[asdict(cp._execution(x)) for x in rows],"event_cursor":int(cursor)}
-
-@router.get("/executions/events")
-async def stream_platform_execution_events(after: int = 0, duration_seconds: int = 50,
-        authorization: str | None = Header(default=None)):
-    """Stream durable event-log updates; every reconnect revalidates the bearer credential."""
-    if not isinstance(after, int) or after < 0:
-        raise HTTPException(422, "Event cursor must be a non-negative integer")
-    if not isinstance(duration_seconds, int) or not 1 <= duration_seconds <= 50:
-        raise HTTPException(422, "Stream duration must be between 1 and 50 seconds")
-    identity = require_application(authorization)
-    if "agent.execution.read" not in identity.capabilities:
-        raise HTTPException(403, "Execution read capability is not granted")
-    scheme, _, token = (authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(401, "Application credential required")
-    cp = _control_plane()
-
-    async def events():
-        cursor = after
-        started = time.monotonic()
-        last_heartbeat = started
-        last_auth_check = started
-        yield "retry: 2000\n\n"
-        # Netlify and common reverse proxies impose bounded response lifetimes.
-        # The client reconnects using the last durable event ID.
-        while time.monotonic() - started < duration_seconds:
-            if time.monotonic() - last_auth_check >= 10:
-                try:
-                    live_identity = _store().authenticate(token)
-                except AuthorizationError:
-                    yield "event: auth.expired\ndata: {\"reason\":\"credential_expired_or_revoked\"}\n\n"
-                    return
-                if (live_identity.tenant_id != identity.tenant_id
-                        or live_identity.application_id != identity.application_id
-                        or live_identity.principal_id != identity.principal_id):
-                    yield "event: auth.expired\ndata: {\"reason\":\"identity_scope_changed\"}\n\n"
-                    return
-                last_auth_check = time.monotonic()
-            try:
-                batch = cp.list_execution_events(identity, cursor, 100)
-            except (PermissionError, ValueError):
-                yield "event: stream.error\ndata: {\"reason\":\"execution_event_access_denied\"}\n\n"
-                return
-            for item in batch:
-                cursor = item["event_id"]
-                yield (f"id: {cursor}\nevent: execution\ndata: "
-                       + json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n\n")
-            now = time.monotonic()
-            if not batch and now - last_heartbeat >= 15:
-                yield ": keepalive\n\n"
-                last_heartbeat = now
-            await asyncio.sleep(0.75)
-
-    return StreamingResponse(events(), media_type="text/event-stream", headers={
-        "Cache-Control": "no-store, no-transform",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    })
 

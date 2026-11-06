@@ -17,6 +17,8 @@ from typing import Any
 def run_local_asr(data: bytes) -> dict[str, Any]:
     if not isinstance(data, bytes) or not data:
         raise ValueError("ASR requires non-empty immutable audio bytes")
+    if len(data) > 25 * 1024 * 1024:
+        raise ValueError("ASR audio exceeds the 25 MB input limit")
     model_dir = os.environ.get("ORACLE_ARC_ASR_MODEL_DIR", "").strip()
     image = os.environ.get("ORACLE_ARC_ASR_WORKER_IMAGE", "oracle-arc-asr-worker:local").strip()
     model_path = Path(model_dir).expanduser()
@@ -56,6 +58,27 @@ def run_local_asr(data: bytes) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise RuntimeError("Local ASR worker returned invalid JSON") from exc
     result = payload.get("result") if isinstance(payload, dict) else None
-    if not isinstance(result, dict) or not isinstance(result.get("text"), str):
+    if (not isinstance(result, dict)
+            or result.get("transcription_status") != "completed"
+            or result.get("inference_location") != "local"
+            or not isinstance(result.get("text"), str)
+            or len(result["text"]) > 100_000):
         raise RuntimeError("Local ASR worker returned an invalid result contract")
+    language = result.get("language")
+    if language is not None and (
+        not isinstance(language, str) or not re.fullmatch(r"[A-Za-z-]{2,12}", language)
+    ):
+        raise RuntimeError("Local ASR worker returned invalid language metadata")
+    duration = result.get("duration_seconds")
+    if duration is not None and (
+        isinstance(duration, bool) or not isinstance(duration, (int, float))
+        or not 0 < duration <= 4 * 60 * 60
+    ):
+        raise RuntimeError("Local ASR worker returned invalid duration metadata")
+    probability = result.get("language_probability")
+    if probability is not None and (
+        isinstance(probability, bool) or not isinstance(probability, (int, float))
+        or not 0 <= probability <= 1
+    ):
+        raise RuntimeError("Local ASR worker returned invalid language confidence")
     return result

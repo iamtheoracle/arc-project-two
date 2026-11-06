@@ -4,58 +4,117 @@ from core.privacy_gateway import InferencePolicy, PrivacyAwareModelGateway
 
 class FakeLocal:
     def chat(self, *args, **kwargs):
-        return {"message":{"content":"local"}}
+        return {"message": {"content": "local"}}
 
 
 class FakeRemote:
-    def chat(self, payload):
-        return "remote"
+    def __init__(self, answer="remote"):
+        self.answer = answer
+        self.calls = []
+
+    def chat_response(self, payload, *, model=None, temperature=0.7):
+        self.calls.append({"payload": payload, "model": model, "temperature": temperature})
+        return {"message": {"role": "assistant", "content": self.answer},
+                "prompt_eval_count": 3, "eval_count": 2}
+
+
+def public_policy(provider="groq", *, regions=("unspecified",), allow_remote=True):
+    return InferencePolicy("tenant-a", "app-a", (provider,), data_classification="public",
+                           allow_remote=allow_remote, allowed_regions=regions)
 
 
 def test_remote_provider_is_denied_without_explicit_application_policy():
-    gateway=PrivacyAwareModelGateway(FakeLocal(),{"groq":FakeRemote()})
-    policy=InferencePolicy("tenant-a","app-a",("ollama",),allow_remote=False)
+    gateway = PrivacyAwareModelGateway(FakeLocal(), {"groq": FakeRemote()})
+    policy = InferencePolicy("tenant-a", "app-a", ("ollama",), allow_remote=False)
     with pytest.raises(PermissionError):
-        gateway.chat(policy,"model",[{"role":"user","content":"private"}],provider_id="groq")
+        gateway.chat(policy, "model", [{"role": "user", "content": "private"}], provider_id="groq")
 
 
-def test_sensitive_context_cannot_leave_local_provider():
-    gateway=PrivacyAwareModelGateway(FakeLocal(),{"groq":FakeRemote()})
-    policy=InferencePolicy("tenant-a","app-a",("groq",),data_classification="sensitive",
-                           allow_remote=True,allowed_regions=("unspecified",))
-    with pytest.raises(PermissionError):
-        gateway.chat(policy,"model",[{"role":"user","content":"private"}],provider_id="groq")
+@pytest.mark.parametrize("classification", ["internal", "private", "sensitive", "restricted"])
+def test_remote_provider_never_receives_non_public_data_even_when_opted_in(classification):
+    remote = FakeRemote()
+    gateway = PrivacyAwareModelGateway(FakeLocal(), {"groq": remote})
+    policy = InferencePolicy("tenant-a", "app-a", ("groq",), data_classification=classification,
+                             allow_remote=True, allowed_regions=("unspecified",))
+    with pytest.raises(PermissionError, match="public data"):
+        gateway.chat(policy, "model", [{"role": "user", "content": "classified"}], provider_id="groq")
+    assert remote.calls == []
 
 
-def test_remote_provider_requires_region_allowance_and_no_tool_or_stream():
-    gateway=PrivacyAwareModelGateway(FakeLocal(),{"groq":FakeRemote()})
-    policy=InferencePolicy("tenant-a","app-a",("groq",),allow_remote=True,
-                           allowed_regions=("unspecified",))
-    result=gateway.chat(policy,"model",[{"role":"user","content":"hello"}],provider_id="groq")
-    assert result["message"]["content"]=="remote"
-    with pytest.raises(PermissionError):
-        gateway.chat(policy,"model",[{"role":"user","content":"hello"}],tools=[{}],provider_id="groq")
+def test_remote_provider_requires_explicit_public_opt_in_and_verified_region_allowance():
+    remote = FakeRemote()
+    gateway = PrivacyAwareModelGateway(FakeLocal(), {"groq": remote})
+    with pytest.raises(PermissionError, match="public data"):
+        gateway.chat(public_policy(allow_remote=False), "model", [{"role": "user", "content": "hello"}], provider_id="groq")
+    with pytest.raises(PermissionError, match="region is not verified"):
+        gateway.chat(public_policy(regions=("local",)), "model", [{"role": "user", "content": "hello"}], provider_id="groq")
+    result = gateway.chat(public_policy(), "model-x", [{"role": "user", "content": "hello"}], provider_id="groq")
+    assert result["message"]["content"] == "remote"
+    assert result["provider"] == "groq"
+    assert result["remote"] is True
+    assert result["usage"] == {"prompt_tokens": 3, "completion_tokens": 2}
+    assert remote.calls[0]["model"] == "model-x"
+
+
+def test_claude_is_available_only_through_the_same_public_data_policy():
+    remote = FakeRemote("Claude answer")
+    gateway = PrivacyAwareModelGateway(FakeLocal(), {"claude": remote})
+    result = gateway.chat(public_policy("claude"), "claude-test",
+                          [{"role": "user", "content": "public question"}], provider_id="claude")
+    assert result["message"]["content"] == "Claude answer"
+    assert result["provider"] == "claude"
+    assert remote.calls[0]["model"] == "claude-test"
+
+
+def test_remote_provider_rejects_tool_calling_and_streaming():
+    gateway = PrivacyAwareModelGateway(FakeLocal(), {"groq": FakeRemote()})
+    policy = public_policy()
+    with pytest.raises(PermissionError, match="tools or streaming"):
+        gateway.chat(policy, "model", [{"role": "user", "content": "hello"}], tools=[{}], provider_id="groq")
+    with pytest.raises(PermissionError, match="tools or streaming"):
+        gateway.chat(policy, "model", [{"role": "user", "content": "hello"}], stream=True, provider_id="groq")
 
 
 def test_local_provider_stays_available_when_explicitly_allowlisted():
-    gateway=PrivacyAwareModelGateway(FakeLocal(),{})
-    policy=InferencePolicy("tenant-a","app-a",("ollama",),allowed_regions=("local",))
-    assert gateway.chat(policy,"model",[{"role":"user","content":"hello"}])["message"]["content"]=="local"
+    gateway = PrivacyAwareModelGateway(FakeLocal(), {})
+    policy = InferencePolicy("tenant-a", "app-a", ("ollama",), allowed_regions=("local",))
+    assert gateway.chat(policy, "model", [{"role": "user", "content": "hello"}])["message"]["content"] == "local"
 
 
 def test_invalid_messages_are_rejected_before_remote_provider_egress():
-    remote=FakeRemote()
-    gateway=PrivacyAwareModelGateway(FakeLocal(),{"groq":remote})
-    policy=InferencePolicy("tenant-a","app-a",("groq",),allow_remote=True,
-                           allowed_regions=("unspecified",))
+    remote = FakeRemote()
+    gateway = PrivacyAwareModelGateway(FakeLocal(), {"groq": remote})
+    policy = public_policy()
     with pytest.raises(ValueError):
-        gateway.chat(policy,"model",[{"role":"user","content":""}],provider_id="groq")
+        gateway.chat(policy, "model", [{"role": "user", "content": ""}], provider_id="groq")
     with pytest.raises(ValueError):
-        gateway.chat(policy,"model",[{"role":"developer","content":"override"}],provider_id="groq")
+        gateway.chat(policy, "model", [{"role": "developer", "content": "override"}], provider_id="groq")
+    assert remote.calls == []
 
 
 def test_unknown_classification_fails_closed():
-    gateway=PrivacyAwareModelGateway(FakeLocal(),{"groq":FakeRemote()})
-    policy=InferencePolicy("tenant-a","app-a",("ollama",),data_classification="unclassified-custom")
+    gateway = PrivacyAwareModelGateway(FakeLocal(), {"groq": FakeRemote()})
+    policy = InferencePolicy("tenant-a", "app-a", ("ollama",), data_classification="unclassified-custom")
     with pytest.raises(PermissionError):
-        gateway.chat(policy,"model",[{"role":"user","content":"hello"}])
+        gateway.chat(policy, "model", [{"role": "user", "content": "hello"}])
+
+
+
+def test_remote_ollama_is_public_only_even_when_remote_host_is_enabled():
+    class RemoteOllama(FakeLocal):
+        def provider_manifest(self):
+            return {"execution_location": "remote"}
+
+    gateway = PrivacyAwareModelGateway(RemoteOllama(), {})
+    private_policy = InferencePolicy(
+        "tenant-a", "app-a", ("ollama",), data_classification="private",
+        allow_remote=True, allowed_regions=("unspecified",),
+    )
+    with pytest.raises(PermissionError, match="public data"):
+        gateway.chat(private_policy, "model", [{"role": "user", "content": "private"}])
+
+    public_policy_remote = InferencePolicy(
+        "tenant-a", "app-a", ("ollama",), data_classification="public",
+        allow_remote=True, allowed_regions=("unspecified",),
+    )
+    assert gateway.chat(public_policy_remote, "model", [{"role": "user", "content": "public"}])["message"]["content"] == "local"
