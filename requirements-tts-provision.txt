@@ -1,1 +1,1 @@
-huggingface_hub>=0.26,<1\n
+huggingface_hub>=0.26,<1
