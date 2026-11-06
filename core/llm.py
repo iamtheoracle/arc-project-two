@@ -17,6 +17,10 @@ class LocalLLM:
         # This compatibility facade is intentionally local-only. Remote providers must
         # be selected through PrivacyAwareModelGateway or the policy-checked platform worker.
         self.gateway = ModelGateway(provider_id="ollama", host=host)
+        manifest = self.gateway.provider_manifest()
+        if manifest.get("execution_location") != "local":
+            self.gateway.close()
+            raise PermissionError("LocalLLM refuses remote Ollama; use a policy-checked public-data route instead.")
 
     def chat(
         self,
