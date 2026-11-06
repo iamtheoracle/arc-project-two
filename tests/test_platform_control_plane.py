@@ -328,6 +328,11 @@ def test_expired_lease_recovery_is_application_scoped(tmp_path):
     execution_a = cp.submit_execution(identity_a, "research", "1.0.0", "local-default", {})
     issued_b = ids.provision("Tenant B", "APP", "principal-b", CAPS)
     identity_b = ids.authenticate(issued_b["secret"])
+    # The second application must receive its own owner grant; application
+    # capabilities alone do not authorize tools.
+    ToolGrantStore(path).grant(
+        identity_b.tenant_id, identity_b.application_id, "tool.calculate", "test-owner"
+    )
     configure(cp, identity_b)
     cp.register_agent(identity_b, "research", "1.0.0", manifest())
     execution_b = cp.submit_execution(identity_b, "research", "1.0.0", "local-default", {})
