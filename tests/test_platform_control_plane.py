@@ -260,6 +260,29 @@ def test_worker_executes_model_and_commits_usage_atomically(tmp_path, monkeypatc
             assert provider_id == "ollama"
             assert timeout_seconds is not None and timeout_seconds > 0
 
+        def provider_manifest(self):
+            # Match the ModelGateway contract used by PlatformWorker's
+            # execution-location policy check. This fixture represents local Ollama.
+            return {
+                "provider_id": "ollama",
+                "display_name": "Ollama (local)",
+                "execution_location": "local",
+                "capabilities": {
+                    "text": True,
+                    "vision": False,
+                    "audio_input": False,
+                    "audio_output": False,
+                    "tool_calling": True,
+                    "structured_output": False,
+                    "streaming": True,
+                },
+                "enabled": True,
+                "description": "Deterministic local-provider test double.",
+            }
+
+        def set_timeout_seconds(self, timeout_seconds):
+            assert timeout_seconds > 0
+
         def chat(self, model, messages, tools=None, temperature=0.2):
             assert model == "qwen2.5:7b"
             assert tools is None
