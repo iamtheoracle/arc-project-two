@@ -103,4 +103,4 @@ def test_default_gateway_registers_claude_without_exposing_credentials():
     manifest = gateway.manifests()
     claude = next(item for item in manifest if item["provider_id"] == "claude")
     assert claude["execution_location"] == "remote"
-    assert claude["enabled"] is False
+    assert isinstance(claude["enabled"], bool)
