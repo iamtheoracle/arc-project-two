@@ -121,9 +121,29 @@ class ConciergeWorkflowStore:
             "events": [{"event_id": e["event_id"], "event_type": e["event_type"],
                         "status": e["status"], "details": json.loads(e["details_json"]),
                         "created_at": e["created_at"]} for e in events],
-            "retry_allowed": row["provider_outcome"] in {"not_started", "rejected"},
+            "retry_allowed": row["provider_outcome"] == "not_started",
             "reconciliation_required": row["provider_outcome"] == "unknown",
         }
+
+    def cancel(self, identity, workflow_id: str) -> dict:
+        if "concierge.workflow.cancel" not in set(getattr(identity, "capabilities", ())):
+            raise ConciergeError("CONCIERGE workflow cancellation capability is not granted")
+        with self._session() as db:
+            row = db.execute("""SELECT status FROM concierge_workflows WHERE workflow_id=?
+              AND tenant_id=? AND application_id=? AND principal_id=?""",
+              (workflow_id, identity.tenant_id, identity.application_id, identity.principal_id)).fetchone()
+            if row is None:
+                raise ConciergeError("Workflow not found")
+            if row["status"] != "awaiting_confirmation":
+                raise ConciergeError("Only workflows awaiting confirmation can be cancelled; executing actions require provider reconciliation")
+            now = int(time.time())
+            changed = db.execute("""UPDATE concierge_workflows SET status='cancelled',
+              updated_at=? WHERE workflow_id=? AND status='awaiting_confirmation'""",
+              (now, workflow_id))
+            if changed.rowcount != 1:
+                raise ConciergeError("Workflow state changed before cancellation")
+            self._event(db, identity, workflow_id, "workflow.cancelled", "cancelled")
+        return {"workflow_id": workflow_id, "status": "cancelled", "execution_performed": False}
 
     def confirm_and_execute(self, identity, workflow_id: str, confirmed_fingerprint: str,
                             executor: Callable[[dict[str, Any], str], dict[str, Any]]) -> dict:
