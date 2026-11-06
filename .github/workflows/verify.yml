@@ -2,7 +2,7 @@ name: Oracle Arc Verification
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'feat/oracle-arc-personal-core', 'feat/human-understanding-adaptive-intelligence', 'feat/oracle-arc-network-platform-architecture']
+    branches: [main, 'feat/oracle-arc-personal-core', 'feat/human-understanding-adaptive-intelligence', 'feat/oracle-arc-network-platform-architecture', 'feat/oracle-arc-claude-provider-adapter']
   pull_request:
     branches:
       - main
