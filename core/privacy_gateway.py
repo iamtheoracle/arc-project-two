@@ -63,8 +63,19 @@ class PrivacyAwareModelGateway:
         if not isinstance(provider_id, str) or provider_id not in policy.allowed_providers:
             raise PermissionError("Provider is not allowlisted by application policy")
         if provider_id == "ollama":
-            if "local" not in policy.allowed_regions:
-                raise PermissionError("Local inference is not permitted by policy")
+            manifest_getter = getattr(self.local_gateway, "provider_manifest", None)
+            manifest = manifest_getter() if callable(manifest_getter) else {"execution_location": "local"}
+            location = manifest.get("execution_location", "local") if isinstance(manifest, dict) else "local"
+            if location == "local":
+                if "local" not in policy.allowed_regions:
+                    raise PermissionError("Local inference is not permitted by policy")
+            else:
+                if not policy.allow_remote or policy.data_classification != "public":
+                    raise PermissionError("Remote Ollama is permitted only for explicitly authorized public data")
+                if "unspecified" not in policy.allowed_regions:
+                    raise PermissionError("Remote Ollama region is not verified against policy")
+                if tools or stream:
+                    raise PermissionError("Remote Ollama tool calling and streaming are not enabled by this policy")
             return self.local_gateway.chat(
                 model, messages, tools=tools, stream=stream, temperature=temperature
             )
