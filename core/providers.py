@@ -107,6 +107,7 @@ class AnthropicMessagesProvider:
 
     def __init__(self, api_key: str | None = None, model: str | None = None,
                  timeout_seconds: float = 30.0, client: httpx.Client | None = None):
+        self.provider_id = "claude"
         self.api_key = api_key if api_key is not None else os.environ.get("ORACLE_ARC_CLAUDE_API_KEY", "")
         self.model = model or os.environ.get("ORACLE_ARC_CLAUDE_MODEL", "claude-sonnet-4-5")
         if (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
