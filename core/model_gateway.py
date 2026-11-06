@@ -238,7 +238,7 @@ class ModelGateway:
 
     def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None, timeout_seconds: Optional[float] = None) -> None:
         self._owns_registry = registry is None
-        self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
+        self.provider_id = provider_id or "ollama"
         if timeout_seconds is not None and (
             isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
             or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900
