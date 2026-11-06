@@ -83,7 +83,8 @@ def test_local_llm_uses_gateway_compatibility_facade(monkeypatch):
     from core.llm import LocalLLM
 
     class FakeGateway:
-        def __init__(self, host=None):
+        def __init__(self, provider_id=None, host=None):
+            self.provider_id = provider_id
             self.host = host
             self.calls = []
 
