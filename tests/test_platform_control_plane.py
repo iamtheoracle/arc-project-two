@@ -37,7 +37,8 @@ def manifest(tools=None):
         "display_name": "Research agent",
         "description": "Tenant-scoped research specialist",
         "required_capabilities": ["reasoning"],
-        "allowed_tools": tools or ["tool.calculate"],
+        # An explicit empty list means the agent is intentionally tool-free.
+        "allowed_tools": ["tool.calculate"] if tools is None else tools,
         "model_routes": ["local-default"],
         "runtime": "oracle-arc-agent-v1",
     }
