@@ -101,6 +101,7 @@ def test_local_llm_uses_gateway_compatibility_facade(monkeypatch):
     llm = LocalLLM(model="qwen-local", temperature=0.3, host="http://127.0.0.1:11435")
     gateway = created[0]
     assert gateway.host == "http://127.0.0.1:11435"
+    assert gateway.provider_id == "ollama"
     result = llm.chat([{"role": "user", "content": "hello"}])
     assert result["message"]["content"] == "local answer"
     assert gateway.calls[0]["model"] == "qwen-local"
