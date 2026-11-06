@@ -99,6 +99,31 @@ class MemoryUpdate(BaseModel):
     tags:list[str]=Field(default_factory=list,max_length=20)
 
 
+def build_inference_policy(identity: RequestIdentity) -> InferencePolicy:
+    """Build trusted provider policy only from the authenticated application identity."""
+    capabilities = set(identity.capabilities)
+    allowed = ["ollama"] if "inference.provider.ollama" in capabilities else []
+    remote_names = {
+        name for name in ("openrouter", "groq", "gemini", "claude")
+        if "inference.remote." + name in capabilities
+    }
+    remote_ok = (
+        "inference.remote.allow" in capabilities
+        and "inference.remote.public" in capabilities
+        and "inference.remote.region.unspecified" in capabilities
+    )
+    if remote_ok:
+        allowed.extend(sorted(remote_names))
+    return InferencePolicy(
+        identity.tenant_id,
+        identity.application_id,
+        tuple(allowed),
+        data_classification="public" if remote_ok else "private",
+        allow_remote=remote_ok,
+        allowed_regions=("local", "unspecified") if remote_ok else ("local",),
+        policy_version=identity.policy_version,
+    )
+
 class InferenceRequest(BaseModel):
     messages:list[dict]=Field(min_length=1,max_length=100)
     provider_id:str=Field(default="ollama",max_length=40)
@@ -162,18 +187,7 @@ def save_memory(request:MemoryCreate,identity:RequestIdentity=Depends(_applicati
 def tenant_inference(request:InferenceRequest,identity:RequestIdentity=Depends(_application_identity)):
     if "inference.chat" not in identity.capabilities:
         raise HTTPException(403,"Inference capability is not granted")
-    allowed=["ollama"] if "inference.provider.ollama" in identity.capabilities else []
-    remote_names={name for name in ("openrouter","groq","gemini")
-                  if "inference.remote."+name in identity.capabilities}
-    remote_ok=("inference.remote.allow" in identity.capabilities
-               and "inference.remote.private" in identity.capabilities
-               and "inference.remote.region.unspecified" in identity.capabilities)
-    if remote_ok:
-        allowed.extend(sorted(remote_names))
-    policy=InferencePolicy(identity.tenant_id,identity.application_id,tuple(allowed),
-        data_classification="private",allow_remote=remote_ok,
-        allowed_regions=("local","unspecified") if remote_ok else ("local",),
-        policy_version=identity.policy_version)
+    policy=build_inference_policy(identity)
     try:
         if any(not isinstance(item,dict) or item.get("role") not in {"system","user","assistant"}
                or not isinstance(item.get("content"),str) or not item["content"]
