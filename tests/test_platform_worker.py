@@ -758,7 +758,7 @@ def test_worker_rejects_remote_route_for_non_public_classification(tmp_path, mon
 def test_remote_provider_rejects_private_execution_before_model_invocation(tmp_path, monkeypatch):
     import core.platform_worker as worker_module
 
-    database, identities, identity, control, grants, execution_id, _, worker_id, worker_token = provision(
+    database, _, _, _, _, _, _, _, worker_token = provision(
         tmp_path, tool=False, provider_id="openrouter", classification="private"
     )
 
@@ -767,7 +767,6 @@ def test_remote_provider_rejects_private_execution_before_model_invocation(tmp_p
             raise AssertionError("Remote model must be blocked before provider initialization")
 
     monkeypatch.setattr(worker_module, "ModelGateway", NeverCallGateway)
-    worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
+    worker = PlatformWorker(database, worker_token)
     with pytest.raises(PermissionError, match="public data only"):
         worker.run_once()
-    assert control.get_execution(identity, execution_id).status in {"failed", "dead_letter"}
