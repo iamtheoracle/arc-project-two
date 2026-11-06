@@ -178,7 +178,17 @@ def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
     assert cp.cancel_execution(identity, eid)
     assert not cp.complete_execution(eid, "wrk_worker_a", {"answer": "late"})
     assert not cp.fail_execution(eid, "wrk_worker_a", "late_worker_failure", retryable=False)
-    assert cp.get_execution(identity, eid).status == "cancelled"
+    execution = cp.get_execution(identity, eid)
+    assert execution.status == "cancelled"
+    assert execution.error_code == "cancelled_by_principal"
+    with cp._session() as db:
+        lease = db.execute(
+            "SELECT lease_owner,lease_expires_at FROM arc_executions WHERE execution_id=?",
+            (eid,),
+        ).fetchone()
+    assert lease["lease_owner"] is None
+    assert lease["lease_expires_at"] is None
+    assert not cp.cancel_execution(identity, eid)
 
 
 def test_worker_credentials_are_independent_scoped_and_revocable(tmp_path):
