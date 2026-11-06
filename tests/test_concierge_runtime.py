@@ -36,3 +36,33 @@ def test_concierge_requires_provider_receipt_and_is_not_silently_successful(tmp_
     with pytest.raises(ConciergeError,match="verifiable completion receipt"):
         store.confirm_and_execute(identity("concierge.workflow.plan","concierge.action.execute"),
             plan["workflow_id"],plan["action_fingerprint"],lambda a,k:{"success":True})
+
+
+def test_provider_timeout_is_unknown_and_requires_reconciliation_before_retry(tmp_path):
+    store = ConciergeWorkflowStore(str(tmp_path / "concierge.sqlite3"))
+    who = identity("concierge.workflow.plan", "concierge.action.execute", "concierge.workflow.read")
+    action = {"kind": "booking.create", "provider": "provider",
+              "parameters": {"slot": "slot-unknown"}, "consequential": True}
+    plan = store.plan(who, action)
+    with pytest.raises(ConciergeError, match="outcome is unknown"):
+        store.confirm_and_execute(who, plan["workflow_id"], plan["action_fingerprint"],
+                                  lambda a, key: (_ for _ in ()).throw(TimeoutError()))
+    state = store.get(who, plan["workflow_id"])
+    assert state["status"] == "failed"
+    assert state["provider_outcome"] == "unknown"
+    assert state["reconciliation_required"] is True
+    assert state["retry_allowed"] is False
+    assert [event["event_type"] for event in state["events"]] == [
+        "workflow.planned", "provider.execution.started", "provider.execution.outcome_unknown"
+    ]
+
+
+def test_concierge_workflow_history_is_principal_scoped(tmp_path):
+    store = ConciergeWorkflowStore(str(tmp_path / "concierge.sqlite3"))
+    owner = identity("concierge.workflow.plan", "concierge.workflow.read")
+    plan = store.plan(owner, {"kind": "booking.create", "provider": "provider",
+                              "parameters": {"slot": "private-slot"}, "consequential": True})
+    other = SimpleNamespace(tenant_id="tenant-a", application_id="app-a",
+                            principal_id="different-user", capabilities=("concierge.workflow.read",))
+    with pytest.raises(ConciergeError, match="Workflow not found"):
+        store.get(other, plan["workflow_id"])
