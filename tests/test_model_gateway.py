@@ -92,6 +92,12 @@ def test_local_llm_uses_gateway_compatibility_facade(monkeypatch):
             self.calls.append(kwargs)
             return {"message": {"content": "local answer"}}
 
+        def provider_manifest(self):
+            return {"execution_location": "local"}
+
+        def close(self):
+            self.closed = True
+
     created = []
     def fake_gateway(**kwargs):
         gateway = FakeGateway(**kwargs)
@@ -205,3 +211,24 @@ def test_gateway_fails_closed_for_claude_without_credentials(monkeypatch):
     monkeypatch.delenv("ORACLE_ARC_CLAUDE_API_KEY", raising=False)
     with pytest.raises(ValueError, match="not enabled"):
         ModelGateway(provider_id="claude")
+
+
+
+def test_local_llm_rejects_remote_ollama_even_when_remote_host_is_configured(monkeypatch):
+    from core.llm import LocalLLM
+
+    class RemoteGateway:
+        def __init__(self, provider_id=None, host=None):
+            self.closed = False
+
+        def provider_manifest(self):
+            return {"execution_location": "remote"}
+
+        def close(self):
+            self.closed = True
+
+    gateway = RemoteGateway()
+    monkeypatch.setattr("core.llm.ModelGateway", lambda provider_id=None, host=None: gateway)
+    with pytest.raises(PermissionError, match="refuses remote Ollama"):
+        LocalLLM()
+    assert gateway.closed is True
