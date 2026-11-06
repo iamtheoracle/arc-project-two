@@ -97,7 +97,8 @@ class AgentRegistry:
                 "connectors": [
                     {"connector_id": c.connector_id, "provider": c.provider,
                      "priority": c.priority, "enabled": c.enabled,
-                     "healthy": c.available(),
+                     "dispatch_eligible": c.available(),
+                     "health_status": "unknown",
                      "failure_count": c.failures,
                      "last_error_type": c.last_error,
                      "cooldown_seconds_remaining": max(0.0, round(c.unavailable_until - time.monotonic(), 2))}
