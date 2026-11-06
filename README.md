@@ -111,6 +111,14 @@ Conversation continuity: the first chat response returns `conversation_id`. Send
 
 The direct chat registry enables BUD and ORACLE. SPARK, ORBITS and CONCIERGE are present as disabled roles. The platform worker has scoped SPARK memory support and ORBITS has isolated media processors, but those do not make either role an independently enabled specialist. CONCIERGE has workflow planning and confirmation storage, but no real provider executor is registered; consequential external actions therefore remain unavailable.
 
+CONCIERGE workflow lifecycle is principal-scoped and event-journaled:
+- `POST /v1/platform/concierge/workflows` creates an exact action plan and confirmation fingerprint.
+- `GET /v1/platform/concierge/workflows/{workflow_id}` returns the caller's action, provider outcome, receipt and ordered workflow events (requires `concierge.workflow.read`).
+- `POST /v1/platform/concierge/workflows/{workflow_id}/cancel` cancels only before provider execution (requires `concierge.workflow.cancel`).
+- `POST /v1/platform/concierge/workflows/{workflow_id}/confirm` requires the exact fingerprint and `concierge.action.execute`.
+
+A provider timeout or malformed receipt is recorded as an **unknown outcome requiring reconciliation**, not a definite failure. It is not automatically retried because the provider may already have completed the action. The workflow ID is passed to the trusted provider adapter as its idempotency key. This is recovery protection, not a substitute for a real provider adapter; no booking/payment adapter is currently registered, so no external booking or charge is claimed to work.
+
 - \`GET /v1/agents\` — list agent roles and configured connectors.
 - \`POST /v1/agents/bud/chat\` — send a turn to BUD.
 - \`POST /v1/agents/oracle/chat\` — send a turn to ORACLE.
