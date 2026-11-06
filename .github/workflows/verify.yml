@@ -97,7 +97,7 @@ jobs:
       - name: Verify sandbox restrictions inside the actual container
         run: |
           podman run --rm --pull=never --network=none --ipc=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=16 --memory=128m --memory-swap=128m --cpus=0.5 --user=65534:65534 --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m --ulimit=nofile=32:32 oracle-arc-plugin-worker:ci python -I -c "import os,pathlib; assert os.geteuid()==65534; s=pathlib.Path('/proc/self/status').read_text(); assert 'CapEff:\\t0000000000000000' in s; assert 'NoNewPrivs:\\t1' in s; assert not any(r.split()[1]=='00000000' for r in pathlib.Path('/proc/net/route').read_text().splitlines()[1:]); m=next(x for x in pathlib.Path('/proc/self/mountinfo').read_text().splitlines() if x.split()[4]=='/'); assert 'ro' in m.split()[5].split(','); print('UID, zero capabilities, no-new-privileges, no default network route and read-only root verified')"
-      - name: Run tests
+      - name: Run tests (diagnostic fail-fast)
         env:
           ORACLE_ARC_ORBITS_WORKER_IMAGE: oracle-arc-orbits-worker:ci
-        run: python -m pytest -q
+        run: python -m pytest -vv -x --durations=20
