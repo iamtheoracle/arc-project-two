@@ -1,4 +1,4 @@
-"""Privacy-aware provider routing. No provider is selected without explicit policy.
+"""Privacy-aware provider routing. Remote inference is public-data-only.
 
 The caller supplies a trusted policy created by server-side application authorization;
 request JSON must never construct or widen this policy.
@@ -10,7 +10,7 @@ from typing import Any
 
 from .inference_contract import validate_inference_request
 from .model_gateway import ModelGateway
-from .providers import OpenAICompatibleProvider, PROVIDERS
+from .providers import AnthropicMessagesProvider, OpenAICompatibleProvider, PROVIDERS
 
 
 @dataclass(frozen=True)
@@ -25,16 +25,23 @@ class InferencePolicy:
 
 
 class PrivacyAwareModelGateway:
+    REMOTE_PROVIDER_IDS = frozenset({"openrouter", "groq", "gemini", "claude"})
+
     def __init__(
         self,
         local_gateway: ModelGateway | None = None,
-        remote_providers: dict[str, OpenAICompatibleProvider] | None = None,
+        remote_providers: dict[str, Any] | None = None,
     ):
-        self.local_gateway = local_gateway or ModelGateway()
-        configs = {item.provider_id: item for item in PROVIDERS}
-        self.remote_providers = remote_providers or {
-            name: OpenAICompatibleProvider(config) for name, config in configs.items()
-        }
+        # This path is local by construction; remote selection requires a trusted policy.
+        self.local_gateway = local_gateway if local_gateway is not None else ModelGateway(provider_id="ollama")
+        if remote_providers is not None:
+            self.remote_providers = dict(remote_providers)
+        else:
+            configs = {item.provider_id: item for item in PROVIDERS}
+            self.remote_providers = {
+                name: OpenAICompatibleProvider(config) for name, config in configs.items()
+            }
+            self.remote_providers["claude"] = AnthropicMessagesProvider()
 
     def chat(
         self,
@@ -61,16 +68,32 @@ class PrivacyAwareModelGateway:
             return self.local_gateway.chat(
                 model, messages, tools=tools, stream=stream, temperature=temperature
             )
-        if not policy.allow_remote or policy.data_classification in {"sensitive", "restricted"}:
-            raise PermissionError("Remote inference is not permitted for this data classification")
-        if provider_id not in self.remote_providers or provider_id not in {"openrouter", "groq", "gemini"}:
+        if provider_id not in self.REMOTE_PROVIDER_IDS or provider_id not in self.remote_providers:
             raise PermissionError("Unknown remote provider")
+        if not policy.allow_remote or policy.data_classification != "public":
+            raise PermissionError("Remote inference is permitted only for explicitly authorized public data")
         if tools or stream:
             raise PermissionError("Remote adapter does not support tools or streaming in this contract")
         # Remote endpoint currently has no verified region attestation; only an explicit
-        # 'unspecified' region allowance can authorize it until residency metadata exists.
+        # "unspecified" region allowance can authorize it until residency metadata exists.
         if "unspecified" not in policy.allowed_regions:
             raise PermissionError("Remote provider region is not verified against policy")
         adapter = self.remote_providers[provider_id]
-        answer = adapter.chat({"messages": messages})
-        return {"message": {"content": answer}, "provider": provider_id, "remote": True}
+        chat_response = getattr(adapter, "chat_response", None)
+        if not callable(chat_response):
+            raise PermissionError("Remote provider adapter does not implement the normalized response contract")
+        response = chat_response({"messages": messages}, model=model, temperature=temperature)
+        message = response.get("message") if isinstance(response, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("Remote provider returned no text response")
+        return {
+            "message": {"content": content},
+            "provider": provider_id,
+            "remote": True,
+            "usage": {
+                "prompt_tokens": int(response.get("prompt_eval_count", 0) or 0),
+                "completion_tokens": int(response.get("eval_count", 0) or 0),
+            },
+        }
+
