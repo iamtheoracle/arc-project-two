@@ -350,10 +350,23 @@ def delete_platform_document(document_id: str, identity=Depends(require_applicat
 def list_local_audio_voices(identity=Depends(require_application)):
     if "audio.synthesize" not in identity.capabilities:
         raise HTTPException(403, "Audio synthesis capability is not granted")
-    # Only this server-reviewed identifier is currently supported.
-    return {"voices": [{"voice_id": "local-default", "engine": "piper",
-                        "availability": "configured" if os.environ.get("ORACLE_ARC_TTS_MODEL_DIR") else "not_configured",
-                        "inference_location": "local"}]}
+    # Presence of an environment variable is not proof that model assets,
+    # the worker image, or real inference are ready.
+    model_dir = os.environ.get("ORACLE_ARC_TTS_MODEL_DIR", "").strip()
+    model_path = Path(model_dir).expanduser()
+    required = ("voice.onnx", "voice.onnx.json", "oracle-arc-tts-manifest.json")
+    assets_present = (
+        bool(model_dir) and model_path.is_absolute() and model_path.is_dir()
+        and all((model_path / name).is_file() for name in required)
+    )
+    return {"voices": [{
+        "voice_id": "local-default",
+        "engine": "piper",
+        "configuration_status": "model_assets_present" if assets_present else "not_configured",
+        "runtime_health": "not_probed",
+        "real_inference_verified": False,
+        "inference_location": "local",
+    }]}
 
 
 @router.post("/audio/synthesize", status_code=200)
