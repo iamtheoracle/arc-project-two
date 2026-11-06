@@ -904,3 +904,29 @@ def test_voice_session_cannot_speak_an_execution_from_another_turn(client, monke
     assert response.status_code == 404
     assert called["tts"] is False
     assert sessions.get(identity, session_id)["state"] == "awaiting_model"
+
+
+def test_concierge_workflow_status_api_returns_scoped_durable_history(client):
+    tenant = client.post("/v1/platform/tenants", headers=owner(),
+                         json={"name": "Concierge history tenant"}).json()["tenant_id"]
+    app_id = client.post(f"/v1/platform/tenants/{tenant}/applications", headers=owner(),
+                         json={"name": "Concierge history app"}).json()["application_id"]
+    token = client.post(
+        f"/v1/platform/tenants/{tenant}/applications/{app_id}/credentials",
+        headers=owner(), json={"principal_id": "concierge-user", "capabilities": [
+            "concierge.workflow.plan", "concierge.workflow.read"
+        ]},
+    ).json()["credential"]
+    headers = {"Authorization": "Bearer " + token}
+    planned = client.post("/v1/platform/concierge/workflows", headers=headers, json={
+        "action": {"kind": "booking.create", "provider": "unconfigured-provider",
+                   "parameters": {"slot": "slot-1"}, "consequential": True}
+    })
+    assert planned.status_code == 201
+    workflow_id = planned.json()["workflow_id"]
+    history = client.get(f"/v1/platform/concierge/workflows/{workflow_id}", headers=headers)
+    assert history.status_code == 200
+    assert history.json()["status"] == "awaiting_confirmation"
+    assert history.json()["provider_outcome"] == "not_started"
+    assert history.json()["retry_allowed"] is True
+    assert history.json()["events"][0]["event_type"] == "workflow.planned"
