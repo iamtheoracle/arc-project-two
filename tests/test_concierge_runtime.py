@@ -66,3 +66,18 @@ def test_concierge_workflow_history_is_principal_scoped(tmp_path):
                             principal_id="different-user", capabilities=("concierge.workflow.read",))
     with pytest.raises(ConciergeError, match="Workflow not found"):
         store.get(other, plan["workflow_id"])
+
+
+def test_concierge_can_cancel_only_before_provider_execution(tmp_path):
+    store = ConciergeWorkflowStore(str(tmp_path / "concierge.sqlite3"))
+    who = identity("concierge.workflow.plan", "concierge.workflow.cancel", "concierge.workflow.read")
+    plan = store.plan(who, {"kind": "booking.create", "provider": "provider",
+                            "parameters": {"slot": "slot-cancel"}, "consequential": True})
+    cancelled = store.cancel(who, plan["workflow_id"])
+    assert cancelled == {"workflow_id": plan["workflow_id"], "status": "cancelled",
+                         "execution_performed": False}
+    state = store.get(who, plan["workflow_id"])
+    assert state["status"] == "cancelled"
+    assert [event["event_type"] for event in state["events"]] == [
+        "workflow.planned", "workflow.cancelled"
+    ]
