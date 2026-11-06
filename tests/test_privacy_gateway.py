@@ -97,3 +97,24 @@ def test_unknown_classification_fails_closed():
     policy = InferencePolicy("tenant-a", "app-a", ("ollama",), data_classification="unclassified-custom")
     with pytest.raises(PermissionError):
         gateway.chat(policy, "model", [{"role": "user", "content": "hello"}])
+
+
+
+def test_remote_ollama_is_public_only_even_when_remote_host_is_enabled():
+    class RemoteOllama(FakeLocal):
+        def provider_manifest(self):
+            return {"execution_location": "remote"}
+
+    gateway = PrivacyAwareModelGateway(RemoteOllama(), {})
+    private_policy = InferencePolicy(
+        "tenant-a", "app-a", ("ollama",), data_classification="private",
+        allow_remote=True, allowed_regions=("unspecified",),
+    )
+    with pytest.raises(PermissionError, match="public data"):
+        gateway.chat(private_policy, "model", [{"role": "user", "content": "private"}])
+
+    public_policy_remote = InferencePolicy(
+        "tenant-a", "app-a", ("ollama",), data_classification="public",
+        allow_remote=True, allowed_regions=("unspecified",),
+    )
+    assert gateway.chat(public_policy_remote, "model", [{"role": "user", "content": "public"}])["message"]["content"] == "local"
