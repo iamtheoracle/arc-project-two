@@ -14,14 +14,14 @@ def test_concierge_requires_capability_and_exact_user_confirmation(tmp_path):
             "parameters":{"slot":"slot-123"},"consequential":True}
     with pytest.raises(ConciergeError,match="workflow capability"):
         store.plan(identity(),action)
-    plan=store.plan(identity("concierge.workflow"),action)
-    with pytest.raises(ConciergeError,match="confirmation capability"):
-        store.confirm_and_execute(identity("concierge.workflow"),plan["workflow_id"],
+    plan=store.plan(identity("concierge.workflow.plan"),action)
+    with pytest.raises(ConciergeError,match="action-confirmation capability"):
+        store.confirm_and_execute(identity("concierge.workflow.plan"),plan["workflow_id"],
                                   plan["action_fingerprint"],lambda a,k: {})
     with pytest.raises(ConciergeError,match="exact planned action"):
-        store.confirm_and_execute(identity("concierge.workflow","concierge.action.confirm"),
+        store.confirm_and_execute(identity("concierge.workflow.plan","concierge.action.execute"),
                                   plan["workflow_id"],"0"*64,lambda a,k: {})
-    result=store.confirm_and_execute(identity("concierge.workflow","concierge.action.confirm"),
+    result=store.confirm_and_execute(identity("concierge.workflow.plan","concierge.action.execute"),
         plan["workflow_id"],plan["action_fingerprint"],
         lambda action,key:{"provider_receipt_id":"receipt-1","status":"confirmed"})
     assert result["status"]=="succeeded"
@@ -32,7 +32,7 @@ def test_concierge_requires_provider_receipt_and_is_not_silently_successful(tmp_
     store=ConciergeWorkflowStore(str(tmp_path/"concierge.sqlite3"))
     action={"kind":"payment.create","provider":"provider",
             "parameters":{"amount":10},"consequential":True}
-    plan=store.plan(identity("concierge.workflow"),action)
+    plan=store.plan(identity("concierge.workflow.plan"),action)
     with pytest.raises(ConciergeError,match="verifiable completion receipt"):
-        store.confirm_and_execute(identity("concierge.workflow","concierge.action.confirm"),
+        store.confirm_and_execute(identity("concierge.workflow.plan","concierge.action.execute"),
             plan["workflow_id"],plan["action_fingerprint"],lambda a,k:{"success":True})
