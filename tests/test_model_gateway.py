@@ -74,9 +74,8 @@ def test_gateway_routes_request_without_changing_provider_response():
 
 
 def test_gateway_does_not_silently_fallback_from_unknown_provider(monkeypatch):
-    monkeypatch.setenv("ORACLE_ARC_PROVIDER", "unconfigured-cloud")
     with pytest.raises(ValueError, match="not enabled"):
-        ModelGateway()
+        ModelGateway(provider_id="unconfigured-cloud")
 
 
 def test_local_llm_uses_gateway_compatibility_facade(monkeypatch):
@@ -232,3 +231,11 @@ def test_local_llm_rejects_remote_ollama_even_when_remote_host_is_configured(mon
     with pytest.raises(PermissionError, match="refuses remote Ollama"):
         LocalLLM()
     assert gateway.closed is True
+
+
+
+def test_environment_cannot_silently_select_a_remote_provider(monkeypatch):
+    monkeypatch.setenv("ORACLE_ARC_PROVIDER", "claude")
+    gateway = ModelGateway()
+    assert gateway.provider_manifest()["provider_id"] == "ollama"
+    gateway.close()
