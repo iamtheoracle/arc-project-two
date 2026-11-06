@@ -37,4 +37,4 @@ The API runner mounts the model read-only into a non-root worker with no network
 
 ## Current boundary
 
-The worker currently exposes one reviewed catalogue key, `local-default`, to avoid accepting arbitrary model paths or caller-selected voices. This is an engine foundation, not a complete user-facing voice feature: durable voice sessions, authorization-aware TTS API routes, client playback, microphone capture and streaming turn-taking remain separate implementation work. Do not expose the worker directly to browsers.
+The worker currently exposes one reviewed catalogue key, `local-default`, to avoid accepting arbitrary model paths or caller-selected voices. This is an engine foundation, not a complete user-facing voice feature. The authenticated synthesis endpoint and durable, principal-scoped voice-session metadata/event APIs exist. The repository still has no complete browser microphone-capture and playback experience, streaming turn-taking, or verified end-to-end spoken conversation on a target host. Do not expose the worker directly to browsers.
