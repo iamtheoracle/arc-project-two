@@ -1,24 +1,17 @@
-"""Single privacy-aware model routing boundary for local and remote inference.
-
-Remote execution requires an explicit request policy decision. Provider credentials and
-availability never grant permission to export prompt or memory data.
-"""
+"""Tenant-aware inference routing with fail-closed remote egress policy."""
 from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Any, Callable
-from core.model_gateway import ModelGateway
-from core.providers import OpenAICompatibleProvider, ProviderConfig, PROVIDERS
+from typing import Any
 
-
-class ProviderPolicyError(PermissionError):
-    pass
+from .model_gateway import ModelGateway
+from .providers import AnthropicMessagesProvider, OpenAICompatibleProvider, PROVIDERS
 
 
 @dataclass(frozen=True)
 class InferencePolicy:
     tenant_id: str
     application_id: str
-    principal_id: str
     data_classification: str = "private"
     allow_remote: bool = False
     allowed_remote_providers: frozenset[str] = frozenset()
@@ -27,78 +20,118 @@ class InferencePolicy:
     policy_version: int = 1
 
     def permits(self, provider_id: str, region: str | None) -> bool:
-        if provider_id == "ollama":
-            return (
-                self.allow_remote
-                and "ollama" in self.allowed_remote_providers
-                and self.data_classification not in {"restricted", "sensitive"}
-                and (self.required_region is None or region == self.required_region)
-                and (not self.allowed_regions or region in self.allowed_regions)
-            )
-        return (
-            self.allow_remote
-            and provider_id in self.allowed_remote_providers
-            and self.data_classification not in {"restricted", "sensitive"}
-            and (self.required_region is None or region == self.required_region)
-            and (not self.allowed_regions or region in self.allowed_regions)
-        )
+        if not self.allow_remote or self.data_classification != "public":
+            return False
+        if provider_id not in self.allowed_remote_providers:
+            return False
+        if region is None:
+            if "unspecified" not in self.allowed_regions:
+                return False
+        elif region not in self.allowed_regions:
+            return False
+        if self.required_region is not None and region != self.required_region:
+            return False
+        return True
 
 
 @dataclass(frozen=True)
 class ProviderResult:
     content: Any
     provider_id: str
-    execution_location: str
-    policy_version: int
     remote_egress: bool
+    region: str | None
+
+
+class ProviderPolicyError(PermissionError):
+    pass
 
 
 class PrivacyAwareModelGateway:
-    """One decision point for provider selection; never silently broadens egress."""
+    def __init__(
+        self,
+        local_gateway: ModelGateway | None = None,
+        remote_providers: dict[str, tuple[Any, str | None]] | None = None,
+    ):
+        self.local = local_gateway if local_gateway is not None else ModelGateway(provider_id="ollama")
+        self.remote: dict[str, tuple[Any, str | None]] = {}
+        if remote_providers is None:
+            for config in PROVIDERS:
+                self.register_remote(OpenAICompatibleProvider(config), region=None)
+            self.register_remote(AnthropicMessagesProvider(), region=None)
+        else:
+            for provider_id, (provider, region) in remote_providers.items():
+                self.remote[provider_id] = (provider, region)
 
-    def __init__(self, local_gateway: ModelGateway | None = None,
-                 remote_providers: dict[str, tuple[OpenAICompatibleProvider, str | None]] | None = None):
-        self.local = local_gateway or ModelGateway()
-        self.remote = remote_providers or {}
-
-    def register_remote(self, provider: OpenAICompatibleProvider, region: str | None = None):
-        provider_id = provider.config.provider_id
-        if provider_id in self.remote:
-            raise ValueError("Remote provider already registered")
+    def register_remote(self, provider: Any, region: str | None = None) -> None:
+        provider_id = getattr(provider, "provider_id", None)
+        if not provider_id:
+            provider_id = getattr(getattr(provider, "config", None), "provider_id", None)
+        if not isinstance(provider_id, str) or not provider_id:
+            raise ValueError("Remote provider must expose a stable provider_id")
         self.remote[provider_id] = (provider, region)
 
-    def chat(self, policy: InferencePolicy, model: str, messages: list[dict[str, Any]],
-             preferred_provider: str = "ollama", tools: list[dict] | None = None,
-             stream: bool = False, temperature: float = 0.7) -> ProviderResult:
-        if preferred_provider == "ollama":
-            manifest = self.local.provider_manifest()
-            execution_location = manifest.get("execution_location", "unknown")
-            remote = execution_location == "remote"
-            if remote and not policy.permits("ollama", None):
-                raise ProviderPolicyError("Privacy policy denies remote Ollama egress")
-            result = self.local.chat(model, messages, tools=tools, stream=stream,
-                                     temperature=temperature)
-            return ProviderResult(result, "ollama", execution_location,
-                                  policy.policy_version, remote)
-        selected = self.remote.get(preferred_provider)
-        if selected is None:
-            raise ProviderPolicyError("Requested provider is not registered")
-        provider, region = selected
-        if not policy.permits(preferred_provider, region):
-            raise ProviderPolicyError("Privacy policy denies remote provider egress")
-        if tools or stream:
-            raise ProviderPolicyError("This remote adapter does not support tool execution or streaming")
-        answer = provider.chat({"messages": messages})
-        return ProviderResult(answer, preferred_provider, "remote", policy.policy_version, True)
-
     def manifests(self) -> list[dict[str, Any]]:
-        return [{
-            "provider_id": "ollama",
-            "execution_location": "configured-local-or-remote",
+        local = self.local.provider_manifest()
+        result = [{
+            "provider_id": local["provider_id"],
+            "execution_location": local["execution_location"],
+            "region": local.get("region"),
             "enabled": True,
-            "remote_egress": False,
-        }] + [{
-            "provider_id": key, "execution_location": "remote",
-            "region": region, "enabled": provider.configured,
-            "remote_egress": True,
-        } for key, (provider, region) in self.remote.items()]
+        }]
+        for provider_id, (provider, region) in sorted(self.remote.items()):
+            result.append({
+                "provider_id": provider_id,
+                "execution_location": "remote",
+                "region": region,
+                "enabled": bool(getattr(provider, "configured", False)),
+            })
+        return result
+
+    def chat(
+        self,
+        policy: InferencePolicy,
+        model: str,
+        messages: list[dict[str, Any]],
+        provider_id: str = "ollama",
+        tools: list[dict[str, Any]] | None = None,
+        stream: bool = False,
+        temperature: float = 0.7,
+    ) -> ProviderResult:
+        if not policy.tenant_id or not policy.application_id:
+            raise ProviderPolicyError("Tenant and application identity are required")
+        if policy.data_classification not in {"public", "internal", "private", "sensitive", "restricted"}:
+            raise ProviderPolicyError("Unknown data classification")
+
+        if provider_id == "ollama":
+            manifest = self.local.provider_manifest()
+            location = manifest.get("execution_location")
+            if location == "local":
+                if policy.allowed_regions and "local" not in policy.allowed_regions:
+                    raise ProviderPolicyError("Local inference is not permitted by policy")
+            elif location == "remote":
+                if not policy.permits("ollama", manifest.get("region")):
+                    raise ProviderPolicyError("Remote Ollama is permitted only for explicitly authorized public data and an allowed region")
+                if tools or stream:
+                    raise ProviderPolicyError("Remote Ollama tool calling and streaming are not enabled by this policy")
+            else:
+                raise ProviderPolicyError("Ollama execution location is unknown; inference is denied")
+            result = self.local.chat(model, messages, tools=tools, stream=stream, temperature=temperature)
+            return ProviderResult(result, "ollama", location == "remote", manifest.get("region"))
+
+        if provider_id not in self.remote:
+            raise ProviderPolicyError("Provider is not registered for this application")
+        provider, region = self.remote[provider_id]
+        if not policy.permits(provider_id, region):
+            raise ProviderPolicyError("Remote inference is permitted only for explicitly authorized public data and an allowed provider region")
+        if tools or stream:
+            raise ProviderPolicyError("Remote tool calling and streaming are not enabled by this policy")
+        chat_response = getattr(provider, "chat_response", None)
+        if not callable(chat_response):
+            raise ProviderPolicyError("Remote provider does not implement the normalized response contract")
+        response = chat_response({"messages": messages}, model=model, temperature=temperature)
+        message = response.get("message") if isinstance(response, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise ProviderPolicyError("Remote provider returned no text response")
+        return ProviderResult(content, provider_id, True, region)
+
