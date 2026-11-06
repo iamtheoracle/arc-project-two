@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .inference_contract import validate_inference_request
 from .model_gateway import ModelGateway
 from .providers import AnthropicMessagesProvider, OpenAICompatibleProvider, PROVIDERS
 
@@ -101,6 +102,7 @@ class PrivacyAwareModelGateway:
             raise ProviderPolicyError("Tenant and application identity are required")
         if policy.data_classification not in {"public", "internal", "private", "sensitive", "restricted"}:
             raise ProviderPolicyError("Unknown data classification")
+        validate_inference_request(model, messages, tools, stream, temperature)
 
         if provider_id == "ollama":
             manifest = self.local.provider_manifest()
