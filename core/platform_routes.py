@@ -850,6 +850,17 @@ def plan_concierge_workflow(body:ConciergePlan,identity=Depends(require_applicat
     except ConciergeError as exc:
         raise HTTPException(422,str(exc))
 
+@router.post("/concierge/workflows/{workflow_id}/cancel")
+def cancel_concierge_workflow(workflow_id: str, identity=Depends(require_application)):
+    try:
+        return ConciergeWorkflowStore(os.environ.get("ORACLE_ARC_DB_PATH", "data/oracle_arc.sqlite3")).cancel(
+            identity, workflow_id)
+    except ConciergeError as exc:
+        message = str(exc)
+        status_code = 403 if "capability" in message else 409 if "Only workflows" in message else 404
+        raise HTTPException(status_code, message)
+
+
 @router.get("/concierge/workflows/{workflow_id}")
 def read_concierge_workflow(workflow_id: str, identity=Depends(require_application)):
     try:
