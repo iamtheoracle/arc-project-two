@@ -6,7 +6,7 @@ Oracle Arc is a standalone project. It is not Vantoris X Money, UNIBUD, The Arc 
 
 ## Planned specialist agents
 
-The architecture defines four coordinated roles: **BUD** (everyday companion and coordinator), **SPARK** (permissioned memory and continuity), **ORACLE** (reasoning, research and problem-solving), and **ORBITS** (visual understanding and creative workflows). They are intended to use one shared, provider-independent Oracle Arc service with separate identities and least-privilege permissions. This is an architecture direction, not a claim that the multi-agent runtime is already shipped.
+The architecture defines five coordinated roles: **BUD** (everyday companion and coordinator), **SPARK** (permissioned memory and continuity), **ORACLE** (reasoning, research and problem-solving), **ORBITS** (visual understanding and creative workflows), and **CONCIERGE** (authorized real-world workflow coordination). They are intended to use one shared, provider-independent Oracle Arc service with separate identities and least-privilege permissions. This is an architecture direction, not a claim that the multi-agent runtime is already shipped.
 
 ## What is implemented
 
@@ -109,7 +109,15 @@ Conversation continuity: the first chat response returns `conversation_id`. Send
 
 ## Agent registry and connector routing
 
-The authenticated agent API currently registers BUD and ORACLE. SPARK and ORBITS are present in the registry catalogue but remain disabled until their memory and visual runtimes are implemented.
+The direct chat registry enables BUD and ORACLE. SPARK, ORBITS and CONCIERGE are present as disabled roles. The platform worker has scoped SPARK memory support and ORBITS has isolated media processors, but those do not make either role an independently enabled specialist. CONCIERGE has workflow planning and confirmation storage, but no real provider executor is registered; consequential external actions therefore remain unavailable.
+
+CONCIERGE workflow lifecycle is principal-scoped and event-journaled:
+- `POST /v1/platform/concierge/workflows` creates an exact action plan and confirmation fingerprint.
+- `GET /v1/platform/concierge/workflows/{workflow_id}` returns the caller's action, provider outcome, receipt and ordered workflow events (requires `concierge.workflow.read`).
+- `POST /v1/platform/concierge/workflows/{workflow_id}/cancel` cancels only before provider execution (requires `concierge.workflow.cancel`).
+- `POST /v1/platform/concierge/workflows/{workflow_id}/confirm` requires the exact fingerprint and `concierge.action.execute`.
+
+A provider timeout or malformed receipt is recorded as an **unknown outcome requiring reconciliation**, not a definite failure. It is not automatically retried because the provider may already have completed the action. The workflow ID is passed to the trusted provider adapter as its idempotency key. This is recovery protection, not a substitute for a real provider adapter; no booking/payment adapter is currently registered, so no external booking or charge is claimed to work.
 
 - \`GET /v1/agents\` — list agent roles and configured connectors.
 - \`POST /v1/agents/bud/chat\` — send a turn to BUD.
@@ -125,7 +133,7 @@ Set \`ORACLE_ARC_OLLAMA_FALLBACK_HOSTS\` to a comma-separated list of independen
 ORACLE_ARC_OLLAMA_FALLBACK_HOSTS=http://ollama-backup:11434,http://ollama-secondary:11434
 \`\`\`
 
-BUD can explicitly delegate to ORACLE using the `delegate_to` field. It also has conservative automatic routing for clear research, analysis, debugging, comparison, design, and problem-solving requests. Everyday conversation remains with BUD. This is deterministic intent matching, not model-selected planning; inspect `handled_by`, `automatic_delegation`, and `delegation_reason` in the response.\n\nThe first configured host is attempted first; a failed connector is skipped for its cooldown period and the next configured host is tried. These backup services must already be running with the selected model available. No backup host is assumed or invented. If the variable is empty, there is no Ollama host failover. Optional remote fallbacks are available for OpenRouter, Groq, and Gemini through `ORACLE_ARC_OPENROUTER_API_KEY`, `ORACLE_ARC_GROQ_API_KEY`, and `ORACLE_ARC_GEMINI_API_KEY`; model overrides use the matching `ORACLE_ARC_*_MODEL` variables. Credentials stay server-side. Providers are only registered when their key exists, and no remote provider is enabled by default. Verify provider terms, data handling, region, and model availability before sending private prompts to a remote service.
+BUD can explicitly delegate to ORACLE using the `delegate_to` field. It also has conservative automatic routing for clear research, analysis, debugging, comparison, design, and problem-solving requests. Everyday conversation remains with BUD. This is deterministic intent matching, not model-selected planning; inspect `handled_by`, `automatic_delegation`, and `delegation_reason` in the response.\n\nThe first configured host is attempted first; a failed connector is skipped for its cooldown period and the next configured host is tried. These backup services must already be running with the selected model available. No backup host is assumed or invented. If the variable is empty, there is no Ollama host failover. Optional remote adapters are available for OpenRouter, Groq, Gemini and Claude through their server-side `ORACLE_ARC_*_API_KEY` variables; model overrides use the matching `ORACLE_ARC_*_MODEL` variables. Credentials stay server-side. Providers are only registered when their key exists, and no remote provider is enabled by default. Verify provider terms, data handling, region, and model availability before sending private prompts to a remote service.
 
 Only the reviewed calculator module is currently in the executable built-in allowlist. File and system plugins are not exposed for execution. Arbitrary plugin discovery has been removed. Session message writes now carry unique event IDs so a retried mirrored write does not duplicate the same message in either SQLite store. The calculator runs in a one-shot rootless Podman container. Build the image with `podman build -f Dockerfile.plugin-worker -t oracle-arc-plugin-worker:local .` and run the API under an unprivileged account with rootless Podman available. The worker uses no network, a read-only root filesystem, no Linux capabilities, no-new-privileges, a non-root UID, process/memory/CPU limits, a small no-exec temporary filesystem, and a five-second host timeout. The API fails closed if Podman or the image is unavailable. Do not mount a privileged Docker socket into the API container. This is a stronger OS isolation boundary, but still requires host kernel/Podman updates, image provenance controls, and production threat-model review. Third-party plugins remain disabled. Tool approval remains default-deny.
 
@@ -177,7 +185,7 @@ Before a new feature is implemented, call the authenticated `POST /v1/implementa
 - Candidate plugins, extensions and connectors, clearly marked as recommendations rather than installed or healthy services.
 - Whether each selected specialist is currently registered and enabled.
 
-The first planner uses transparent deterministic capability/keyword rules. It is not an autonomous model planner and does not prove that an integration exists. Recommendations must be reviewed against a trusted manifest, source provenance, version, permissions, data handling, sandbox requirements and health checks before installation or activation. External side effects require separate owner approval. Disabled agents remain disabled; the planner does not silently enable SPARK or ORBITS. Unsupported work must be reviewed rather than mapped to an invented integration.
+The first planner uses transparent deterministic capability/keyword rules. It is not an autonomous model planner and does not prove that an integration exists. Recommendations must be reviewed against a trusted manifest, source provenance, version, permissions, data handling, sandbox requirements and health checks before installation or activation. External side effects require separate owner approval. Disabled agents remain disabled; the planner does not silently enable SPARK, ORBITS or CONCIERGE. Unsupported work must be reviewed rather than mapped to an invented integration.
 
 
 ### Trusted integrations and independent workers
@@ -254,7 +262,7 @@ The worker credential must be issued by the owner-authenticated worker provision
 
 The worker polls the application-scoped queue, claims a leased execution, rechecks the active agent version and pinned model route, verifies classification and region, and invokes the configured model gateway. Heartbeats renew an active lease during long model calls. Successful completion and provider-reported input/output token usage are committed together; late or cancelled results cannot overwrite a terminal execution. Policy and input-validation failures are not automatically retried. Other worker/provider failures use the queue's bounded retry/dead-letter policy.
 
-The current execution runner supports text-only prompts/messages and the configured Ollama adapter. Agent manifests that declare tools are rejected by this runner until a scoped tool broker is implemented. Provider token counts are recorded only when the provider returns them; no fabricated estimates are written. This does not yet provide billing-grade pricing, cross-host queue coordination, or automatic production deployment.
+The current execution runner supports text-only prompts/messages and the registered model-provider adapters. Live provider verification remains a separate release gate. Agent manifests that declare tools are rejected by this runner until a scoped tool broker is implemented. Provider token counts are recorded only when the provider returns them; no fabricated estimates are written. This does not yet provide billing-grade pricing, cross-host queue coordination, or automatic production deployment.
 
 For a single-host setup, API and worker must use the same protected SQLite database file and compatible model/provider configuration. For multi-host workers, migrate the control plane and queue to a shared transactional database before scaling. Start with a non-production tenant and test cancellation, worker revocation, provider timeouts, lease expiry and restart recovery before accepting real workloads.
 
@@ -291,7 +299,7 @@ For a calculator-enabled agent, all four independent grants are required:
 The worker re-reads application capabilities and owner grants before each tool call and revalidates the worker credential. Tool schemas are generated from the trusted server registry; model output cannot add tools or handlers.
 
 
-Remote provider egress is deliberately fail-closed: OpenRouter, Groq and Gemini routes may be configured only for `public` data until a provider-specific contract, region and data-egress policy is approved. Ollama remains the local route for private data. The OpenAI-compatible adapters preserve tool-call IDs and usage accounting; tool function names are normalized to provider-safe names and resolved back to immutable internal tool IDs.
+Remote provider egress is deliberately fail-closed: OpenRouter, Groq, Gemini and Claude routes may be configured only for `public` data until a provider-specific contract, region and data-egress policy is approved. Ollama remains the local route for private data. The OpenAI-compatible adapters preserve tool-call IDs and usage accounting; tool function names are normalized to provider-safe names and resolved back to immutable internal tool IDs.
 
 
 See [the deployment runbook](docs/DEPLOYMENT_RUNBOOK.md) for the current single-host API/worker topology, persistent SQLite constraints, rootless Podman isolation, environment configuration and go-live checklist. Production deployment is not complete until that runbook is executed against a real host.
@@ -331,3 +339,19 @@ The container is a processing boundary, not a guarantee of perfect extraction. V
 ## Engineering acceptance standard
 
 All new features and releases must satisfy the [Oracle Arc engineering acceptance standard](docs/ENGINEERING_ACCEPTANCE_STANDARD.md). Passing an isolated unit test or discovering a model/processor is never treated as proof of production readiness.
+
+
+## Voice and audio
+
+Voice and audio are a first-class Oracle Arc capability. The current ORBITS audio foundation provides metadata inspection and an optional offline faster-whisper transcription worker; it does not yet provide a complete spoken conversation experience.
+
+The implementation contract and remaining phases are documented in [Voice and Audio Architecture](docs/VOICE_AUDIO_ARCHITECTURE.md). An initial local Piper TTS worker, pinned-model provisioning script and capability-scoped synthesis API are now present. See [Local TTS model setup](docs/LOCAL_TTS_MODEL_SETUP.md). TTS still requires a real model install and target-host verification; it is not yet a complete conversational voice feature. The planned end-to-end path is:
+
+1. User-initiated microphone capture with visible recording state and bounded audio intake.
+2. Local speech detection and transcription through the separately provisioned ASR worker.
+3. Authenticated transcript handoff to the same ORACLE conversation context used by text chat.
+4. Local speech synthesis through a separately provisioned, isolated TTS worker.
+5. Validated audio playback with stop, cancel and interruption handling.
+6. Durable, scoped voice-session events, retention controls and deletion.
+
+Local processing is the default. No silent remote audio fallback is permitted. The TTS engine foundation and API are implemented but real inference remains unverified. Durable voice-session metadata and event APIs exist, but browser microphone capture, playback UX, live streaming/VAD and end-to-end voice conversation are not implemented yet and must not be represented as available. Real ASR inference also remains unverified until the pinned model is installed and exercised on the target host.

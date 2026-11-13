@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -11,19 +12,22 @@ CAPS = [
     "agent.register", "agent.read", "agent.manage", "agent.execute",
     "agent.execution.read", "model.route.manage", "model.route.use",
     "quota.manage", "usage.write", "usage.read", "reasoning",
-    "tool.search", "tool.calendar",
+    "tool.calculate", "tool.document_search",
 ]
 
 
-def setup(tmp_path, name="Tenant A", app="APP"):
+def setup(tmp_path, name="Tenant A", app="APP", extra_capabilities=()):
     path = str(tmp_path / "platform.sqlite3")
     identities = TenantIdentityStore(path)
-    issued = identities.provision(name, app, "principal-" + name.lower().replace(" ", "-"), CAPS)
+    issued = identities.provision(
+        name, app, "principal-" + name.lower().replace(" ", "-"),
+        CAPS + list(extra_capabilities),
+    )
     identity = identities.authenticate(issued["secret"])
     # Tests model the separate owner grant plane; application capabilities alone
     # must not silently authorize a tool.
     grants = ToolGrantStore(path)
-    for tool_id in ("tool.search", "tool.calendar"):
+    for tool_id in ("tool.calculate", "tool.document_search"):
         grants.grant(identity.tenant_id, identity.application_id, tool_id, "test-owner")
     return path, identities, identity, PlatformControlPlane(path)
 
@@ -33,7 +37,8 @@ def manifest(tools=None):
         "display_name": "Research agent",
         "description": "Tenant-scoped research specialist",
         "required_capabilities": ["reasoning"],
-        "allowed_tools": tools or ["tool.search"],
+        # An explicit empty list means the agent is intentionally tool-free.
+        "allowed_tools": ["tool.calculate"] if tools is None else tools,
         "model_routes": ["local-default"],
         "runtime": "oracle-arc-agent-v1",
     }
@@ -51,8 +56,8 @@ def test_agent_versions_are_immutable_and_application_scoped(tmp_path):
     _, _, b, _ = setup(tmp_path, "Tenant B", "APP")
     configure(cp, a)
     cp.register_agent(a, "research", "1.0.0", manifest())
-    cp.register_agent(a, "research", "1.1.0", manifest(["tool.search", "tool.calendar"]))
-    assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["tool.search"]
+    cp.register_agent(a, "research", "1.1.0", manifest(["tool.calculate", "tool.document_search"]))
+    assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["tool.calculate"]
     with pytest.raises(LookupError):
         cp.get_agent(b, "research")
     with pytest.raises(Exception):
@@ -101,7 +106,7 @@ def test_expired_worker_lease_recovers_and_dead_letters(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {}, max_attempts=2)
-    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5)
+    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert claim.execution_id == eid
     with cp._session() as db:
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
@@ -157,17 +162,16 @@ def test_worker_heartbeat_extends_only_current_unexpired_lease(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
-    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5)
+    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert claim.execution_id == eid
     assert cp.heartbeat_execution(eid, "wrk_worker_a", lease_seconds=60)
     assert not cp.heartbeat_execution(eid, "wrk_worker_b", lease_seconds=60)
 
 
 def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
-    _, ids, identity, cp = setup(tmp_path)
-    issued = ids.provision("Tenant A", "APP", "principal-cancel",
-                           CAPS + ["agent.execution.cancel"])
-    identity = ids.authenticate(issued["secret"])
+    _, ids, identity, cp = setup(
+        tmp_path, extra_capabilities=["agent.execution.cancel"]
+    )
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
@@ -175,7 +179,17 @@ def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
     assert cp.cancel_execution(identity, eid)
     assert not cp.complete_execution(eid, "wrk_worker_a", {"answer": "late"})
     assert not cp.fail_execution(eid, "wrk_worker_a", "late_worker_failure", retryable=False)
-    assert cp.get_execution(identity, eid).status == "cancelled"
+    execution = cp.get_execution(identity, eid)
+    assert execution.status == "cancelled"
+    assert execution.error_code == "cancelled_by_principal"
+    with cp._session() as db:
+        lease = db.execute(
+            "SELECT lease_owner,lease_expires_at FROM arc_executions WHERE execution_id=?",
+            (eid,),
+        ).fetchone()
+    assert lease["lease_owner"] is None
+    assert lease["lease_expires_at"] is None
+    assert not cp.cancel_execution(identity, eid)
 
 
 def test_worker_credentials_are_independent_scoped_and_revocable(tmp_path):
@@ -247,6 +261,29 @@ def test_worker_executes_model_and_commits_usage_atomically(tmp_path, monkeypatc
             assert provider_id == "ollama"
             assert timeout_seconds is not None and timeout_seconds > 0
 
+        def provider_manifest(self):
+            # Match the ModelGateway contract used by PlatformWorker's
+            # execution-location policy check. This fixture represents local Ollama.
+            return {
+                "provider_id": "ollama",
+                "display_name": "Ollama (local)",
+                "execution_location": "local",
+                "capabilities": {
+                    "text": True,
+                    "vision": False,
+                    "audio_input": False,
+                    "audio_output": False,
+                    "tool_calling": True,
+                    "structured_output": False,
+                    "streaming": True,
+                },
+                "enabled": True,
+                "description": "Deterministic local-provider test double.",
+            }
+
+        def set_timeout_seconds(self, timeout_seconds):
+            assert timeout_seconds > 0
+
         def chat(self, model, messages, tools=None, temperature=0.2):
             assert model == "qwen2.5:7b"
             assert tools is None
@@ -291,6 +328,11 @@ def test_expired_lease_recovery_is_application_scoped(tmp_path):
     execution_a = cp.submit_execution(identity_a, "research", "1.0.0", "local-default", {})
     issued_b = ids.provision("Tenant B", "APP", "principal-b", CAPS)
     identity_b = ids.authenticate(issued_b["secret"])
+    # The second application must receive its own owner grant; application
+    # capabilities alone do not authorize tools.
+    ToolGrantStore(path).grant(
+        identity_b.tenant_id, identity_b.application_id, "tool.calculate", "test-owner"
+    )
     configure(cp, identity_b)
     cp.register_agent(identity_b, "research", "1.0.0", manifest())
     execution_b = cp.submit_execution(identity_b, "research", "1.0.0", "local-default", {})
@@ -311,11 +353,48 @@ def test_expired_lease_recovery_is_application_scoped(tmp_path):
     assert status_b == "running"
 
 
-def test_remote_model_routes_are_public_data_only_until_egress_policy_is_approved(tmp_path):
+def test_remote_model_routes_require_verified_provider_regions_and_public_data(tmp_path, monkeypatch):
     _, _, identity, cp = setup(tmp_path)
     with pytest.raises(PermissionError, match="restricted to public"):
         cp.configure_model_route(identity, "remote-private", "openrouter", "openai/gpt-4o-mini",
-                                 ["public", "private"], ["remote"])
+                                 ["public", "private"], ["eu-west-1"])
+    with pytest.raises(PermissionError, match="no verified execution regions"):
+        cp.configure_model_route(identity, "remote-unverified", "openrouter", "openai/gpt-4o-mini",
+                                 ["public"], ["eu-west-1"])
+
+    monkeypatch.setenv("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+                       json.dumps({"openrouter": ["eu-west-1"]}))
     cp.configure_model_route(identity, "remote-public", "openrouter", "openai/gpt-4o-mini",
-                              ["public"], ["remote"])
-    assert cp.resolve_model_route(identity, "remote-public", "public", "remote")["provider_id"] == "openrouter"
+                              ["public"], ["eu-west-1"])
+    assert cp.resolve_model_route(identity, "remote-public", "public", "eu-west-1")["provider_id"] == "openrouter"
+    monkeypatch.setenv("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+                       json.dumps({"openrouter": ["us-east-1"]}))
+    with pytest.raises(PermissionError, match="no longer verified"):
+        cp.resolve_model_route(identity, "remote-public", "public", "eu-west-1")
+
+
+def test_remote_execution_submission_rechecks_region_attestation(tmp_path, monkeypatch):
+    _, _, identity, cp = setup(tmp_path)
+    monkeypatch.setenv(
+        "ORACLE_ARC_VERIFIED_PROVIDER_REGIONS",
+        json.dumps({"groq": ["provider-region-1"]}),
+    )
+    cp.configure_model_route(
+        identity, "remote-public", "groq", "llama-3.3-70b",
+        ["public"], ["provider-region-1"],
+    )
+    cp.set_quota(identity, window_seconds=60, max_executions=5,
+                 max_concurrent=2, max_input_bytes=2048)
+    cp.register_agent(identity, "remote-research", "1.0.0", {
+        **manifest(), "model_routes": ["remote-public"],
+    })
+
+    # Attestation can be withdrawn after route setup. Submission must not queue
+    # a remote execution using a now-unverified destination.
+    monkeypatch.delenv("ORACLE_ARC_VERIFIED_PROVIDER_REGIONS")
+    with pytest.raises(PermissionError, match="region is not verified"):
+        cp.submit_execution(
+            identity, "remote-research", "1.0.0", "remote-public",
+            {"prompt": "Public information only"},
+            classification="public", region="provider-region-1",
+        )

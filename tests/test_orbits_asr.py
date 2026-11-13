@@ -87,3 +87,39 @@ def test_asr_registry_is_not_advertised_until_model_is_installed(monkeypatch, tm
     registry = build_default_orbits_registry(runner=lambda *_: {"ok": True})
     assert "audio.transcribe" in registry._processors
     assert registry.process("audio.transcribe", asset, data)["text"] == "offline transcript"
+
+def test_asr_runtime_rejects_oversized_input_before_spawning(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("worker must not start"))
+    with pytest.raises(ValueError, match="25 MB"):
+        run_local_asr(b"x" * (25 * 1024 * 1024 + 1))
+
+
+def test_asr_runtime_rejects_remote_or_oversized_transcript(monkeypatch, tmp_path):
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text("{}")
+    (model / "model.bin").write_bytes(b"local-model")
+    (model / "oracle-arc-model-manifest.json").write_text("{}")
+    monkeypatch.setenv("ORACLE_ARC_ASR_MODEL_DIR", str(model))
+
+    class Remote:
+        returncode = 0
+        stdout = json.dumps({"result": {
+            "text": "transcript", "transcription_status": "completed",
+            "inference_location": "remote",
+        }})
+
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: Remote())
+    with pytest.raises(RuntimeError, match="invalid result contract"):
+        run_local_asr(b"audio")
+
+    class Oversized:
+        returncode = 0
+        stdout = json.dumps({"result": {
+            "text": "x" * 100_001, "transcription_status": "completed",
+            "inference_location": "local",
+        }})
+
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: Oversized())
+    with pytest.raises(RuntimeError, match="invalid result contract"):
+        run_local_asr(b"audio")

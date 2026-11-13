@@ -98,7 +98,8 @@ def test_agent_registry_reports_connector_failure_health_without_error_details()
     with pytest.raises(RegistryError):
         registry.dispatch("oracle", {})
     status = registry.list_agents()[0]["connectors"][0]
-    assert status["healthy"] is False
+    assert status["dispatch_eligible"] is False
+    assert status["health_status"] == "unknown"
     assert status["failure_count"] == 1
     assert status["last_error_type"] == "ConnectionError"
     assert "sensitive endpoint detail" not in str(status)

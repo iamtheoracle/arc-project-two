@@ -7,6 +7,7 @@ bound server-side to one tenant, application, principal, and capability set.
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import contextmanager
 import hmac
 import secrets
@@ -323,12 +324,13 @@ class TenantSecurityStore:
         import json
         if status not in {"succeeded","failed","cancelled"} or not isinstance(result,dict):
             raise ValueError("Invalid task completion")
+        self.require(identity,"agent.tasks.complete")
         with self._session() as db:
             row=db.execute(
                 "SELECT agent_id,required_capabilities_json FROM arc_scoped_tasks "
-                "WHERE task_id=? AND tenant_id=? AND application_id=? AND principal_id=? "
+                "WHERE task_id=? AND tenant_id=? AND application_id=? "
                 "AND worker_id=? AND status='running'",
-                (task_id,identity.tenant_id,identity.application_id,identity.principal_id,worker_id)
+                (task_id,identity.tenant_id,identity.application_id,worker_id)
             ).fetchone()
             if not row:
                 return False
@@ -358,11 +360,51 @@ class TenantSecurityStore:
                 "result":json.loads(row["result_json"]) if row["result_json"] else None}
 
     def revoke_credential(self, credential_id: str) -> bool:
+        now = int(time.time())
         with self._session() as db:
-            cur=db.execute("UPDATE arc_credentials SET revoked_at=? WHERE credential_id=? AND revoked_at IS NULL",
-                           (int(time.time()),credential_id))
+            credential = db.execute(
+                "SELECT tenant_id,application_id,principal_id FROM arc_credentials WHERE credential_id=? AND revoked_at IS NULL",
+                (credential_id,),
+            ).fetchone()
+            if credential is None:
+                return False
+            cur = db.execute(
+                "UPDATE arc_credentials SET revoked_at=? WHERE credential_id=? AND revoked_at IS NULL",
+                (now, credential_id),
+            )
+            if cur.rowcount != 1:
+                return False
+            # Grants are owned by the source principal within the source app.
+            # Keep them only while that principal has another live credential
+            # in the same app; credentials in unrelated apps do not keep them alive.
+            remaining = db.execute(
+                """SELECT capabilities_json FROM arc_credentials
+                   WHERE tenant_id=? AND application_id=? AND principal_id=?
+                     AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)""",
+                (credential["tenant_id"], credential["application_id"],
+                 credential["principal_id"], now),
+            ).fetchall()
+            # A credential without the sharing capability cannot keep another
+            # credential's SPARK grants alive.
+            has_live_share_authority = False
+            for row in remaining:
+                try:
+                    if "spark.memory.share" in json.loads(row["capabilities_json"]):
+                        has_live_share_authority = True
+                        break
+                except (TypeError, json.JSONDecodeError):
+                    continue
+            if not has_live_share_authority:
+                db.execute(
+                    """UPDATE arc_memory_grants
+                       SET revoked_at=?, grant_version=grant_version+1
+                       WHERE tenant_id=? AND source_application_id=? AND principal_id=?
+                         AND revoked_at IS NULL""",
+                    (now, credential["tenant_id"], credential["application_id"],
+                     credential["principal_id"]),
+                )
             db.commit()
-            return cur.rowcount == 1
+            return True
 
     @staticmethod
     def require(identity: RequestIdentity, capability: str):

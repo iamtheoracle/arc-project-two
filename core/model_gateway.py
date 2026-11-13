@@ -13,7 +13,12 @@ from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 import ollama
 from .inference_contract import validate_inference_request
-from .providers import PROVIDERS as REMOTE_PROVIDER_CONFIGS, OpenAICompatibleProvider, ProviderConfig
+from .providers import (
+    PROVIDERS as REMOTE_PROVIDER_CONFIGS,
+    AnthropicMessagesProvider,
+    OpenAICompatibleProvider,
+    ProviderConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -171,6 +176,7 @@ class OpenAICompatibleModelAdapter:
             display_name=config.provider_id.replace("-", " ").title(),
             execution_location="remote",
             capabilities=ModelCapabilities(tool_calling=True, streaming=False),
+            enabled=self.client.configured,
             description="Fixed HTTPS provider endpoint; API credentials are read server-side.",
         )
 
@@ -195,12 +201,44 @@ class OpenAICompatibleModelAdapter:
         )
 
 
+class AnthropicModelAdapter:
+    """Native Claude Messages API adapter normalized to the platform tool contract."""
+
+    def __init__(self, timeout_seconds: float = 30.0) -> None:
+        self.client = AnthropicMessagesProvider(timeout_seconds=timeout_seconds)
+        self.manifest = ProviderManifest(
+            provider_id="claude",
+            display_name="Anthropic Claude",
+            execution_location="remote",
+            capabilities=ModelCapabilities(tool_calling=True, streaming=False),
+            enabled=self.client.configured,
+            description="Anthropic Messages API; credentials remain server-side and remote egress is policy-gated.",
+        )
+
+    def set_timeout_seconds(self, timeout_seconds: float) -> None:
+        self.client.set_timeout_seconds(timeout_seconds)
+
+    def chat(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+        temperature: float = 0.7,
+    ) -> Any:
+        if stream:
+            raise ValueError("Streaming is not enabled for Claude in this adapter.")
+        return self.client.chat_response(
+            {"messages": messages}, tools=tools, temperature=temperature, model=model
+        )
+
+
 class ModelGateway:
     """Routes validated model requests through an explicitly registered provider."""
 
     def __init__(self, registry: Optional[ProviderRegistry] = None, provider_id: Optional[str] = None, host: Optional[str] = None, timeout_seconds: Optional[float] = None) -> None:
         self._owns_registry = registry is None
-        self.provider_id = provider_id or os.environ.get("ORACLE_ARC_PROVIDER", "ollama")
+        self.provider_id = provider_id or "ollama"
         if timeout_seconds is not None and (
             isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
             or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 900
@@ -210,6 +248,8 @@ class ModelGateway:
         if registry is None:
             if self.provider_id == "ollama":
                 self.registry.register(OllamaProvider(host=host, timeout_seconds=timeout_seconds))
+            elif self.provider_id == "claude":
+                self.registry.register(AnthropicModelAdapter(timeout_seconds=timeout_seconds or 30.0))
             else:
                 config = next((item for item in REMOTE_PROVIDER_CONFIGS
                                if item.provider_id == self.provider_id), None)

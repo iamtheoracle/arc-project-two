@@ -1,10 +1,12 @@
 import pytest
+import stat
 
 from core.orbits import validate_asset
 from core.orbits_quarantine import (
     DocumentQuarantineStore, MalwareDetected, MalwareScannerUnavailable,
 )
 from core.tenant_security import TenantSecurityStore
+from core.document_retrieval import DocumentRetrievalStore
 
 
 def provision_identity(database_path, principal="principal-a"):
@@ -13,7 +15,7 @@ def provision_identity(database_path, principal="principal-a"):
     app = security.create_application(tenant, "Application")
     token = security.issue_credential(
         tenant, app, principal,
-        ["orbits.process", "document.index", "document.delete", "document.audit"],
+        ["orbits.process", "document.index", "document.search", "document.delete", "document.audit"],
         ttl_seconds=3600,
     )
     return security.authenticate(token)
@@ -28,6 +30,9 @@ def test_quarantine_requires_clean_scan_before_reporting_success(tmp_path):
     who = provision_identity(tmp_path / "db.sqlite3")
     result = store.ingest(who, asset, b"safe document text", retention_seconds=120)
     assert result["status"] == "clean"
+    assert stat.S_IMODE((tmp_path / "db.sqlite3").stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / "quarantine").stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / "quarantine" / (asset.asset_id + ".bin")).stat().st_mode) == 0o600
     assert (tmp_path / "quarantine" / (asset.asset_id + ".bin")).exists()
     actions = [x["action"] for x in store.audit(who, asset.asset_id)]
     assert actions == ["quarantined", "scanner_clean"]
@@ -101,3 +106,81 @@ def test_quarantine_rechecks_credential_revocation_before_storing_bytes(tmp_path
     with pytest.raises(AuthorizationError):
         store.ingest(who, asset, data)
     assert not (tmp_path / "quarantine" / (asset.asset_id + ".bin")).exists()
+
+
+def test_clamav_scan_requires_exact_clean_or_infected_status_suffix(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import core.orbits_quarantine as quarantine
+
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="diagnostic says NOT OK but no file result", stderr="")
+    monkeypatch.setattr(quarantine.subprocess, "run", fake_run)
+    with pytest.raises(MalwareScannerUnavailable):
+        quarantine.clamav_scan(tmp_path / "document.txt")
+
+    monkeypatch.setattr(quarantine.subprocess, "run", lambda command, **kwargs:
+        SimpleNamespace(returncode=0, stdout=f"{command[-1]}: OK", stderr=""))
+    assert quarantine.clamav_scan(tmp_path / "document.txt").endswith(": OK")
+
+    monkeypatch.setattr(quarantine.subprocess, "run", lambda command, **kwargs:
+        SimpleNamespace(returncode=1, stdout=f"{command[-1]}: Eicar-Test-Signature FOUND", stderr=""))
+    with pytest.raises(MalwareDetected):
+        quarantine.clamav_scan(tmp_path / "document.txt")
+
+
+def test_clamav_scan_rejects_unbounded_timeouts(tmp_path):
+    from core.orbits_quarantine import clamav_scan
+    with pytest.raises(ValueError, match="between 1 and 120"):
+        clamav_scan(tmp_path / "document.txt", timeout_seconds=10_000)
+
+
+def test_quarantine_retention_also_deletes_linked_indexed_document(tmp_path):
+    data = b"private retained document content"
+    asset = validate_asset(data, "linked.txt")
+    database = tmp_path / "db.sqlite3"
+    store = DocumentQuarantineStore(
+        str(database), str(tmp_path / "quarantine"), scanner=lambda path: "clean"
+    )
+    who = provision_identity(database)
+    stored = store.ingest(who, asset, data, retention_seconds=60)
+    documents = DocumentRetrievalStore(str(database))
+    document_id = documents.index_text(
+        who, "Linked document", "arc://linked", data.decode(),
+        classification="private", retention_seconds=3600,
+    )
+    assert store.link_document(who, asset.asset_id, document_id) is True
+    assert len(documents.search(who, "retained document")) == 1
+
+    assert store.expire_due(now=stored["expires_at"] + 1) == 1
+    assert documents.search(who, "retained document") == []
+    assert store.audit(who, asset.asset_id)[-1]["action"] == "retention_expired_and_bytes_deleted"
+
+
+def test_quarantine_retention_also_tombstones_linked_indexed_text(tmp_path):
+    import sqlite3
+    from core.document_retrieval import DocumentRetrievalStore
+
+    database = tmp_path / "retention-linked.sqlite3"
+    data = b"source document with confidential retention marker"
+    asset = validate_asset(data, "linked-retention.txt")
+    who = provision_identity(database)
+    quarantine = DocumentQuarantineStore(
+        str(database), str(tmp_path / "linked-quarantine"),
+        scanner=lambda path: "clean",
+    )
+    indexed = DocumentRetrievalStore(str(database)).index_text(
+        who, "Linked source", "arc://linked/source",
+        "confidential retention marker must expire with its source",
+        retention_seconds=60,
+    )
+    stored = quarantine.ingest(who, asset, data, retention_seconds=60)
+    quarantine.link_document(who, asset.asset_id, indexed)
+    assert quarantine.expire_due(now=stored["expires_at"] + 1) == 1
+    with sqlite3.connect(database) as db:
+        row = db.execute(
+            "SELECT status,content FROM arc_documents WHERE document_id=?",
+            (indexed,),
+        ).fetchone()
+    assert row == ("deleted", "")

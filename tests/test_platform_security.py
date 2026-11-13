@@ -37,9 +37,9 @@ def test_spark_memory_isolation_and_explicit_revocable_cross_app_grant(tmp_path)
         tenant,app_a,"principal-1",
         ["spark.memory.read","spark.memory.write","spark.memory.share"])
     dest_token=store.issue_credential(
-        tenant,app_b,"principal-1",["spark.memory.read_shared"])
+        tenant,app_b,"principal-1",["spark.memory.read","spark.memory.read_shared"])
     unrelated_token=store.issue_credential(
-        tenant,app_c,"principal-1",["spark.memory.read_shared"])
+        tenant,app_c,"principal-1",["spark.memory.read","spark.memory.read_shared"])
     source=store.authenticate(source_token)
     destination=store.authenticate(dest_token)
     unrelated=store.authenticate(unrelated_token)
@@ -74,7 +74,7 @@ def test_credentials_cannot_bind_application_to_another_tenant(tmp_path):
 
 
 def test_concierge_requires_exact_confirmation_and_provider_receipt(tmp_path):
-    identity=RequestIdentity("cred","tenant","app","user",frozenset({"concierge.execute"}),1)
+    identity=RequestIdentity("cred","tenant","app","user",frozenset({"concierge.workflow.plan","concierge.action.execute"}),1)
     store=ConciergeWorkflowStore(str(tmp_path/"arc.sqlite3"))
     action={"kind":"calendar.create_event","provider":"calendar-test",
             "parameters":{"title":"Study group"},"consequential":True}
@@ -93,7 +93,7 @@ def test_concierge_requires_exact_confirmation_and_provider_receipt(tmp_path):
 
 def test_concierge_rejects_cross_application_workflow_access(tmp_path):
     store=ConciergeWorkflowStore(str(tmp_path/"arc.sqlite3"))
-    source=RequestIdentity("c1","tenant","app-a","user",frozenset(),1)
+    source=RequestIdentity("c1","tenant","app-a","user",frozenset({"concierge.workflow.plan"}),1)
     other=RequestIdentity("c2","tenant","app-b","user",frozenset(),1)
     action={"kind":"booking.create","provider":"provider","parameters":{"slot":"10:00"},"consequential":True}
     planned=store.plan(source,action)
@@ -106,7 +106,7 @@ def test_provider_gateway_denies_remote_egress_by_default():
     class FakeLocal:
         def provider_manifest(self):
             return {"execution_location":"local"}
-        def chat(self,**kwargs):
+        def chat(self,model,messages,**kwargs):
             return {"message":{"content":"local answer"}}
     gateway=PrivacyAwareModelGateway(local_gateway=FakeLocal(),remote_providers={})
     policy=InferencePolicy("t","a","p")
@@ -119,7 +119,7 @@ def test_provider_gateway_requires_allowlist_for_remote_ollama():
     class FakeRemoteOllama:
         def provider_manifest(self):
             return {"execution_location":"remote"}
-        def chat(self,**kwargs):
+        def chat(self,model,messages,**kwargs):
             return "answer"
     gateway=PrivacyAwareModelGateway(local_gateway=FakeRemoteOllama(),remote_providers={})
     denied=InferencePolicy("t","a","p")
@@ -162,7 +162,7 @@ def test_agent_task_queue_is_scoped_and_worker_reauthorizes_capabilities(tmp_pat
     a=store.authenticate(store.issue_credential(tenant,app_a,"p1",caps))
     b=store.authenticate(store.issue_credential(tenant,app_b,"p1",caps))
     worker=store.authenticate(store.issue_credential(
-        tenant,app_a,"service-worker",["agent.tasks.claim","agent.oracle.dispatch","reasoning"]))
+        tenant,app_a,"service-worker",["agent.tasks.claim","agent.tasks.complete","agent.oracle.dispatch","reasoning"]))
     task_id=store.create_scoped_task(a,"oracle",["reasoning"],{"prompt":"analyze"})
     assert store.get_scoped_task(b,task_id) is None
     with pytest.raises(AuthorizationError):
@@ -183,3 +183,60 @@ def test_agent_task_requires_dispatch_and_each_requested_capability(tmp_path):
         tenant,app,"p1",["agent.oracle.dispatch"]))
     with pytest.raises(AuthorizationError):
         store.create_scoped_task(identity,"oracle",["reasoning"],{"prompt":"no grant"})
+
+
+def test_last_source_app_credential_revocation_invalidates_spark_grants(tmp_path):
+    store = TenantSecurityStore(tmp_path / "arc.sqlite3")
+    tenant = store.create_tenant("Tenant")
+    source_app = store.create_application(tenant, "Source")
+    destination_app = store.create_application(tenant, "Destination")
+    caps = ["spark.memory.read", "spark.memory.write", "spark.memory.share"]
+    token_a = store.issue_credential(tenant, source_app, "principal-1", caps)
+    token_b = store.issue_credential(tenant, source_app, "principal-1", caps)
+    destination_token = store.issue_credential(
+        tenant, destination_app, "principal-1",
+        ["spark.memory.read", "spark.memory.read_shared"],
+    )
+    source = store.authenticate(token_a)
+    destination = store.authenticate(destination_token)
+    memory_id = store.save_memory(source, "Only authorized source app", "project")
+    grant = store.share_memory(source, destination_app, ["project"], "Authorized project continuity")
+    assert [row["memory_id"] for row in store.shared_memories(destination, source_app)] == [memory_id]
+
+    # Revoking one of two source-app credentials must not prematurely revoke the grant.
+    assert store.revoke_credential(source.credential_id)
+    source_b = store.authenticate(token_b)
+    assert [row["memory_id"] for row in store.shared_memories(destination, source_app)] == [memory_id]
+
+    assert store.revoke_credential(source_b.credential_id)
+    assert store.shared_memories(destination, source_app) == []
+    with pytest.raises(AuthorizationError):
+        store.authenticate(token_b)
+
+
+def test_credential_without_share_capability_does_not_preserve_spark_grants(tmp_path):
+    store = TenantSecurityStore(tmp_path / "arc.sqlite3")
+    tenant = store.create_tenant("Tenant")
+    source_app = store.create_application(tenant, "Source")
+    destination_app = store.create_application(tenant, "Destination")
+    source_token = store.issue_credential(
+        tenant, source_app, "principal-1",
+        ["spark.memory.read", "spark.memory.write", "spark.memory.share"],
+    )
+    non_share_token = store.issue_credential(
+        tenant, source_app, "principal-1",
+        ["spark.memory.read", "spark.memory.write"],
+    )
+    destination_token = store.issue_credential(
+        tenant, destination_app, "principal-1",
+        ["spark.memory.read", "spark.memory.read_shared"],
+    )
+    source = store.authenticate(source_token)
+    destination = store.authenticate(destination_token)
+    store.save_memory(source, "Scoped source memory", "project")
+    store.share_memory(source, destination_app, ["project"], "Authorized continuity")
+    assert store.shared_memories(destination, source_app)
+    assert store.revoke_credential(source.credential_id)
+    assert store.shared_memories(destination, source_app) == []
+    # The unrelated active credential remains valid, but cannot preserve grants.
+    assert store.authenticate(non_share_token).principal_id == "principal-1"
