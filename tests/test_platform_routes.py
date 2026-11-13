@@ -175,7 +175,7 @@ def test_orbits_api_scanner_unavailable_fails_closed_before_processing(client,mo
     monkeypatch.setattr(routes,"build_default_orbits_registry",lambda:registry)
     monkeypatch.setattr(routes,"clamav_scan",lambda path: (_ for _ in ()).throw(routes.MalwareScannerUnavailable("offline")))
     monkeypatch.setenv("ORACLE_ARC_QUARANTINE_DIR",str(tmp_path/"offline"))
-    raw=b"\\x89PNG\\r\\n\\x1a\\nscan-me"
+    raw=b"\x89PNG\r\n\x1a\nscan-me"
     response=client.post("/v1/platform/orbits/process",headers={"Authorization":"Bearer "+token},json={
         "processor_id":"image.ocr","filename":"scan.png","mime_type":"image/png",
         "data_base64":base64.b64encode(raw).decode("ascii"),
