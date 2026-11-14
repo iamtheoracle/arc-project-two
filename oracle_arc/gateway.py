@@ -1,4 +1,4 @@
-"""Authenticated API gateway: wires the system together and exposes it over HTTP."""
+"""Authenticated API gateway: composes host-registered agents and capabilities."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .agents import AgentRegistry, AgentSpec
+from .agents import AgentRegistry
 from .audit import AuditLog
 from .confirmation import ConfirmationBroker
 from .identity import AppRegistry
@@ -15,8 +15,6 @@ from .oracle import ArcRequest, Oracle
 from .orbits import Orbits
 from .spark import SparkMemory
 from .tools import GrantTable, ToolRegistry
-from .tools.builtin import calculator_tool
-from .tools.concierge import make_concierge_tools
 from .types import (ArcError, AuthError, ConfirmationError, DataClass, MediaRejected, ModelUnavailable,
                     PermissionDenied, QuotaExceeded, Risk, ToolUnavailable, ValidationError)
 
@@ -24,19 +22,17 @@ _STATUS = {"unauthenticated": 401, "permission_denied": 403, "invalid_request": 
            "model_unavailable": 503, "tool_unavailable": 503, "confirmation_failed": 403, "media_rejected": 422}
 MAX_BODY = 1_000_000
 
-BUD_PROMPT = ("You are Bud, UNIBUD's conversational learning companion. Be accurate and concise. Never invent "
-              "facts, prices, balances, availability or outcomes.")
-CONCIERGE_PROMPT = ("You are Concierge, UNIBUD's service coordinator. You can search providers and request quotes. "
-                    "You cannot take payment without the user's explicit confirmation.")
-
 
 class Arc:
-    """Composition root. Everything is injectable so tests and hosts can replace any part."""
+    """Composition root. Hosts supply their own identities, agents, tools, and grants."""
 
-    def __init__(self, backends=None, providers=None, server_key=None, audit_path=":memory:", memory_path=":memory:",
-                 policy: RoutingPolicy = None, step_up=None, file_roots=(), user_verifier=None):
+    def __init__(self, backends=None, server_key=None, audit_path=":memory:", memory_path=":memory:",
+                 policy: RoutingPolicy = None, step_up=None, file_roots=(), user_verifier=None,
+                 app_credentials=(), agent_specs=(), tool_specs=(), tool_grants=()):
         self.audit = AuditLog(audit_path)
         self.apps = AppRegistry(server_key=server_key, user_verifier=user_verifier)
+        for app_id, secret, scopes in app_credentials:
+            self.apps.register_app(app_id, secret, scopes=scopes)
         self.meter = UsageMeter()
         self.models = ModelGateway(backends if backends is not None else default_backends(),
                                    policy or RoutingPolicy(), self.meter)
@@ -47,28 +43,27 @@ class Arc:
         self.broker = ConfirmationBroker(step_up=step_up)
         self.orbits = Orbits(audit=self.audit)
         self.oracle = Oracle(self.models, self.agents, self.tools, self.grants, self.memory, self.broker, self.audit)
-        self._install_defaults(providers, file_roots)
+        self._register_host_capabilities(agent_specs, tool_specs, tool_grants, file_roots)
 
     def close(self) -> None:
         self.audit.close()
         self.memory.close()
 
-    def _install_defaults(self, providers, file_roots):
-        self.tools.register(calculator_tool())
-        for t in make_concierge_tools(providers):
-            self.tools.register(t)
+    def _register_host_capabilities(self, agent_specs, tool_specs, tool_grants, file_roots):
+        """Register only capabilities explicitly supplied by the embedding application."""
+        for spec in tool_specs:
+            self.tools.register(spec)
         if file_roots:
             from .tools.builtin import read_file_tool
             self.tools.register(read_file_tool(file_roots))
-        self.agents.register(AgentSpec("bud", "1.0.0", "general assistant", BUD_PROMPT, Risk.READ, ("bud",),
-                                       health_check=lambda: True))
-        self.agents.register(AgentSpec("concierge", "1.0.0", "service coordination", CONCIERGE_PROMPT,
-                                       Risk.FINANCIAL, ("concierge",), health_check=lambda: True))
-        for tool in ("calculate",):
-            self.grants.grant("bud", tool)
-            self.grants.grant("concierge", tool)
-        for tool in ("search_providers", "request_quote", "book_provider"):
-            self.grants.grant("concierge", tool)
+        for spec in agent_specs:
+            self.agents.register(spec)
+        for agent_name, tool_name in tool_grants:
+            if agent_name not in self.agents.names():
+                raise ValueError(f"cannot grant a tool to an unregistered agent: {agent_name}")
+            if self.tools.get(tool_name) is None:
+                raise ValueError(f"cannot grant an unregistered tool: {tool_name}")
+            self.grants.grant(agent_name, tool_name, by="host_configuration")
 
     # ---- request handlers (return (http_status, body)) ------------------------------------------
     def _principal(self, headers) -> object:
@@ -87,24 +82,29 @@ class Arc:
                 return 200, {"token": tok}
             p = self._principal(headers)
             if method == "POST" and path == "/v1/chat":
+                agent = body.get("agent")
+                if not isinstance(agent, str) or not agent.strip():
+                    raise ValidationError("agent is required")
                 if not isinstance(body.get("message"), str):
                     raise ValidationError("message is required")
                 dc = body.get("data_class", "INTERNAL")
                 if dc not in DataClass.__members__:
                     raise ValidationError("unknown data_class")
-                r = self.oracle.run(p, ArcRequest(str(body.get("agent", "bud")), body["message"],
+                r = self.oracle.run(p, ArcRequest(agent, body["message"],
                                                   str(body.get("conversation_id", "")), bool(body.get("remember")),
                                                   DataClass[dc]))
                 return 200, r.to_dict()
             if method == "POST" and path == "/v1/complete":
+                agent = body.get("agent")
+                if not isinstance(agent, str) or not agent.strip():
+                    raise ValidationError("agent is required")
                 dc = body.get("data_class", "PERSONAL")
                 if dc not in DataClass.__members__:
                     raise ValidationError("unknown data_class")
                 mt = body.get("max_tokens", 500)
                 if not isinstance(mt, int) or isinstance(mt, bool):
                     raise ValidationError("max_tokens must be an integer")
-                r = self.oracle.complete(p, str(body.get("agent", "bud")), body.get("messages"), mt,
-                                         data_class=DataClass[dc])
+                r = self.oracle.complete(p, agent, body.get("messages"), mt, data_class=DataClass[dc])
                 return 200, r.to_dict()
             if method == "POST" and path == "/v1/confirm":
                 r = self.oracle.confirm(p, str(body.get("confirmation_id", "")), str(body.get("action_hash", "")),
