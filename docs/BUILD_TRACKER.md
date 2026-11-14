@@ -66,11 +66,13 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 ## 7. Statistics
 | Metric | Value | As of |
 |---|---|---|
-| Oracle Arc full test suite | Current: 97 passed at HEAD `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020`; ignored HTTP socket ResourceWarnings observed | 2026-11-14 |
-| A6 gateway host defaults | Current: removed from gateway composition; 97-test suite passed; socket-warning follow-up remains | 2026-11-14 |
-| Agents mapped from the 51-agent registry | Current: 51 definitions validated and mapped to 51 namespaced read-only `AgentSpec` records; no tools, grants or SPARK namespaces | 2026-11-14 |
-| Open audit findings | Current: A6 test verification complete with ResourceWarning follow-up; A2-A5 and A7-A15 remain open/parked as above | 2026-11-14 |
-| Eleven destinations built | Current: 0 verified | 2026-11-14 |
+| Oracle Arc full test suite | Current: 102 passed on CI run 43628930371 at application commit `a9edecc5eeb849202de203afe86e7749d3db6a04`; same suite passed again on tracker commit CI run 43629048440. Three ignored HTTP socket ResourceWarnings were emitted. | 2026-11-14 |
+| A12 focused tests | Current: 5 passed (four adapter tests + one Arc gateway composition test) on CI run 43628930371; rerun passed on tracker commit CI run 43629048440. | 2026-11-14 |
+| A12 registry coverage | Current: 51 definitions validated: 16 core + 10 specialist + 25 service; all mapped to namespaced, read-only host registrations without default tools or memory grants. | 2026-11-14 |
+| A12 status | Current: implemented, full-suite tested and CI verified; closed. | 2026-11-14 |
+| Next fix queue item | Planned: A8 PostgreSQL persistence, migrations, constraints, RLS and least-privilege roles. | 2026-11-14 |
+| Open audit findings | Current: A2-A5, A7-A11 and A13-A15 remain open or unverified; A1 is parked with abandoned `unibud-live`. | 2026-11-14 |
+| Reference capability families built | Current: 0 verified as built; the 13-family inventory remains research/concept only. | 2026-11-14 |
 
 ## 8. Blockers and open decisions
 - Current: source-code HEAD at verification was `03c8d3da080ad8133f7b35c5e131bc45e2497296`; the subsequent tracker refresh changes documentation only, and application source remains the previously tested `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020` tree. Local container DNS still cannot resolve `github.com`; the hosted test run downloaded the exact source archive and confirmed its SHA against the GitHub branch API before running the full suite.
