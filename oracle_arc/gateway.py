@@ -43,7 +43,11 @@ class Arc:
         self.broker = ConfirmationBroker(step_up=step_up)
         self.orbits = Orbits(audit=self.audit)
         self.oracle = Oracle(self.models, self.agents, self.tools, self.grants, self.memory, self.broker, self.audit)
-        self._register_host_capabilities(agent_specs, tool_specs, tool_grants, file_roots)
+        try:
+            self._register_host_capabilities(agent_specs, tool_specs, tool_grants, file_roots)
+        except Exception:
+            self.close()
+            raise
 
     def close(self) -> None:
         self.audit.close()
