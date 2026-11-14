@@ -119,3 +119,16 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 - Found, not fixed: No repository named `unibud-agents` was returned by repository search. The 51-role catalogue remains unavailable; do not invent the missing identities.
 - Planned: The next code change remains the narrowly scoped HTTP test-thread cleanup in `tests/test_http.py`, but it must be made only when a runnable checkout is available so the warning-strict test command can be run before and after.
 - Planned: After that test cleanup is verified, continue Task 2 only when the authoritative 51-role catalogue is available; then perform typecheck, add tests and map verified agents through explicit Oracle Arc host registration. Do not begin the later PostgreSQL/engine stages ahead of Task 2.
+
+
+## 11. Continuation — 2026-11-14
+- Current: Re-read this tracker before work. Branch `feat/oracle-arc-core` was verified at `40c640f4f782be684054a5e2e8d2f948b430c517`; this is a documentation-only tracker commit atop source-code HEAD `03c8d3da080ad8133f7b35c5e131bc45e2497296`.
+- Current: Re-read `tests/test_http.py`. `HttpTests.setUp` starts `serve_forever` on an anonymous daemon thread, registers `server_close` and `shutdown` cleanups, but never joins the serving thread. This remains a candidate explanation for the historical ignored socket `ResourceWarning`, not a proven cause.
+- Current: Re-read `oracle_arc/gateway.py`. The composition root accepts host-provided `agent_specs`, `tool_specs`, and explicit `tool_grants`; no default Bud/Concierge prompt or agent registration is present.
+- Current: Exact-HEAD combined statuses for `40c640f4f782be684054a5e2e8d2f948b430c517` returned no statuses; workflow-run lookup returned no runs. No CI pass is claimed.
+- Current: Tests were not run because a local checkout/test runtime is unavailable; the earlier clone attempt failed DNS resolution for github.com. No source changes or test results are claimed in this pass.
+- Current: Organization search for `"51" "agents"` returned only the reference-only `unibud-live/AGENT_SYSTEM.md` statement that the register has 16 core plus 35 specialist/service identities. It does not expose the 35 names or their contracts.
+- Found, not fixed: `tests/test_http.py` server-thread cleanup remains unmodified pending a runnable before/after test environment.
+- Found, not fixed: The authoritative 51-entry catalogue remains unavailable. The only located 51-count statement is in abandoned/reference-only `unibud-live/AGENT_SYSTEM.md`; it is not an implementation-ready catalogue.
+- Planned: Obtain a runnable checkout and run the warning-strict baseline; then retain the server thread, shut down the server, join the thread, and run the same suite after the change.
+- Planned: Resume Task 2 only when the authoritative 51 role identities and their responsibilities are supplied or found in an approved source. Do not implement PostgreSQL or new engines ahead of Task 2.
