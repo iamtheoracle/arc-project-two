@@ -8,8 +8,9 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 - Current: `Arc` accepts host-provided `app_credentials`, `agent_specs`, `tool_specs`, and explicit `tool_grants`; invalid grants referencing missing agents/tools are rejected.
 - Current: `tests/helpers.py` now supplies the Bud/Concierge-shaped test fixtures as test-host registrations, not gateway defaults. `tests/test_gateway.py` adds host-isolation/configuration tests. `tests/test_http.py` now supplies explicit agents and checks missing-agent rejection.
 - Current: Full suite ran against HEAD `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020` in a hosted Python 3.11.2 environment: `Ran 97 tests in 10.218s`, `OK`. `ResourceWarning` messages for unclosed HTTP test sockets were emitted as ignored exceptions; suite exit code was 0. A6 behavior is now test-verified at this commit.
-- Planned: NEXT EXACT STEP — locate the authoritative `unibud-agents` source repository or project attachment containing the 51-agent registry, then inspect its package scripts, tsconfig, source and tests before changing it. No repository named `unibud-agents` was present in the accessible `iamtheoracle` repository list; the accessible `iamtheoracle/unibud` tree did not contain an agent registry.
-- Planned: Next implementation item is A12: locate the authoritative 51-agent registry, then repair its typecheck, add tests and map only verified definitions.
+- Current: `iamtheoracle/unibud-app` is named as the source-of-truth repository in its own `UNIBUD_IMPLEMENTATION_HANDOFF.md`; current `main` HEAD verified as `3029a8761b5e42b3880f0392640abf377ba325a3`. Its `src/lib/agents/contracts.ts` defines 16 `AgentId` values and `src/lib/agents/registry.ts` contains 16 definitions, not 51.
+- Current: `iamtheoracle/unibud-live` is reference-only by founder decision. Its `src/lib/agents/registry.ts` contains 15 definitions; its handoff says the organization register has 51 identities, but no 51-entry typed registry was verified there. Do not modify this repository.
+- Planned: NEXT EXACT STEP — recover the authoritative 51-role catalog/registry source. Do not map 16 UNIBUD-specific agents as if they were 51 Oracle Arc agents, and do not import UNIBUD agent prompts or product semantics into Oracle Arc.
 - Planned: Then implement Oracle Arc PostgreSQL storage and migrations (A8).
 - Founder decision: `unibud-live` is abandoned and reference-only; no new feature work there.
 
@@ -18,7 +19,7 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 |---|---|---|---|
 | `arc-project-two` | Current: `feat/oracle-arc-core` @ `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020` before this tracker-only update | Current: gateway uses host-supplied app/agent/tool/grant configuration; storage remains SQLite/in-memory and ORBITS storage is in-memory. | Current: 97 tests passed on this commit; final run 10.218s; ResourceWarning messages from HTTP test sockets remain visible. |
 | `unibud-live` | Current: abandoned/reference-only per founder decision | Current: no new feature work authorized. | Current: not run. |
-| `unibud-agents` | Current: no repository with this name was found in the accessible owner repository list; no local working copy or project attachment was found | Planned: inspect the authoritative 51-agent registry once its location is supplied or discovered. | Current: not run; no source/package scripts/tsconfig/tests available. |
+| `unibud-app` | Current: `main` @ `3029a8761b5e42b3880f0392640abf377ba325a3`; named as source of truth by its handoff | Current: `src/lib/agents/contracts.ts` and `src/lib/agents/registry.ts` define 16 agents, not 51. | Current: not run in this session; remote source inspected only. |
 | `arc-project-one` | Current: previous working-copy snapshot, not part of this task | Current: no changes in this session. | Historical: 141 passed under a local vitest-compatible shim, not real vitest. |
 
 ## 3. Fix queue
@@ -47,7 +48,7 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 | A9 | ORBITS has no HTTP route | Medium | Planned: open. |
 | A10 | SPARK lacks user list/correct/delete/retention endpoints and purpose dimension | Medium | Planned: open. |
 | A11 | No admin/staff roles, dual approval or rate limiting | High | Planned: open. |
-| A12 | 51-agent TypeScript registry needs typecheck, tests and Oracle Arc mapping | High | Planned: open; source not inspected this session. |
+| A12 | 51-agent TypeScript registry needs typecheck, tests and Oracle Arc mapping | High | Current: `unibud-app` source inspected; only 16 IDs/definitions found. A complete 51-entry source remains unverified. Planned: open. |
 | A13 | Audit chain needs externally anchored head | Medium | Planned: open. |
 | A14 | No research/statistics provenance model; eleven destinations not started | Planned | Planned: open. |
 | A15 | `TrustedAppAssertion` is a stop-gap identity model | High | Planned: open. |
@@ -61,7 +62,7 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 ## 6. Found, not fixed
 - Current: `main.py` was not changed. Its CLI currently registers an application from environment variables but does not supply host agent/tool configuration. With the new empty-by-default gateway, chat execution requires an embedding host to register agents/tools/grants. Keep this explicit; do not restore implicit Bud/Concierge defaults.
 - Current: README and run instructions were not changed; they may still describe a UNIBUD app registration example.
-- Current: No accessible repository named `unibud-agents` was found. The accessible `iamtheoracle/unibud` repository tree has no agent-registry paths; the authoritative source for the 51 definitions remains unidentified.
+- Current: No accessible repository named `unibud-agents` was found. `iamtheoracle/unibud-app` is identified by its handoff as the source of truth, but its checked-in registry and contracts contain only 16 agents. `iamtheoracle/unibud-live` contains 15 definitions and an outdated orchestration interpretation of Spark; it remains reference-only. The full 51-role catalog remains unidentified.
 - Current: `tests/test_http.py` emits ignored `ResourceWarning` messages for unclosed server sockets under the required warning-strict test command; tests still exit successfully. Found, not fixed.
 - Current: local checkout was blocked by DNS, but the exact branch archive was retrieved in a hosted Python 3.11.2 environment; branch SHA was checked against the GitHub branch API and the full suite passed 97 tests.
 
@@ -70,7 +71,7 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 |---|---|---|
 | Oracle Arc full test suite | Current: 97 passed at HEAD `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020`; ignored HTTP socket ResourceWarnings observed | 2026-11-14 |
 | A6 gateway host defaults | Current: removed from gateway composition; 97-test suite passed; socket-warning follow-up remains | 2026-11-14 |
-| Agents mapped from the 51-agent registry | Current: 0 verified; source repository not located | 2026-11-14 |
+| Agents mapped from the 51-agent registry | Current: 0 verified; unibud-app contains 16 typed definitions, not 51 | 2026-11-14 |
 | Open audit findings | Current: A6 test verification complete with ResourceWarning follow-up; A2-A5 and A7-A15 remain open/parked as above | 2026-11-14 |
 | Eleven destinations built | Current: 0 verified | 2026-11-14 |
 
@@ -78,5 +79,6 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 - Current: live branch HEAD was verified as `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020` before this tracker-only update. Local container DNS still cannot resolve `github.com`; the hosted test run downloaded the exact branch archive and confirmed its branch SHA against the GitHub branch API before running the full suite.
 - Current: no CI status checks or PR-triggered workflow runs were associated with that HEAD; local/hosted test evidence is the 97-test run above.
 - Planned: identity provider choice remains open; do not create a competing identity authority.
-- Current: SPARK means user-controlled memory, not orchestration.
+- Current: SPARK means user-controlled memory, not orchestration; the UNIBUD handoff/legacy registry descriptions that assign Spark orchestration are outdated and must not be copied into Oracle Arc.
+- Current: `unibud-app` package scripts expose `typecheck: tsc --noEmit` and `test`; neither command was executed in this session. The task's named `unibud-agents` package/repository remains unavailable.
 - Current: MoneyLeads and UNIBUD remain independent products; Oracle Arc receives no implicit access to either product's data and never moves, holds or settles money.
