@@ -17,13 +17,13 @@ class UnibudAgentHostRegistrationTests(unittest.TestCase):
         self.assertTrue(all(spec.name.startswith("unibud:") for spec in specs))
         self.assertTrue(all(spec.max_risk == Risk.READ for spec in specs))
         self.assertTrue(all(spec.memory_namespaces == () for spec in specs))
-        self.assertIn("Declared catalogue capabilities (not connected", specs[0].system_prompt)
+        self.assertIn("Declared capabilities (metadata only; not connected", specs[0].system_prompt)
 
     def test_spark_oracle_and_orbit_names_are_scoped_away_from_arc_subsystems(self):
         specs = {spec.name: spec for spec in load_unibud_agent_specs()}
         self.assertIn("not Oracle Arc SPARK", specs["unibud:spark"].system_prompt)
-        self.assertIn("not Oracle Arc ORACLE", specs["unibud:oracle"].system_prompt)
-        self.assertIn("not Oracle Arc ORBITS", specs["unibud:orbit"].system_prompt)
+        self.assertIn("separate from Oracle Arc ORACLE", specs["unibud:oracle"].system_prompt)
+        self.assertIn("separate from Oracle Arc ORBITS", specs["unibud:orbit"].system_prompt)
 
     def test_arc_agent_registry_accepts_all_51_host_supplied_specs(self):
         registry = AgentRegistry()
