@@ -1,0 +1,32 @@
+name: Oracle Arc tests
+
+on:
+  push:
+    branches:
+      - feat/oracle-arc-core
+  pull_request:
+    branches:
+      - feat/oracle-arc-core
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Run full test suite
+        run: python -W error::ResourceWarning -m unittest discover -s tests -t .
+      - name: Run UNIBUD registry integration tests
+        run: python -m unittest tests.test_unibud_agents tests.test_unibud_agents_gateway -v
