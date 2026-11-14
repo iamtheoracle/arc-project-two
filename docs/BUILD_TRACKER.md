@@ -3,11 +3,11 @@ Last updated: 2026-11-14. Labels: Current = verified in code during this session
 Rule: trust code over notes. Re-verify claims before relying on them.
 
 ## 1. Stopped at / Next exact step
-- Current: Oracle Arc A6 host-registration implementation is present in `oracle_arc/gateway.py`; the current verified branch HEAD before this tracker-only update is `ec1dd4c0b74ad92532bdfd626d6cfff1db8f7dad` on `feat/oracle-arc-core`; the source tree is unchanged from the tested parent commit `1f21c4c8d353befe00df898897ddf99ef3eff071`.
+- Current: Oracle Arc A6 host-registration implementation is present in `oracle_arc/gateway.py`; the current verified branch HEAD before this tracker-only update is `292129f5ea82f59b58c9d9a3a45afe4ea30eafd4` on `feat/oracle-arc-core`; the full suite was run against this commit.
 - Current: `oracle_arc/gateway.py` no longer defines Bud/Concierge prompts, imports Concierge's product-specific tool factory, auto-registers product agents, auto-grants product tools, or defaults `/v1/chat` and `/v1/complete` to Bud.
 - Current: `Arc` accepts host-provided `app_credentials`, `agent_specs`, `tool_specs`, and explicit `tool_grants`; invalid grants referencing missing agents/tools are rejected.
 - Current: `tests/helpers.py` now supplies the Bud/Concierge-shaped test fixtures as test-host registrations, not gateway defaults. `tests/test_gateway.py` adds host-isolation/configuration tests. `tests/test_http.py` now supplies explicit agents and checks missing-agent rejection.
-- Current: Full suite ran against HEAD `1f21c4c8d353befe00df898897ddf99ef3eff071` in a hosted Python 3.11.2 environment: `Ran 97 tests in 9.713s`, `OK`. `ResourceWarning` messages for unclosed HTTP test sockets were emitted as ignored exceptions; suite exit code was 0. A6 behavior is now test-verified at this commit.
+- Current: Full suite ran against HEAD `292129f5ea82f59b58c9d9a3a45afe4ea30eafd4` in a hosted Python 3.11.2 environment: `Ran 97 tests in 10.112s`, `OK`. `ResourceWarning` messages for unclosed HTTP test sockets were emitted as ignored exceptions; suite exit code was 0. A6 behavior is now test-verified at this commit.
 - Planned: NEXT EXACT STEP — locate the authoritative `unibud-agents` source repository or project attachment containing the 51-agent registry, then inspect its package scripts, tsconfig, source and tests before changing it. No repository named `unibud-agents` was present in the accessible `iamtheoracle` repository list; the accessible `iamtheoracle/unibud` tree did not contain an agent registry.
 - Planned: Next implementation item is A12: locate the authoritative 51-agent registry, then repair its typecheck, add tests and map only verified definitions.
 - Planned: Then implement Oracle Arc PostgreSQL storage and migrations (A8).
@@ -16,13 +16,13 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 ## 2. Repositories and verified state
 | Repo | Branch / commit | State | Tests |
 |---|---|---|---|
-| `arc-project-two` | Current: `feat/oracle-arc-core` @ `ec1dd4c0b74ad92532bdfd626d6cfff1db8f7dad` before this tracker-only update; source tree matches tested parent `1f21c4c8d353befe00df898897ddf99ef3eff071` | Current: gateway uses host-supplied app/agent/tool/grant configuration; storage remains SQLite/in-memory and ORBITS storage is in-memory. | Current: 97 tests passed on this commit; ResourceWarning messages from HTTP test sockets remain visible. |
+| `arc-project-two` | Current: `feat/oracle-arc-core` @ `292129f5ea82f59b58c9d9a3a45afe4ea30eafd4` before this tracker-only update | Current: gateway uses host-supplied app/agent/tool/grant configuration; storage remains SQLite/in-memory and ORBITS storage is in-memory. | Current: 97 tests passed on this commit; ResourceWarning messages from HTTP test sockets remain visible. |
 | `unibud-live` | Current: abandoned/reference-only per founder decision | Current: no new feature work authorized. | Current: not run. |
 | `unibud-agents` | Current: no repository with this name was found in the accessible owner repository list; no local working copy or project attachment was found | Planned: inspect the authoritative 51-agent registry once its location is supplied or discovered. | Current: not run; no source/package scripts/tsconfig/tests available. |
 | `arc-project-one` | Current: previous working-copy snapshot, not part of this task | Current: no changes in this session. | Historical: 141 passed under a local vitest-compatible shim, not real vitest. |
 
 ## 3. Fix queue
-1. Current: A6 gateway host-registration slice is implemented and the full suite passed 97 tests at HEAD `1f21c4c8d353befe00df898897ddf99ef3eff071`; ResourceWarning cleanup remains a follow-up.
+1. Current: A6 gateway host-registration slice is implemented and the full suite passed 97 tests at HEAD `292129f5ea82f59b58c9d9a3a45afe4ea30eafd4`; ResourceWarning cleanup remains a follow-up.
 2. Planned: A12 — repair `unibud-agents` typecheck, add tests, map all 51 agent definitions to Oracle Arc host registration without inventing capabilities.
 3. Planned: A8 — PostgreSQL storage, migrations, constraints, RLS, least-privilege roles; persist app/agent/grant configuration.
 4. Planned: A7 — separate ORACLE, SPARK, ORBITS and CONCIERGE service boundaries.
@@ -68,14 +68,14 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 ## 7. Statistics
 | Metric | Value | As of |
 |---|---|---|
-| Oracle Arc full test suite | Current: 97 passed at HEAD `1f21c4c8d353befe00df898897ddf99ef3eff071`; ignored HTTP socket ResourceWarnings observed | 2026-11-14 |
+| Oracle Arc full test suite | Current: 97 passed at HEAD `292129f5ea82f59b58c9d9a3a45afe4ea30eafd4`; ignored HTTP socket ResourceWarnings observed | 2026-11-14 |
 | A6 gateway host defaults | Current: removed from gateway composition; 97-test suite passed; socket-warning follow-up remains | 2026-11-14 |
 | Agents mapped from the 51-agent registry | Current: 0 verified; source repository not located | 2026-11-14 |
 | Open audit findings | Current: A6 test verification complete with ResourceWarning follow-up; A2-A5 and A7-A15 remain open/parked as above | 2026-11-14 |
 | Eleven destinations built | Current: 0 verified | 2026-11-14 |
 
 ## 8. Blockers and open decisions
-- Current: live branch HEAD was verified as `ec1dd4c0b74ad92532bdfd626d6cfff1db8f7dad` before this tracker-only update. Local container DNS still cannot resolve `github.com`; the hosted test run used the exact source tree from parent `1f21c4c8d353befe00df898897ddf99ef3eff071`, and the archive's branch SHA was checked against the GitHub branch API.
+- Current: live branch HEAD was verified as `292129f5ea82f59b58c9d9a3a45afe4ea30eafd4` before this tracker-only update. Local container DNS still cannot resolve `github.com`; the hosted test run downloaded the exact branch archive and confirmed its branch SHA against the GitHub branch API before running the full suite.
 - Current: no CI status checks or PR-triggered workflow runs were associated with that HEAD; local/hosted test evidence is the 97-test run above.
 - Planned: identity provider choice remains open; do not create a competing identity authority.
 - Current: SPARK means user-controlled memory, not orchestration.
