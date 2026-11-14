@@ -62,7 +62,7 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 ## 6. Found, not fixed
 - Current: `main.py` was not changed. Its CLI currently registers an application from environment variables but does not supply host agent/tool configuration. With the new empty-by-default gateway, chat execution requires an embedding host to register agents/tools/grants. Keep this explicit; do not restore implicit Bud/Concierge defaults.
 - Current: README and run instructions were not changed; they may still describe a UNIBUD app registration example.
-- Current: No accessible repository named `unibud-agents` was found. `iamtheoracle/unibud-app` is identified by its handoff as the source of truth, but its checked-in registry and contracts contain only 16 agents. `iamtheoracle/unibud-live` contains 15 definitions and an outdated orchestration interpretation of Spark; it remains reference-only. The full 51-role catalog remains unidentified.
+- Current: The 51-role source was supplied as `unibud-agents-51.zip` and inspected in this continuation. `iamtheoracle/unibud-app` still contains only 16 typed definitions and `iamtheoracle/unibud-live` remains reference-only; neither replaces the supplied package.
 - Current: `tests/test_http.py` emits ignored `ResourceWarning` messages for unclosed server sockets under the required warning-strict test command; tests still exit successfully. Found, not fixed.
 - Current: local checkout was blocked by DNS, but the exact branch archive was retrieved in a hosted Python 3.11.2 environment; branch SHA was checked against the GitHub branch API and the full suite passed 97 tests.
 
