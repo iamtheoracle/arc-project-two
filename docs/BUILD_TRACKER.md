@@ -3,7 +3,7 @@ Last updated: 2026-11-14. Labels: Current = verified in code during this session
 Rule: trust code over notes. Re-verify claims before relying on them.
 
 ## 1. Stopped at / Next exact step
-- Current: Oracle Arc A6 host-registration implementation is present in `oracle_arc/gateway.py`; the tested source commit is `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020`; after the registry-investigation and reference-inventory documentation commits, branch HEAD is `03c8d3da080ad8133f7b35c5e131bc45e2497296` on `feat/oracle-arc-core`. The latest commit changes only `docs/BUILD_TRACKER.md`.
+- Current: Oracle Arc A6 host-registration implementation is present in `oracle_arc/gateway.py`; the tested source commit is `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020`; the source-code HEAD verified in this pass was `03c8d3da080ad8133f7b35c5e131bc45e2497296` on `feat/oracle-arc-core`; the subsequent tracker refresh is documentation-only.
 - Current: `oracle_arc/gateway.py` no longer defines Bud/Concierge prompts, imports Concierge's product-specific tool factory, auto-registers product agents, auto-grants product tools, or defaults `/v1/chat` and `/v1/complete` to Bud.
 - Current: `Arc` accepts host-provided `app_credentials`, `agent_specs`, `tool_specs`, and explicit `tool_grants`; invalid grants referencing missing agents/tools are rejected.
 - Current: `tests/helpers.py` now supplies the Bud/Concierge-shaped test fixtures as test-host registrations, not gateway defaults. `tests/test_gateway.py` adds host-isolation/configuration tests. `tests/test_http.py` now supplies explicit agents and checks missing-agent rejection.
@@ -17,7 +17,7 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 ## 2. Repositories and verified state
 | Repo | Branch / commit | State | Tests |
 |---|---|---|---|
-| `arc-project-two` | Current: `feat/oracle-arc-core` @ `03c8d3da080ad8133f7b35c5e131bc45e2497296`; documentation-only commit atop tested source `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020` | Current: gateway uses host-supplied app/agent/tool/grant configuration; storage remains SQLite/in-memory and ORBITS storage is in-memory. | Current: 97 tests passed on tested source commit `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020`; final run 10.218s; ResourceWarning messages remain visible. |
+| `arc-project-two` | Current: source code verified on `feat/oracle-arc-core` at `03c8d3da080ad8133f7b35c5e131bc45e2497296`; tracker refresh is a documentation-only commit atop that source | Current: gateway uses host-supplied app/agent/tool/grant configuration; storage remains SQLite/in-memory and ORBITS storage is in-memory. | Current: 97 tests passed on tested source commit `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020`; final run 10.218s; ResourceWarning messages remain visible. |
 | `unibud-live` | Current: abandoned/reference-only per founder decision | Current: no new feature work authorized. | Current: not run. |
 | `unibud-app` | Current: `main` @ `3029a8761b5e42b3880f0392640abf377ba325a3`; named as source of truth by its handoff | Current: `src/lib/agents/contracts.ts` and `src/lib/agents/registry.ts` define 16 agents, not 51. | Current: not run in this session; remote source inspected only. |
 | `arc-project-one` | Current: previous working-copy snapshot, not part of this task | Current: no changes in this session. | Historical: 141 passed under a local vitest-compatible shim, not real vitest. |
@@ -76,7 +76,7 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 | Eleven destinations built | Current: 0 verified | 2026-11-14 |
 
 ## 8. Blockers and open decisions
-- Current: live branch HEAD is `03c8d3da080ad8133f7b35c5e131bc45e2497296`; the latest commit records reference capability research only, and application source remains the previously tested `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020` tree. Local container DNS still cannot resolve `github.com`; the hosted test run downloaded the exact source archive and confirmed its SHA against the GitHub branch API before running the full suite.
+- Current: source-code HEAD at verification was `03c8d3da080ad8133f7b35c5e131bc45e2497296`; the subsequent tracker refresh changes documentation only, and application source remains the previously tested `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020` tree. Local container DNS still cannot resolve `github.com`; the hosted test run downloaded the exact source archive and confirmed its SHA against the GitHub branch API before running the full suite.
 - Current: no CI status checks or PR-triggered workflow runs were associated with that HEAD; local/hosted test evidence is the 97-test run above.
 - Planned: identity provider choice remains open; do not create a competing identity authority.
 - Current: SPARK means user-controlled memory, not orchestration; the UNIBUD handoff/legacy registry descriptions that assign Spark orchestration are outdated and must not be copied into Oracle Arc.
@@ -107,8 +107,8 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 
 
 ## 10. Latest continuation verification — 2026-11-14
-- Current: GitHub branch ref for `feat/oracle-arc-core` was re-read before this tracker update; HEAD was `03c8d3da080ad8133f7b35c5e131bc45e2497296`.
-- Current: HEAD commit message is `docs: record native capability research inventory`; its diff changes only `docs/BUILD_TRACKER.md`. The tracker is now being updated to record this exact branch head.
+- Current: GitHub branch ref for `feat/oracle-arc-core` was re-read before the tracker refresh; source HEAD was `03c8d3da080ad8133f7b35c5e131bc45e2497296`.
+- Current: That source HEAD has commit message `docs: record native capability research inventory` and changes only `docs/BUILD_TRACKER.md`. The tracker refresh itself is also documentation-only; it does not alter application source.
 - Current: Combined commit statuses returned an empty list, and the commit workflow-run query returned no runs. No CI pass is claimed for this HEAD.
 - Current: `oracle_arc/gateway.py` still accepts host-provided `agent_specs`, `tool_specs`, and `tool_grants`; it does not define default Bud/Concierge agents or prompts. `tests/test_gateway.py` contains the host-registration and empty-core tests.
 - Current: `tests/test_http.py` starts a `serve_forever` thread and registers shutdown/server-close cleanups, but does not retain and join the serving thread. This is a plausible cause of the historical socket `ResourceWarning`, not a proven root cause.
