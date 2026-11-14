@@ -3,7 +3,7 @@ Last updated: 2026-11-14. Labels: Current = verified in code during this session
 Rule: trust code over notes. Re-verify claims before relying on them.
 
 ## 1. Stopped at / Next exact step
-- Current: Oracle Arc A6 host-registration implementation is committed on `feat/oracle-arc-core` at `c543ea7c510f47fb1c8963722580a4cff8d267a9`.
+- Current: Oracle Arc A6 host-registration implementation was committed at `c543ea7c510f47fb1c8963722580a4cff8d267a9`; constructor-failure cleanup followed at `0aff218ae3ab31852ff3e068923a05dba9d173ec`. Current branch HEAD is `0aff218ae3ab31852ff3e068923a05dba9d173ec`.
 - Current: `oracle_arc/gateway.py` no longer defines Bud/Concierge prompts, imports Concierge's product-specific tool factory, auto-registers product agents, auto-grants product tools, or defaults `/v1/chat` and `/v1/complete` to Bud.
 - Current: `Arc` accepts host-provided `app_credentials`, `agent_specs`, `tool_specs`, and explicit `tool_grants`; invalid grants referencing missing agents/tools are rejected.
 - Current: `tests/helpers.py` now supplies the Bud/Concierge-shaped test fixtures as test-host registrations, not gateway defaults. `tests/test_gateway.py` adds host-isolation/configuration tests. `tests/test_http.py` now supplies explicit agents and checks missing-agent rejection.
@@ -16,7 +16,7 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 ## 2. Repositories and verified state
 | Repo | Branch / commit | State | Tests |
 |---|---|---|---|
-| `arc-project-two` | Current: `feat/oracle-arc-core` @ `c543ea7c510f47fb1c8963722580a4cff8d267a9` | Current: Oracle Arc gateway has host-supplied app/agent/tool/grant configuration and no product-agent defaults. Storage remains SQLite/in-memory. | Current: not run this session. Historical: original v0.1 commit documents 93 passing tests; not independently re-run here. |
+| `arc-project-two` | Current: `feat/oracle-arc-core` @ `0aff218ae3ab31852ff3e068923a05dba9d173ec` | Current: Oracle Arc gateway has host-supplied app/agent/tool/grant configuration and no product-agent defaults. Storage remains SQLite/in-memory. | Current: not run this session. Historical: original v0.1 commit documents 93 passing tests; not independently re-run here. |
 | `unibud-live` | Current: abandoned/reference-only per founder decision | Current: no new feature work authorized. | Current: not run. |
 | `unibud-agents` | Planned work target; repository/local working copy not available for inspection in this session | Planned: repair typecheck, add tests, map the 51 agents into host registrations. | Current: not run; previous failure report is not independently verified against code here. |
 | `arc-project-one` | Current: previous working-copy snapshot, not part of this task | Current: no changes in this session. | Historical: 141 passed under a local vitest-compatible shim, not real vitest. |
