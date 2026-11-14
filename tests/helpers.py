@@ -1,7 +1,11 @@
 import unittest
 
 from oracle_arc import Arc
-from oracle_arc.models import ScriptedBackend, RoutingPolicy
+from oracle_arc.agents import AgentSpec
+from oracle_arc.models import ScriptedBackend
+from oracle_arc.tools.builtin import calculator_tool
+from oracle_arc.tools.concierge import make_concierge_tools
+from oracle_arc.types import Risk
 
 SECRET = "s3cret-value-for-tests-1234"
 KEY = b"k" * 32
@@ -28,7 +32,20 @@ class FakeProviders:
 
 def make_arc(replies=None, providers=None, step_up=lambda p, proof: proof.get("pin") == "1234", **kw):
     backend = ScriptedBackend("local", replies=replies or [])
-    arc = Arc([backend], providers=providers, server_key=KEY, step_up=step_up, **kw)
+    concierge_tools = make_concierge_tools(providers)
+    tools = [calculator_tool(), *concierge_tools]
+    grants = [("bud", "calculate"), ("concierge", "calculate")]
+    grants.extend(("concierge", tool.name) for tool in concierge_tools)
+    agents = [
+        AgentSpec("bud", "1.0.0", "test host assistant",
+                  "You are the test host's general assistant. Be accurate and concise.",
+                  Risk.READ, ("bud",), health_check=lambda: True),
+        AgentSpec("concierge", "1.0.0", "test host service coordinator",
+                  "You are the test host's service coordinator. Do not invent provider outcomes.",
+                  Risk.FINANCIAL, ("concierge",), health_check=lambda: True),
+    ]
+    arc = Arc([backend], server_key=KEY, step_up=step_up, agent_specs=agents,
+              tool_specs=tools, tool_grants=grants, **kw)
     unittest.addModuleCleanup(arc.close)
     arc.apps.register_app("unibud", SECRET, scopes=("chat",))
     arc.apps.register_app("other", SECRET + "x", scopes=("chat",))
