@@ -1,79 +1,80 @@
 # UNIBUD BUILD TRACKER
-Last updated: 2026-11-14. Labels: Current = verified in code/tests this session; Planned = agreed, not built; Concept = name only.
-Rule: trust code over this file. Re-verify any claim before relying on it.
+Last updated: 2026-11-14. Labels: Current = verified in code during this session; Planned = agreed, not built; Concept = name only.
+Rule: trust code over notes. Re-verify claims before relying on them.
 
 ## 1. Stopped at / Next exact step
-- Stopped: audited the Oracle Arc build (arc-project-two) against the Founder Master Statement. No code changed since commit 0fd65b7 there.
-- Founder decision (2026-11-14): **unibud-live is abandoned.** It is a reference only; no new feature work lands here. This tracker and `docs/BUILD_PROMPT.md` are the only additions.
-- NEXT EXACT STEP (in order, one at a time):
-  1. arc-project-two: remove product agents (Bud/Concierge prompts, "unibud" defaults) from `oracle_arc/gateway.py`; hosts register agents/apps via config (A6).
-  2. Agent society: fix `unibud-agents` typecheck, add tests, map the 51 agents to Oracle Arc registration (A12).
-  3. PostgreSQL storage for Oracle Arc (A8).
-- Then: arc-project-one snapshot integration (section 3).
+- Current: Oracle Arc A6 host-registration implementation is committed on `feat/oracle-arc-core` at `c543ea7c510f47fb1c8963722580a4cff8d267a9`.
+- Current: `oracle_arc/gateway.py` no longer defines Bud/Concierge prompts, imports Concierge's product-specific tool factory, auto-registers product agents, auto-grants product tools, or defaults `/v1/chat` and `/v1/complete` to Bud.
+- Current: `Arc` accepts host-provided `app_credentials`, `agent_specs`, `tool_specs`, and explicit `tool_grants`; invalid grants referencing missing agents/tools are rejected.
+- Current: `tests/helpers.py` now supplies the Bud/Concierge-shaped test fixtures as test-host registrations, not gateway defaults. `tests/test_gateway.py` adds host-isolation/configuration tests. `tests/test_http.py` now supplies explicit agents and checks missing-agent rejection.
+- Current: Tests were not run in this session. A local clone attempt failed because this environment could not resolve `github.com`; no real before/after test output is available. Do not mark A6 closed until the full suite runs.
+- Planned: NEXT EXACT STEP — run `python3 -W error::ResourceWarning -m unittest discover -s tests -t .` on this branch in a network-enabled checkout; fix any failures in the in-scope files, then verify no host/product defaults remain.
+- Planned: After A6 test verification, proceed to `unibud-agents` typecheck/tests and the 51-agent mapping (A12).
+- Planned: Then implement Oracle Arc PostgreSQL storage and migrations (A8).
+- Founder decision: `unibud-live` is abandoned and reference-only; no new feature work there.
 
-## 2. Repos and verified state
+## 2. Repositories and verified state
 | Repo | Branch / commit | State | Tests |
 |---|---|---|---|
-| arc-project-two (Oracle Arc, Python, stdlib only) | branch feat/oracle-arc-core (pushed to GitHub; `main` is the OLD plugin CLI and is untouched). Oracle Arc code is first commit 0fd65b7 | Current: identity/tokens, model gateway (Ollama + opt-in remote, fallback, circuit breaker, quotas), ORACLE pipeline (chat + tools), SPARK memory, ORBITS intake class (no HTTP route), 2 agents, tool grants, confirmation, hash-chained audit, HTTP API incl. /v1/complete. Storage: SQLite + in-memory | 93 pass (+10 mutation checks caught). NOT run against real Ollama/remote |
-| unibud-live | ABANDONED. main @ e0692ff | Reference only. `src/lib/oracle/arc-llm.ts` calls api.x.ai (grok-4.5) directly; `src/lib/agents/` has 207 lines of agent runtime | not run |
-| unibud-agents (51-agent registry, TS) | local only, paused | registry files exist; typecheck FAILS (tsconfig lacks allowImportingTsExtensions, Node types missing, bad "library" collaborator); no tests | not run |
-| arc-project-one (finance/FX snapshot, from zip) | working copy only; repo not reachable from this session | Fixed: shell tests drifted from UI (added `initialScreen` prop to App, updated tests); ledger entry; zip delivered | 141 pass under a local vitest-compatible shim (NOT real vitest); tsc clean for domain/server only |
+| `arc-project-two` | Current: `feat/oracle-arc-core` @ `c543ea7c510f47fb1c8963722580a4cff8d267a9` | Current: Oracle Arc gateway has host-supplied app/agent/tool/grant configuration and no product-agent defaults. Storage remains SQLite/in-memory. | Current: not run this session. Historical: original v0.1 commit documents 93 passing tests; not independently re-run here. |
+| `unibud-live` | Current: abandoned/reference-only per founder decision | Current: no new feature work authorized. | Current: not run. |
+| `unibud-agents` | Planned work target; repository/local working copy not available for inspection in this session | Planned: repair typecheck, add tests, map the 51 agents into host registrations. | Current: not run; previous failure report is not independently verified against code here. |
+| `arc-project-one` | Current: previous working-copy snapshot, not part of this task | Current: no changes in this session. | Historical: 141 passed under a local vitest-compatible shim, not real vitest. |
 
-## 3. Fix queue (priority order)
-1. Oracle Arc independence: remove UNIBUD-specific agents/prompts from the core (A6).
-2. Agents: unbroken typecheck + tests for unibud-agents; map the 51 agents to Oracle Arc registration (A12).
-3. Oracle Arc: PostgreSQL storage with migrations/constraints/RLS (A8); persist apps/grants/agents.
-4. Oracle Arc: separate CONCIERGE as its own capability and enforce service boundaries (A7); wire ORBITS into the API (A9); full SPARK user controls (A10).
-5. Oracle Arc: privileged-operation approval + admin/staff roles + rate limits (A11); external anchoring of the audit chain (A13).
-6. Research provenance model (source/publisher/dataset/geography/period/unit/release/retrieval/methodology/revisions) before any ORACLE research feature or the eleven destinations (A14).
-7. arc-project-one: recover RiffApp, SouLyncApp, BoardApp from soulync/board snapshots; navigation audit; demo-callout items.
-8. arc-project-one: confirm moon-uiux snapshot has nothing unique (finance branch is a superset).
-9. Oracle Arc: real OIDC identity (replaces TrustedAppAssertion), real ClamAV, audio/vision/OCR processors, concierge provider adapters, TLS at proxy.
-Parked (only if unibud-live is revived): Oracle Arc client for `arc-llm.ts`, no silent fallback to xAI (A1).
+## 3. Fix queue
+1. Current: A6 gateway host-registration slice implemented; verification remains open until tests run.
+2. Planned: A12 — repair `unibud-agents` typecheck, add tests, map all 51 agent definitions to Oracle Arc host registration without inventing capabilities.
+3. Planned: A8 — PostgreSQL storage, migrations, constraints, RLS, least-privilege roles; persist app/agent/grant configuration.
+4. Planned: A7 — separate ORACLE, SPARK, ORBITS and CONCIERGE service boundaries.
+5. Planned: A9 — ORBITS API route and governed ORACLE integration.
+6. Planned: A10 — SPARK user list/correct/delete/retention endpoints and purpose dimension.
+7. Planned: A11 — admin/staff roles, dual approval and rate limits.
+8. Planned: A13 — externally anchored audit-chain head.
+9. Planned: A14 — research provenance model before ORACLE statistics/research destinations.
+10. Planned: A15 — replace `TrustedAppAssertion` with an identity-provider integration chosen by the founder.
 
 ## 4. Audit findings
 | # | Finding | Severity | Status |
 |---|---|---|---|
-| A1 | unibud-live Bud uses xAI directly; LLM invoked, not behind an interface | High | Parked: repo abandoned |
-| A2 | Legacy arc-project-two `plugins/files.py` reads any path; calculator allows `9**9**9` | High if network-exposed | Open; legacy untouched, documented |
-| A3 | Hardcoded admin backdoor seen in uploaded docs (memory note) | High | Not found in oracle_arc code. Re-grep before every merge |
-| A4 | arc-project-one CI failed before steps; cause unknown | Medium | Unverified |
-| A5 | Built-in malware scanner detects only EICAR | Medium | Documented; use ClamdScanner |
-| A6 | Oracle Arc core hardcodes UNIBUD's Bud and Concierge (prompts, default grants, `agent="bud"` default, app id "unibud" in docs) | High | Open |
-| A7 | ORACLE, SPARK, ORBITS, CONCIERGE are one in-process object graph; boundaries are logical only | High | Open |
-| A8 | Storage is SQLite/in-memory; statement requires PostgreSQL migrations, constraints, RLS, least-privilege roles | High | Open |
-| A9 | ORBITS has no HTTP route and no ORACLE integration | Medium | Open |
-| A10 | SPARK lacks user list/correct/delete/retention endpoints and a "purpose" dimension | Medium | Open |
-| A11 | No admin/staff roles, no dual approval for privileged ops, no rate limiting | High | Open |
-| A12 | Agents untouched: Oracle Arc has 2 of 51; unibud-agents fails typecheck, no tests | High | Open |
-| A13 | Audit hash chain needs an externally anchored head to resist DB-level rewrite | Medium | Open |
-| A14 | No provenance model for statistics; eleven destinations not started | Planned | Open |
-| A15 | `TrustedAppAssertion` is a stop-gap and may compete with UNIBUD's identity authority | High | Open |
-Checked and clean: no "Ashcombe" references in arc-project-two, arc-project-one, unibud-agents, unibud-live (2026-11-14).
+| A1 | `unibud-live` Bud uses a direct model provider | High | Current: parked because `unibud-live` is abandoned. |
+| A2 | Legacy `plugins/files.py` unrestricted path access; legacy calculator resource risk | High if network-exposed | Current: found, not fixed; legacy code outside this task. |
+| A3 | Prior report of a hardcoded admin backdoor in uploaded docs | High | Current: not established in current code; re-grep before security sign-off. |
+| A4 | `arc-project-one` CI failure cause | Medium | Current: unverified. |
+| A5 | Built-in malware scanner only detects EICAR | Medium | Current: found, not fixed. |
+| A6 | Oracle Arc gateway had hardcoded UNIBUD agents/prompts/defaults | High | Current: host registration implemented in `oracle_arc/gateway.py`; tests not run, therefore verification open. |
+| A7 | ORACLE, SPARK, ORBITS and CONCIERGE are one in-process object graph | High | Planned: open. |
+| A8 | Storage is SQLite/in-memory; PostgreSQL migrations/constraints/RLS/least privilege required | High | Planned: open. |
+| A9 | ORBITS has no HTTP route | Medium | Planned: open. |
+| A10 | SPARK lacks user list/correct/delete/retention endpoints and purpose dimension | Medium | Planned: open. |
+| A11 | No admin/staff roles, dual approval or rate limiting | High | Planned: open. |
+| A12 | 51-agent TypeScript registry needs typecheck, tests and Oracle Arc mapping | High | Planned: open; source not inspected this session. |
+| A13 | Audit chain needs externally anchored head | Medium | Planned: open. |
+| A14 | No research/statistics provenance model; eleven destinations not started | Planned | Planned: open. |
+| A15 | `TrustedAppAssertion` is a stop-gap identity model | High | Planned: open. |
 
 ## 5. Important commands
-- Oracle Arc tests: `cd arc-project-two && python3 -W error::ResourceWarning -m unittest discover -s tests -t .`
-- Oracle Arc run: `ARC_SERVER_KEY=<>=32 chars> ARC_APP_ID=<app> ARC_APP_SECRET=<long> python3 -m oracle_arc`
-- unibud-agents typecheck: `cd unibud-agents && tsc --noEmit -p .` (currently fails).
-- arc-project-one real checks (run where registry works): `npm ci && npm test && npm run build`.
-- Safety: never merge, deploy, or force-push without approval.
+- Current: Oracle Arc suite command: `python3 -W error::ResourceWarning -m unittest discover -s tests -t .`.
+- Planned: `unibud-agents` typecheck: `tsc --noEmit -p .`; add and run its actual test command after inspecting package scripts.
+- Current: no real Ollama/Qwen or remote model has been exercised; model quality remains unmeasured.
+- Current: never merge, deploy or force-push without founder approval.
 
-## 6. Where to add improvements
-- Oracle Arc: new tools in `oracle_arc/tools/` + grants via host config; model providers in `oracle_arc/models/`; media processors via `Orbits.register_processor`.
-- arc-project-one: screens under `src/apps/<name>/`, registered in `src/unibud-navigation.ts`, mounted in `src/App.tsx`.
+## 6. Found, not fixed
+- Current: `main.py` was not changed. Its CLI currently registers an application from environment variables but does not supply host agent/tool configuration. With the new empty-by-default gateway, chat execution requires an embedding host to register agents/tools/grants. Keep this explicit; do not restore implicit Bud/Concierge defaults.
+- Current: README and run instructions were not changed; they may still describe a UNIBUD app registration example.
+- Current: `unibud-agents` source, package scripts, tsconfig and tests were not available for inspection.
+- Current: no tests were run because the sandbox could not resolve GitHub for a local checkout.
 
-## 7. Statistics (update every session)
+## 7. Statistics
 | Metric | Value | As of |
 |---|---|---|
-| Oracle Arc tests passing | 93 / 93 | 2026-11-12 |
-| arc-project-one tests passing (shim) | 141 / 141 | 2026-10-29 |
-| Open audit findings | 13 open (A2, A4-A15), 1 parked (A1), A3 not found | 2026-11-14 |
-| Agents registered in Oracle Arc | 2 of 51 | 2026-11-14 |
-| Eleven destinations built | 0 of 11 | 2026-11-14 |
+| Oracle Arc full test suite | Current: not run this session; historical: 93 passing documented by original v0.1 commit | 2026-11-14 |
+| A6 gateway host defaults | Current: removed in code; tests pending | 2026-11-14 |
+| Agents mapped from the 51-agent registry | Current: 0 verified | 2026-11-14 |
+| Open audit findings | Current: A6 verification pending; A2-A5 and A7-A15 remain open/parked as above | 2026-11-14 |
+| Eleven destinations built | Current: 0 verified | 2026-11-14 |
 
 ## 8. Blockers and open decisions
-- npm registry unreachable in this environment (cannot run real vitest/build/audit).
-- Push to arc-project-two and unibud-live now works (verified 2026-11-14). arc-project-one is still not visible to the sandbox.
-- Identity provider (Auth0/Entra/Okta/Google/OIDC) undecided; must not create a competing identity authority (A15).
-- Terminology: Spark = memory (Founder Master Statement) vs "hidden orchestration" (AGENT_SYSTEM.md). AGENT_SYSTEM.md needs updating.
-- MoneyLeads and UNIBUD stay independent products; no implicit Oracle Arc access to their data.
+- Current: network/DNS access to GitHub is unavailable from the local execution sandbox, preventing a checkout and test run.
+- Planned: identity provider choice remains open; do not create a competing identity authority.
+- Current: SPARK means user-controlled memory, not orchestration.
+- Current: MoneyLeads and UNIBUD remain independent products; Oracle Arc receives no implicit access to either product's data and never moves, holds or settles money.
