@@ -40,7 +40,7 @@ class HttpTests(unittest.TestCase):
         self.arc.models.backends[0].replies.clear()
         msgs = [{"role": "system", "content": "be brief"}, {"role": "user", "content": "my balance is ₦450,000"}]
         self.assertEqual(self.call("POST", "/v1/complete", {"messages": msgs})[0], 401)
-        s, b = self.call("POST", "/v1/complete", {"messages": msgs, "max_tokens": 50}, self.token())
+        s, b = self.call("POST", "/v1/complete", {"agent": "bud", "messages": msgs, "max_tokens": 50}, self.token())
         self.assertEqual((s, b["status"], b["text"]), (200, "answered", "ok"))
         events = self.arc.audit.events("complete.requested")
         self.assertEqual(events[-1]["detail"], {"data_class": 2, "messages": 2})
@@ -51,7 +51,7 @@ class HttpTests(unittest.TestCase):
         for body in ({"messages": []}, {"messages": "hi"}, {"messages": [{"role": "root", "content": "x"}]},
                      {"messages": [{"role": "user", "content": 5}]}, {"messages": [{"role": "user", "content": "x"}], "max_tokens": "9"},
                      {"messages": [{"role": "user", "content": "x"}], "max_tokens": 10**6}):
-            s, b = self.call("POST", "/v1/complete", body, t)
+            s, b = self.call("POST", "/v1/complete", {"agent": "bud", **body}, t)
             self.assertTrue(s == 400 or (s == 200 and b["status"] == "failed"), body)
 
     def test_complete_never_sends_financial_data_to_remote_by_default(self):
@@ -59,7 +59,7 @@ class HttpTests(unittest.TestCase):
         remote = ScriptedBackend("remote", local=False)
         self.arc.models.backends = [remote]
         self.arc.models._health["remote"] = type(self.arc.models._health["local"])()
-        s, b = self.call("POST", "/v1/complete", {"messages": [{"role": "user", "content": "x"}],
+        s, b = self.call("POST", "/v1/complete", {"agent": "bud", "messages": [{"role": "user", "content": "x"}],
                                                   "data_class": "FINANCIAL"}, self.token())
         self.assertEqual(b["status"], "unavailable")
         self.assertEqual(remote.calls, [])
@@ -103,6 +103,8 @@ class HttpTests(unittest.TestCase):
         t = self.token()
         self.assertEqual(self.call("POST", "/v1/chat", {"agent": "bud"}, t)[0], 400)
         self.assertEqual(self.call("POST", "/v1/chat", {"message": "x", "data_class": "SECRET"}, t)[0], 400)
+        self.assertEqual(self.call("POST", "/v1/chat", {"message": "x"}, t)[0], 400)
+        self.assertEqual(self.call("POST", "/v1/complete", {"messages": [{"role": "user", "content": "x"}]}, t)[0], 400)
         self.assertEqual(self.call("POST", "/v1/chat", raw=b"[1,2]", token=t)[0], 400)
         self.assertEqual(self.call("POST", "/v1/chat", raw=b"{not json", token=t)[0], 400)
 
@@ -125,7 +127,7 @@ class HttpTests(unittest.TestCase):
 
     def test_internal_errors_do_not_leak(self):
         self.arc.oracle.run = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("secret path /etc/x"))
-        s, b = self.call("POST", "/v1/chat", {"message": "hi"}, self.token())
+        s, b = self.call("POST", "/v1/chat", {"agent": "bud", "message": "hi"}, self.token())
         self.assertEqual((s, b), (500, {"error": "internal_error"}))
 
 
