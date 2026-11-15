@@ -51,8 +51,8 @@ def test_agent_versions_are_immutable_and_application_scoped(tmp_path):
     _, _, b, _ = setup(tmp_path, "Tenant B", "APP")
     configure(cp, a)
     cp.register_agent(a, "research", "1.0.0", manifest())
-    cp.register_agent(a, "research", "1.1.0", manifest(["tool.search", "tool.calendar"]))
-    assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["tool.search"]
+    cp.register_agent(a, "research", "1.1.0", manifest(["tool.calculate", "tool.document_search"]))
+    assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["tool.calculate"]
     with pytest.raises(LookupError):
         cp.get_agent(b, "research")
     with pytest.raises(Exception):
@@ -157,7 +157,7 @@ def test_worker_heartbeat_extends_only_current_unexpired_lease(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
-    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5)
+    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert claim.execution_id == eid
     assert cp.heartbeat_execution(eid, "wrk_worker_a", lease_seconds=60)
     assert not cp.heartbeat_execution(eid, "wrk_worker_b", lease_seconds=60)
