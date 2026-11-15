@@ -86,7 +86,7 @@ class AppRegistry:
 
     def revoke_tokens(self, app_id: str) -> None:
         if self.store is not None:
-            self.store.set_application_suspended(app_id, False)
+            self.store.revoke_application_tokens(app_id)
             return
         self._apps[app_id].token_epoch += 1
 
