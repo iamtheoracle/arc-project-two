@@ -176,3 +176,16 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 - Current: No provider, runtime tool, memory namespace, grant, external action, database, merge, deployment, force-push or operational activation was added by A12.
 - Next exact step: A8 — inspect `oracle_arc/spark.py`, `oracle_arc/audit.py`, `oracle_arc/identity.py`, `oracle_arc/agents.py`, `oracle_arc/tools/registry.py`, and `oracle_arc/orbits.py`; design additive PostgreSQL migrations and a least-privilege role/RLS model; add migration and persistence integration tests against a real PostgreSQL service. Preserve existing interfaces and SQLite/in-memory behavior until migration tests pass.
 - Current: Tracker updated after CI verification.
+
+## 15. Founder-directed A12 host-configuration and authorization verification — 2026-11-15
+
+- Current: Re-verified the founder-designated repository `iamtheoracle/arc-project-two`, branch `feat/oracle-arc-core`. The branch head at the start of this slice was `de612a9842b218bdccddc9e1225747904562b18f`.
+- Current: Moved the compressed 51-definition manifest out of `oracle_arc/` to host-owned configuration `config/agents/unibud-51.json.bz2`. The previous package-local manifest path was deleted.
+- Current: `oracle_arc/unibud_agents.py` now contains mapping/validation logic only. `load_unibud_agent_specs(manifest_path)` requires an explicit host-supplied path; it has no embedded default path. Host example is documented in `docs/UNIBUD_AGENT_REGISTRATION.md`.
+- Current: All 51 agents remain explicitly namespaced `unibud:<id>`, capped at `Risk.READ`, with empty SPARK memory namespaces. No tool, grant, memory access or delegation is created by registration. Capability names and collaborator references are metadata only.
+- Current: Expanded `tests/test_unibud_agents_gateway.py` with direct denial of tool execution without a grant, rejection of unknown agent IDs, and rejection of grants to unregistered agents. Updated `tests/test_unibud_agents.py` to load the host configuration path explicitly.
+- Current: Before-change baseline on source commit `a9edecc5eeb849202de203afe86e7749d3db6a04`, CI run [43628930371](https://github.com/iamtheoracle/arc-project-two/actions/runs/43628930371): warning-strict full suite `Ran 102 tests` / `OK`; focused registry suite `Ran 5 tests` / `OK`.
+- Current: After-change exact-head commit `16920e25b5655de1b2ff98f582f900514ca7b6e6`, CI run [43696306576](https://github.com/iamtheoracle/arc-project-two/actions/runs/43696306576): warning-strict full suite `Ran 105 tests` / `OK`; focused registry suite `Ran 8 tests` / `OK`. Three ignored HTTP test-server socket ResourceWarnings remain; the suite exits successfully and is not warning-free.
+- Current: The latest A12 implementation is built, tested and CI verified. It is not merged, deployed or operationally activated. No default tool grants, provider integrations, private-data access, financial access or admin access were introduced.
+- Planned: A8 remains next — PostgreSQL persistence, migrations, constraints, RLS and least-privilege roles. A separate branch `feat/oracle-arc-postgres-a8-2026-11-15` exists; inspect its current HEAD and work before making any changes. Do not treat its existence as proof of implementation or completion.
+- Current: No merge, deployment, force-push or production activation occurred.
