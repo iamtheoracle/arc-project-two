@@ -68,7 +68,7 @@ def test_worker_rejects_unsafe_calculator_expression():
         text=True, capture_output=True, timeout=3, check=False,
     )
     assert completed.returncode != 0
-    assert "error" in json.loads(completed.stdout)
+    assert "Calculation error" in json.loads(completed.stdout)["result"]
 
 
 def test_calculator_bounds_exponents_nesting_and_input_length():
