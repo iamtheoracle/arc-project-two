@@ -9,9 +9,12 @@ from oracle_arc.types import Risk
 from oracle_arc.unibud_agents import load_unibud_agent_specs
 
 
+MANIFEST = Path(__file__).parents[1] / "config" / "agents" / "unibud-51.json.bz2"
+
+
 class UnibudAgentHostRegistrationTests(unittest.TestCase):
     def test_all_51_definitions_map_to_namespaced_read_only_agents(self):
-        specs = load_unibud_agent_specs()
+        specs = load_unibud_agent_specs(MANIFEST)
         self.assertEqual(len(specs), 51)
         self.assertEqual(len({spec.name for spec in specs}), 51)
         self.assertTrue(all(spec.name.startswith("unibud:") for spec in specs))
@@ -35,7 +38,7 @@ class UnibudAgentHostRegistrationTests(unittest.TestCase):
         self.assertEqual(registry.get_active("unibud:payment_service").max_risk, Risk.READ)
 
     def test_invalid_manifest_fails_closed(self):
-        manifest = Path(__file__).parents[1] / "oracle_arc/agent_catalogues/unibud-51.json.bz2"
+        manifest = MANIFEST
         valid = json.loads(bz2.decompress(manifest.read_bytes()))
         valid.pop()
         with tempfile.TemporaryDirectory() as tmp:
