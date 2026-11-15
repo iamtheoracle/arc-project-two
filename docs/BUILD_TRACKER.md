@@ -2,6 +2,17 @@
 Last updated: 2026-11-14. Labels: Current = verified in code during this session; Planned = agreed, not built; Concept = name only.
 Rule: trust code over notes. Re-verify claims before relying on them.
 
+## A8 PostgreSQL control-plane persistence — 2026-11-15
+
+- Current: work branch `feat/oracle-arc-postgres-a8-2026-11-15`, based on `feat/oracle-arc-core`, source tested at `f56dfb0f1c6c6183e7e331688f93e24c041ee620`.
+- Current: migration `database/migrations/0001_arc_control_plane.sql` creates applications, agents, tool metadata and tool grants in `oracle_arc_private`, with CHECK constraints, foreign keys, forced RLS, NOLOGIN owner/runtime/provisioner group roles and a narrow SECURITY DEFINER app lookup.
+- Current: `oracle_arc/postgres_store.py` persists and loads application, agent, tool and grant configuration; app token epochs and agent/grant revocation are re-read from PostgreSQL. Runtime gateway rejects a provisioner DSN and requires a stable signing key.
+- Current: `oracle_arc/identity.py`, `oracle_arc/agents.py`, `oracle_arc/tools/registry.py`, and `oracle_arc/gateway.py` are integrated with the optional control-plane store. Tool executors remain trusted host code and must match enabled persisted metadata.
+- Current: `database/tests/0001_arc_control_plane.test.sql` proves the database role/RLS boundary. `tests/test_postgres_control_plane.py` runs against PostgreSQL 16 with distinct runtime and provisioner login principals.
+- Current: GitHub Actions run `43695629901` passed: 108 full Python tests, 5 focused UNIBUD agent tests, PostgreSQL 16 migration/RLS test, and 6 Python PostgreSQL integration tests.
+- Planned: A8 remains partial. Production secret-manager provisioning, app-credential lookup enumeration risk, DB connection pooling/TLS/timeouts, backup/restore, multi-process concurrency, migration ledger/rollback, persistent audit and SPARK memory, persistent confirmations and usage metering, and independent security review remain open.
+- Not deployed, not merged, not production-operational.
+
 ## 1. Stopped at / Next exact step
 - Current: Oracle Arc repository is `iamtheoracle/arc-project-two`, branch `feat/oracle-arc-core`; latest verified remote HEAD is `a9edecc5eeb849202de203afe86e7749d3db6a04`.
 - Current: A12 is implemented and full-suite verified at that HEAD. The CI workflow ran the exact branch commit, installed `requirements.txt`, passed the warning-strict full suite (102 tests), and passed the focused UNIBUD registry/gateway suite (5 tests).
