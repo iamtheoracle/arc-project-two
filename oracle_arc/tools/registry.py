@@ -73,27 +73,36 @@ class ToolRegistry:
 class GrantTable:
     """(agent, tool) grants with immediate revocation. Grants are never implied by another agent's."""
 
-    def __init__(self, audit=None):
+    def __init__(self, audit=None, store=None):
         self._grants: set = set()
         self._lock = threading.Lock()
         self._audit = audit
+        self._store = store
 
     def grant(self, agent: str, tool: str, by: str = "system") -> None:
+        if self._store is not None:
+            self._store.grant_tool(agent, tool, by)
         with self._lock:
             self._grants.add((agent, tool))
         if self._audit:
             self._audit.append("grant.added", agent=agent, tool=tool, by=by)
 
     def revoke(self, agent: str, tool: str, by: str = "system") -> None:
+        if self._store is not None:
+            self._store.revoke_tool(agent, tool)
         with self._lock:
             self._grants.discard((agent, tool))
         if self._audit:
             self._audit.append("grant.revoked", agent=agent, tool=tool, by=by)
 
     def allowed(self, agent: str, tool: str) -> bool:
+        if self._store is not None:
+            return self._store.has_grant(agent, tool)
         with self._lock:
             return (agent, tool) in self._grants
 
     def tools_for(self, agent: str) -> list:
+        if self._store is not None:
+            return sorted(t for a, t in self._store.list_grants() if a == agent)
         with self._lock:
             return sorted(t for a, t in self._grants if a == agent)
