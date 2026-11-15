@@ -11,7 +11,7 @@ CAPS = [
     "agent.register", "agent.read", "agent.manage", "agent.execute",
     "agent.execution.read", "model.route.manage", "model.route.use",
     "quota.manage", "usage.write", "usage.read", "reasoning",
-    "tool.search", "tool.calendar",
+    "tool.calculate", "tool.document_search",
 ]
 
 
@@ -23,7 +23,7 @@ def setup(tmp_path, name="Tenant A", app="APP"):
     # Tests model the separate owner grant plane; application capabilities alone
     # must not silently authorize a tool.
     grants = ToolGrantStore(path)
-    for tool_id in ("tool.search", "tool.calendar"):
+    for tool_id in ("tool.calculate", "tool.document_search"):
         grants.grant(identity.tenant_id, identity.application_id, tool_id, "test-owner")
     return path, identities, identity, PlatformControlPlane(path)
 
@@ -33,7 +33,7 @@ def manifest(tools=None):
         "display_name": "Research agent",
         "description": "Tenant-scoped research specialist",
         "required_capabilities": ["reasoning"],
-        "allowed_tools": tools or ["tool.search"],
+        "allowed_tools": tools if tools is not None else ["tool.calculate"],
         "model_routes": ["local-default"],
         "runtime": "oracle-arc-agent-v1",
     }
@@ -101,7 +101,7 @@ def test_expired_worker_lease_recovers_and_dead_letters(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {}, max_attempts=2)
-    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5)
+    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert claim.execution_id == eid
     with cp._session() as db:
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
@@ -169,7 +169,7 @@ def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
                            CAPS + ["agent.execution.cancel"])
     identity = ids.authenticate(issued["secret"])
     configure(cp, identity)
-    cp.register_agent(identity, "research", "1.0.0", manifest())
+    cp.register_agent(identity, "research", "1.0.0", manifest([]))
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
     cp.claim_execution("wrk_worker_a", lease_seconds=60, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert cp.cancel_execution(identity, eid)
@@ -291,6 +291,7 @@ def test_expired_lease_recovery_is_application_scoped(tmp_path):
     execution_a = cp.submit_execution(identity_a, "research", "1.0.0", "local-default", {})
     issued_b = ids.provision("Tenant B", "APP", "principal-b", CAPS)
     identity_b = ids.authenticate(issued_b["secret"])
+    ToolGrantStore(path).grant(identity_b.tenant_id, identity_b.application_id, "tool.calculate", "test-owner")
     configure(cp, identity_b)
     cp.register_agent(identity_b, "research", "1.0.0", manifest())
     execution_b = cp.submit_execution(identity_b, "research", "1.0.0", "local-default", {})
