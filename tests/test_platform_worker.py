@@ -327,7 +327,7 @@ def test_worker_document_search_uses_live_scoped_identity_and_source_attribution
     )
     result = worker.run_once()
     assert result["status"] == "succeeded"
-    assert captured["tool_result"]["results"][0]["source_uri" == "https://docs.example.test/runbook"
+    assert captured["tool_result"]["results"][0]["source_uri"] == "https://docs.example.test/runbook"
     assert "UNTRUSTED SOURCE DATA" in captured["tool_result"]["untrusted_context"]
     assert result["output"]["content"] == "The runbook is available."
     assert control.get_execution(identity, execution_id).status == "succeeded"
