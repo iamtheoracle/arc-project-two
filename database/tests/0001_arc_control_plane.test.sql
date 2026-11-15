@@ -1,4 +1,17 @@
 \set ON_ERROR_STOP on
+DO $ci_roles$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oracle_arc_runtime_ci') THEN
+    CREATE ROLE oracle_arc_runtime_ci LOGIN PASSWORD 'oracle_arc_runtime_ci_only';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oracle_arc_provisioner_ci') THEN
+    CREATE ROLE oracle_arc_provisioner_ci LOGIN PASSWORD 'oracle_arc_provisioner_ci_only';
+  END IF;
+END
+$ci_roles$;
+GRANT oracle_arc_runtime TO oracle_arc_runtime_ci;
+GRANT oracle_arc_provisioner TO oracle_arc_provisioner_ci;
+
 BEGIN;
 
 -- Provisioner can create durable host configuration through its dedicated role.
