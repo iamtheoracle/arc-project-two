@@ -47,32 +47,51 @@ class TrustedAppAssertion:
 
 
 class AppRegistry:
-    def __init__(self, server_key: Optional[bytes] = None, user_verifier=None):
+    def __init__(self, server_key: Optional[bytes] = None, user_verifier=None, store=None):
         key = server_key or (os.environ.get("ARC_SERVER_KEY", "").encode() or secrets.token_bytes(32))
         self._key = key
         self._apps: dict = {}
         self._lock = threading.Lock()
         self.user_verifier = user_verifier or TrustedAppAssertion()
+        self.store = store
 
     @staticmethod
     def _hash(secret: str, salt: bytes) -> bytes:
         return hashlib.scrypt(secret.encode(), salt=salt, n=2 ** 12, r=8, p=1, dklen=32)
 
     def register_app(self, app_id: str, secret: str, scopes=()) -> None:
+        if self.store is not None:
+            raise RuntimeError("applications must be provisioned through the separate PostgreSQL provisioner")
         if len(secret) < 16:
             raise ValueError("application secret must be at least 16 characters")
         salt = secrets.token_bytes(16)
         with self._lock:
             self._apps[app_id] = AppRecord(app_id, salt, self._hash(secret, salt), frozenset(scopes))
 
+    def _get_record(self, app_id: str) -> AppRecord | None:
+        if self.store is not None:
+            row = self.store.get_application(app_id)
+            if row is None:
+                return None
+            return AppRecord(app_id=row["app_id"], salt=row["salt"], secret_hash=row["secret_hash"],
+                             scopes=frozenset(row["scopes"]), suspended=bool(row["suspended"]),
+                             token_epoch=int(row["token_epoch"]))
+        return self._apps.get(app_id)
+
     def suspend_app(self, app_id: str) -> None:
+        if self.store is not None:
+            self.store.set_application_suspended(app_id, True)
+            return
         self._apps[app_id].suspended = True
 
     def revoke_tokens(self, app_id: str) -> None:
+        if self.store is not None:
+            self.store.set_application_suspended(app_id, False)
+            return
         self._apps[app_id].token_epoch += 1
 
     def authenticate_app(self, app_id: str, secret: str) -> AppRecord:
-        rec = self._apps.get(app_id)
+        rec = self._get_record(app_id)
         # Always compute a hash so unknown apps and wrong secrets are indistinguishable by timing.
         salt = rec.salt if rec else b"\0" * 16
         candidate = self._hash(secret or "", salt)
@@ -100,7 +119,7 @@ class AppRegistry:
             payload = json.loads(_unb64(body))
         except Exception:
             raise AuthError("invalid token") from None
-        rec = self._apps.get(payload.get("a"))
+        rec = self._get_record(payload.get("a"))
         if not rec or rec.suspended or payload.get("e") != rec.token_epoch:
             raise AuthError("token no longer valid")
         if payload.get("exp", 0) < time.time():
