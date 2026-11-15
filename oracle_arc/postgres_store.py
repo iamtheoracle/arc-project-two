@@ -57,6 +57,16 @@ class PostgresControlPlane:
         return dict(app_id=row[0], salt=bytes(row[1]), secret_hash=bytes(row[2]),
                     scopes=frozenset(row[3] or ()), suspended=bool(row[4]), token_epoch=int(row[5]))
 
+    def get_agent(self, name: str) -> dict[str, Any] | None:
+        rows = self._query(
+            "SELECT name,version,role,system_prompt,max_risk,memory_namespaces,state "
+            "FROM oracle_arc_private.agents WHERE name=%s", (name,))
+        if not rows:
+            return None
+        r = rows[0]
+        return dict(name=r[0], version=r[1], role=r[2], system_prompt=r[3], max_risk=int(r[4]),
+                    memory_namespaces=tuple(r[5] or ()), state=r[6])
+
     def list_agents(self) -> list[dict[str, Any]]:
         rows = self._query(
             "SELECT name,version,role,system_prompt,max_risk,memory_namespaces,state "
