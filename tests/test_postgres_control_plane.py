@@ -85,6 +85,14 @@ class PostgresControlPlaneTests(unittest.TestCase):
         with self.assertRaises(PermissionDenied):
             arc.agents.get_active("research-assistant")
 
+    def test_persistent_gateway_requires_stable_key_and_runtime_only_database_credential(self):
+        with self.assertRaisesRegex(ValueError, "stable ARC_SERVER_KEY"):
+            Arc([ScriptedBackend("local")], control_plane=self.runtime, tool_specs=(self.tool,))
+        provisioner_attached = PostgresControlPlane(RUNTIME_DSN, PROVISIONER_DSN)
+        with self.assertRaisesRegex(ValueError, "must not receive the provisioner"):
+            Arc([ScriptedBackend("local")], server_key=KEY,
+                control_plane=provisioner_attached, tool_specs=(self.tool,))
+
 
 if __name__ == "__main__":
     unittest.main()
