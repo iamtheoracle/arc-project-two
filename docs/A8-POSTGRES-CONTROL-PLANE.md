@@ -1,6 +1,6 @@
 # A8 — PostgreSQL control-plane persistence
 
-**Status:** implementation in progress; not security-approved or production-operational.  
+**Status:** A8 initial control-plane persistence slice is implemented and CI-verified on `f56dfb0f1c6c6183e7e331688f93e24c041ee620`; not security-approved or production-operational.  
 **Migration:** `database/migrations/0001_arc_control_plane.sql`  
 **SQL security test:** `database/tests/0001_arc_control_plane.test.sql`  
 **Python adapter:** `oracle_arc/postgres_store.py`
@@ -63,3 +63,14 @@ The Oracle Arc workflow starts PostgreSQL 16, applies migration 0001, runs SQL r
 7. Production key/secret rotation and migration rollback are not yet proven.
 
 Do not mark A8 complete until the full persistence adapter, PostgreSQL 16 CI, adversarial role tests, multi-process revocation tests and independent security review all pass.
+
+## Verified CI result — 2026-11-15
+
+- GitHub Actions: https://github.com/iamtheoracle/arc-project-two/actions/runs/43695629901
+- Commit: `f56dfb0f1c6c6183e7e331688f93e24c041ee620`.
+- Full Python suite: `Ran 108 tests` — `OK`.
+- UNIBUD 51-agent focused suite: `Ran 5 tests` — `OK`.
+- PostgreSQL 16 migration/RLS SQL test: completed successfully.
+- Python PostgreSQL persistence integration: `Ran 6 tests` — `OK`.
+- Tests cover persisted app/agent/tool/grant config, fresh DB-backed app token epoch revocation, immediate tool-grant revocation, immediate agent suspension, refusal of unpersisted host config, refusal of runtime provisioning, stable token signing key requirement, and rejection of a provisioner DSN in the runtime gateway.
+- This is CI verification against a disposable PostgreSQL 16 service. It is not production deployment or independent security approval.
