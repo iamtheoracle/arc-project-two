@@ -164,8 +164,8 @@ def test_revoked_application_credential_is_rejected(client):
 
 def test_scoped_agent_task_api_enforces_application_boundary(client):
     tenant=client.post("/v1/platform/tenants",headers=owner(),json={"name":"Tenant"}).json()["tenant_id"]
-    app_a=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"A"}).json()["application_id"]
-    app_b=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"B"}).json()["application_id"]
+    app_a=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"App A"}).json()["application_id"]
+    app_b=client.post(f"/v1/platform/tenants/{tenant}/applications",headers=owner(),json={"name":"App B"}).json()["application_id"]
     caps=["agent.oracle.dispatch","agent.tasks.claim","agent.tasks.complete","reasoning"]
     token_a=client.post(f"/v1/platform/tenants/{tenant}/applications/{app_a}/credentials",
         headers=owner(),json={"principal_id":"p1","capabilities":caps}).json()["credential"]
