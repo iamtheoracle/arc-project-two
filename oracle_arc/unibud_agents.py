@@ -1,24 +1,24 @@
 """Explicit, read-only registration of the UNIBUD 51-agent catalogue in Oracle Arc."""
 from __future__ import annotations
-
 import bz2
 import hashlib
 import json
 import re
 from pathlib import Path
-
 from .agents import AgentSpec
 from .types import Risk
 
 _NAMESPACE = "unibud:"
 _MANIFEST_SHA256 = "93c3c862d84ad0801bcd066f16fec9a22dedb69beb32f257f56ef7ab11228652"
 _COUNTS = {"core": 16, "specialist": 10, "service": 25}
-_DEFAULT = Path(__file__).resolve().parent / "agent_catalogues" / "unibud-51.json.bz2"
 _ID = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-def _definitions(path: str | Path | None = None) -> list[dict]:
-    source = Path(path) if path is not None else _DEFAULT
+def _definitions(manifest_path: str | Path) -> list[dict]:
+    """Load definitions only from a path supplied by the embedding host."""
+    if manifest_path is None:
+        raise ValueError("host configuration must supply the UNIBUD agent manifest path")
+    source = Path(manifest_path)
     try:
         raw = source.read_bytes()
         if source.suffix == ".bz2":
@@ -30,7 +30,6 @@ def _definitions(path: str | Path | None = None) -> list[dict]:
         raise ValueError(f"cannot load UNIBUD agent manifest: {source}") from exc
     if not isinstance(items, list) or len(items) != 51:
         raise ValueError("UNIBUD agent manifest must contain exactly 51 definitions")
-
     ids: set[str] = set()
     counts = dict.fromkeys(_COUNTS, 0)
     required = ("id", "name", "category", "role", "mission")
@@ -77,8 +76,8 @@ def _prompt(item: dict) -> str:
     return "\n".join(lines)
 
 
-def load_unibud_agent_specs(manifest_path: str | Path | None = None) -> tuple[AgentSpec, ...]:
-    """Return 51 namespaced, read-only AgentSpecs; never creates tools, grants, or memory access."""
+def load_unibud_agent_specs(manifest_path: str | Path) -> tuple[AgentSpec, ...]:
+    """Return 51 namespaced, read-only AgentSpecs from explicit host configuration."""
     return tuple(
         AgentSpec(
             name=f"{_NAMESPACE}{item['id']}", version="1.0.0",
