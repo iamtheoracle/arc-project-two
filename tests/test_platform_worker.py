@@ -318,6 +318,13 @@ def test_worker_document_search_uses_live_scoped_identity_and_source_attribution
 
     monkeypatch.setattr(worker_module, "ModelGateway", SearchGateway)
     worker = PlatformWorker(database, worker_token, tool_broker=build_platform_tool_broker(database_path=database))
+    row, context = worker._execution_context(execution_id, worker_id)
+    policy = worker._effective_tool_policy(row, context["manifest"])
+    assert all("tool.document_search" in permissions for permissions in policy)
+    assert worker.tool_broker.schemas(
+        manifest_tools=policy[0], application_grants=policy[1],
+        owner_policy=policy[2], worker_capabilities=policy[3],
+    )
     result = worker.run_once()
     assert result["status"] == "succeeded"
     assert captured["tool_result"]["results"][0]["source_uri" == "https://docs.example.test/runbook"
