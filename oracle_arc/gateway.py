@@ -30,10 +30,16 @@ class Arc:
                  policy: RoutingPolicy = None, step_up=None, file_roots=(), user_verifier=None,
                  app_credentials=(), agent_specs=(), tool_specs=(), tool_grants=(), control_plane=None):
         self.audit = AuditLog(audit_path)
-        if control_plane is not None and app_credentials:
-            raise ValueError("PostgreSQL applications must be provisioned out-of-band, not at runtime")
-        if control_plane is not None and tool_grants:
-            raise ValueError("PostgreSQL tool grants must be provisioned out-of-band, not at runtime")
+        if control_plane is not None:
+            stable_key = server_key or os.environ.get("ARC_SERVER_KEY", "").encode()
+            if not stable_key or len(stable_key) < 32:
+                raise ValueError("persistent mode requires a stable ARC_SERVER_KEY of at least 32 bytes")
+            if getattr(control_plane, "provisioner_dsn", None):
+                raise ValueError("runtime gateway must not receive the provisioner database credential")
+            if app_credentials:
+                raise ValueError("PostgreSQL applications must be provisioned out-of-band, not at runtime")
+            if tool_grants:
+                raise ValueError("PostgreSQL tool grants must be provisioned out-of-band, not at runtime")
         self.control_plane = control_plane
         self.apps = AppRegistry(server_key=server_key, user_verifier=user_verifier, store=control_plane)
         for app_id, secret, scopes in app_credentials:
