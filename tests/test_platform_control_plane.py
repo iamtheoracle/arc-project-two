@@ -11,7 +11,7 @@ CAPS = [
     "agent.register", "agent.read", "agent.manage", "agent.execute",
     "agent.execution.read", "model.route.manage", "model.route.use",
     "quota.manage", "usage.write", "usage.read", "reasoning",
-    "tool.search", "tool.calendar",
+    "tool.calculate", "tool.document_search",
 ]
 
 
@@ -23,7 +23,7 @@ def setup(tmp_path, name="Tenant A", app="APP"):
     # Tests model the separate owner grant plane; application capabilities alone
     # must not silently authorize a tool.
     grants = ToolGrantStore(path)
-    for tool_id in ("tool.search", "tool.calendar"):
+    for tool_id in ("tool.calculate", "tool.document_search"):
         grants.grant(identity.tenant_id, identity.application_id, tool_id, "test-owner")
     return path, identities, identity, PlatformControlPlane(path)
 
@@ -33,7 +33,7 @@ def manifest(tools=None):
         "display_name": "Research agent",
         "description": "Tenant-scoped research specialist",
         "required_capabilities": ["reasoning"],
-        "allowed_tools": tools or ["tool.search"],
+        "allowed_tools": tools if tools is not None else ["tool.calculate"],
         "model_routes": ["local-default"],
         "runtime": "oracle-arc-agent-v1",
     }
@@ -51,8 +51,8 @@ def test_agent_versions_are_immutable_and_application_scoped(tmp_path):
     _, _, b, _ = setup(tmp_path, "Tenant B", "APP")
     configure(cp, a)
     cp.register_agent(a, "research", "1.0.0", manifest())
-    cp.register_agent(a, "research", "1.1.0", manifest(["tool.search", "tool.calendar"]))
-    assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["tool.search"]
+    cp.register_agent(a, "research", "1.1.0", manifest(["tool.calculate", "tool.document_search"]))
+    assert cp.get_agent(a, "research", "1.0.0").manifest["allowed_tools"] == ["tool.calculate"]
     with pytest.raises(LookupError):
         cp.get_agent(b, "research")
     with pytest.raises(Exception):
@@ -101,7 +101,7 @@ def test_expired_worker_lease_recovers_and_dead_letters(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {}, max_attempts=2)
-    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5)
+    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert claim.execution_id == eid
     with cp._session() as db:
         db.execute("UPDATE arc_executions SET lease_expires_at=? WHERE execution_id=?",
@@ -157,7 +157,7 @@ def test_worker_heartbeat_extends_only_current_unexpired_lease(tmp_path):
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
-    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5)
+    claim = cp.claim_execution("wrk_worker_a", lease_seconds=5, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert claim.execution_id == eid
     assert cp.heartbeat_execution(eid, "wrk_worker_a", lease_seconds=60)
     assert not cp.heartbeat_execution(eid, "wrk_worker_b", lease_seconds=60)
@@ -169,7 +169,7 @@ def test_cancelling_running_execution_fences_late_worker_result(tmp_path):
                            CAPS + ["agent.execution.cancel"])
     identity = ids.authenticate(issued["secret"])
     configure(cp, identity)
-    cp.register_agent(identity, "research", "1.0.0", manifest())
+    cp.register_agent(identity, "research", "1.0.0", manifest([]))
     eid = cp.submit_execution(identity, "research", "1.0.0", "local-default", {})
     cp.claim_execution("wrk_worker_a", lease_seconds=60, tenant_id=identity.tenant_id, application_id=identity.application_id)
     assert cp.cancel_execution(identity, eid)
@@ -270,6 +270,7 @@ def test_worker_executes_model_and_commits_usage_atomically(tmp_path, monkeypatc
 def test_worker_policy_failure_is_not_retried(tmp_path, monkeypatch):
     from core.platform_worker import PlatformWorker
     from core.worker_identity import WorkerIdentityStore
+    import core.platform_worker as worker_module
     path, ids, identity, cp = setup(tmp_path)
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
@@ -278,6 +279,13 @@ def test_worker_policy_failure_is_not_retried(tmp_path, monkeypatch):
     workers = WorkerIdentityStore(path)
     _, token = workers.issue(identity.tenant_id, identity.application_id,
                              ["execution.claim", "execution.complete"], 3600)
+    class UnauthorizedToolRequestGateway:
+        def __init__(self, **_kwargs): pass
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            return {"message":{"content":"","tool_calls":[{"id":"unauthorized-call",
+                "function":{"name":"tool_calculate","arguments":{"expression":"6 * 7"}}}]}}
+        def close(self): pass
+    monkeypatch.setattr(worker_module, "ModelGateway", UnauthorizedToolRequestGateway)
     worker = PlatformWorker(path, token)
     with pytest.raises(PermissionError):
         worker.run_once(lease_seconds=30)
@@ -291,6 +299,7 @@ def test_expired_lease_recovery_is_application_scoped(tmp_path):
     execution_a = cp.submit_execution(identity_a, "research", "1.0.0", "local-default", {})
     issued_b = ids.provision("Tenant B", "APP", "principal-b", CAPS)
     identity_b = ids.authenticate(issued_b["secret"])
+    ToolGrantStore(path).grant(identity_b.tenant_id, identity_b.application_id, "tool.calculate", "test-owner")
     configure(cp, identity_b)
     cp.register_agent(identity_b, "research", "1.0.0", manifest())
     execution_b = cp.submit_execution(identity_b, "research", "1.0.0", "local-default", {})

@@ -438,14 +438,10 @@ class PlatformWorker:
             payload = json.loads(row["input_json"])
             messages = self._messages(payload, context["manifest"])
             reasoning_context, reasoning_trace = self._reasoning_policy(messages)
-            messages[0]["content"] += "
-
-" + reasoning_context
+            messages[0]["content"] += "\n\n" + reasoning_context
             memory_context, memory_trace = self._spark_memory_context(row, payload)
             if memory_context:
-                messages[0]["content"] += "
-
-" + memory_context
+                messages[0]["content"] += "\n\n" + memory_context
             self.identities.validate(self.identity, "execution.complete")
             remaining = deadline - time.monotonic()
             if remaining <= 0:

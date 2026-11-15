@@ -16,7 +16,7 @@ def test_tool_grant_api_requires_owner_secret_and_scopes_application(tmp_path,mo
  assert client.get(path).status_code==401
  assert client.get(path,headers={"Authorization":"Bearer "+provisioned["secret"]}).status_code==401
  owner={"Authorization":"Bearer "+"x"*48}
- created=client.post(path,headers=owner,json={"tenant_id":provisioned["tenant_id"],"application_id":provisioned["application_id"],"tool_id":"tool.search"})
+ created=client.post(path,headers=owner,json={"tenant_id":provisioned["tenant_id"],"application_id":provisioned["application_id"],"tool_id":"tool.calculate"})
  assert created.status_code==201,created.text
  grant=created.json()
  assert grant["status"]=="active"

@@ -10,7 +10,7 @@ import pytest
 from core.platform_control_plane import PlatformControlPlane
 from core.platform_tool_registry import build_platform_tool_broker
 from core.scoped_tool_broker import ScopedToolBroker
-from core.tenant_security import TenantSecurityStore
+from core.tenant_security import TenantSecurityStore, AuthorizationError
 from core.tool_grants import ToolGrantStore
 from core.worker_identity import WorkerIdentityStore
 from core.platform_worker import PlatformWorker
@@ -203,7 +203,7 @@ def test_spark_memory_is_opt_in_and_permission_checked(tmp_path, monkeypatch):
 
     monkeypatch.setattr(worker_module, "ModelGateway", NeverCallGateway)
     worker = PlatformWorker(database, worker_token, tool_broker=ScopedToolBroker([]))
-    with pytest.raises(PermissionError):
+    with pytest.raises(AuthorizationError):
         worker.run_once()
     assert control.get_execution(identity, execution_id).status in {"failed", "dead_letter"}
 
@@ -317,7 +317,14 @@ def test_worker_document_search_uses_live_scoped_identity_and_source_attribution
             pass
 
     monkeypatch.setattr(worker_module, "ModelGateway", SearchGateway)
-    worker = PlatformWorker(database, worker_token)
+    worker = PlatformWorker(database, worker_token, tool_broker=build_platform_tool_broker(database_path=database))
+    row, context = worker._execution_context(execution_id, worker_id)
+    policy = worker._effective_tool_policy(row, context["manifest"])
+    assert all("tool.document_search" in permissions for permissions in policy)
+    assert worker.tool_broker.schemas(
+        manifest_tools=policy[0], application_grants=policy[1],
+        owner_policy=policy[2], worker_capabilities=policy[3],
+    )
     result = worker.run_once()
     assert result["status"] == "succeeded"
     assert captured["tool_result"]["results"][0]["source_uri"] == "https://docs.example.test/runbook"
@@ -391,7 +398,7 @@ def test_two_workers_cannot_claim_the_same_execution_concurrently(tmp_path):
                 wid, lease_seconds=30, tenant_id=identity.tenant_id,
                 application_id=identity.application_id
             ),
-            ["worker-concurrent-a", "worker-concurrent-b"],
+            ["wrk_concurrent_a", "wrk_concurrent_b"],
         ))
     acquired = [claim for claim in claims if claim is not None]
     assert len(acquired) == 1

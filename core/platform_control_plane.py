@@ -624,7 +624,7 @@ class PlatformControlPlane:
         self._require(identity, "agent.execution.cancel")
         now = int(time.time())
         with self._session() as db:
-            cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?
+            cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?,
                 lease_owner=NULL,lease_expires_at=NULL,error_code='cancelled_by_principal'
                 WHERE execution_id=? AND tenant_id=? AND application_id=? AND principal_id=?
                 AND status IN ('queued','running')""",
@@ -635,7 +635,7 @@ class PlatformControlPlane:
         self._require(identity, "agent.execution.cancel")
         now = int(time.time())
         with self._session() as db:
-            cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?
+            cur = db.execute("""UPDATE arc_executions SET status='cancelled',updated_at=?,
                 lease_owner=NULL,lease_expires_at=NULL,error_code='cancelled_by_principal'
                 WHERE execution_id=? AND tenant_id=? AND application_id=? AND principal_id=?
                 AND status IN ('queued','running')""",

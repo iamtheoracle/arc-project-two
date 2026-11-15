@@ -10,7 +10,9 @@ def test_memory_and_conversations_survive_store_reopen(tmp_path):
     memory = store.save_memory("Oracle Arc belongs to me.", ["owner"])
     conversation_id = store.create_conversation("Persistent chat")
     store.add_message(conversation_id, "user", "Hello")
-    from core.plugins import PluginRegistry\n    fingerprints = PluginRegistry().tool_fingerprints\n    store.set_tool_approval("calculate", fingerprints["calculate"], True)
+    from core.plugins import PluginRegistry
+    fingerprints = PluginRegistry().tool_fingerprints
+    store.set_tool_approval("calculate", fingerprints["calculate"], True)
 
     reopened = ArcStore(path)
     assert reopened.list_memories()[0]["id"] == memory["id"]
