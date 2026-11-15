@@ -85,26 +85,26 @@ ALTER TABLE oracle_arc_private.tool_grants FORCE ROW LEVEL SECURITY;
 CREATE POLICY applications_owner_all ON oracle_arc_private.applications
   FOR ALL TO oracle_arc_owner USING (current_user='oracle_arc_owner') WITH CHECK (current_user='oracle_arc_owner');
 CREATE POLICY applications_provisioner_all ON oracle_arc_private.applications
-  FOR ALL TO oracle_arc_provisioner USING (pg_has_role(current_user,'oracle_arc_provisioner','member')) WITH CHECK (pg_has_role(current_user,'oracle_arc_provisioner','member'));
+  FOR ALL TO oracle_arc_provisioner USING ((current_user='oracle_arc_provisioner' OR pg_has_role(current_user,'oracle_arc_provisioner','member'))) WITH CHECK ((current_user='oracle_arc_provisioner' OR pg_has_role(current_user,'oracle_arc_provisioner','member')));
 
 CREATE POLICY agents_owner_all ON oracle_arc_private.agents
   FOR ALL TO oracle_arc_owner USING (current_user='oracle_arc_owner') WITH CHECK (current_user='oracle_arc_owner');
 CREATE POLICY agents_provisioner_all ON oracle_arc_private.agents
-  FOR ALL TO oracle_arc_provisioner USING (pg_has_role(current_user,'oracle_arc_provisioner','member')) WITH CHECK (pg_has_role(current_user,'oracle_arc_provisioner','member'));
+  FOR ALL TO oracle_arc_provisioner USING ((current_user='oracle_arc_provisioner' OR pg_has_role(current_user,'oracle_arc_provisioner','member'))) WITH CHECK ((current_user='oracle_arc_provisioner' OR pg_has_role(current_user,'oracle_arc_provisioner','member')));
 CREATE POLICY agents_runtime_read ON oracle_arc_private.agents
   FOR SELECT TO oracle_arc_runtime USING (true);
 
 CREATE POLICY tools_owner_all ON oracle_arc_private.tools
   FOR ALL TO oracle_arc_owner USING (current_user='oracle_arc_owner') WITH CHECK (current_user='oracle_arc_owner');
 CREATE POLICY tools_provisioner_all ON oracle_arc_private.tools
-  FOR ALL TO oracle_arc_provisioner USING (pg_has_role(current_user,'oracle_arc_provisioner','member')) WITH CHECK (pg_has_role(current_user,'oracle_arc_provisioner','member'));
+  FOR ALL TO oracle_arc_provisioner USING ((current_user='oracle_arc_provisioner' OR pg_has_role(current_user,'oracle_arc_provisioner','member'))) WITH CHECK ((current_user='oracle_arc_provisioner' OR pg_has_role(current_user,'oracle_arc_provisioner','member')));
 CREATE POLICY tools_runtime_read ON oracle_arc_private.tools
   FOR SELECT TO oracle_arc_runtime USING (true);
 
 CREATE POLICY grants_owner_all ON oracle_arc_private.tool_grants
   FOR ALL TO oracle_arc_owner USING (current_user='oracle_arc_owner') WITH CHECK (current_user='oracle_arc_owner');
 CREATE POLICY grants_provisioner_all ON oracle_arc_private.tool_grants
-  FOR ALL TO oracle_arc_provisioner USING (pg_has_role(current_user,'oracle_arc_provisioner','member')) WITH CHECK (pg_has_role(current_user,'oracle_arc_provisioner','member'));
+  FOR ALL TO oracle_arc_provisioner USING ((current_user='oracle_arc_provisioner' OR pg_has_role(current_user,'oracle_arc_provisioner','member'))) WITH CHECK ((current_user='oracle_arc_provisioner' OR pg_has_role(current_user,'oracle_arc_provisioner','member')));
 CREATE POLICY grants_runtime_read ON oracle_arc_private.tool_grants
   FOR SELECT TO oracle_arc_runtime USING (true);
 
