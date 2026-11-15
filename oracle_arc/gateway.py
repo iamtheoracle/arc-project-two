@@ -28,9 +28,14 @@ class Arc:
 
     def __init__(self, backends=None, server_key=None, audit_path=":memory:", memory_path=":memory:",
                  policy: RoutingPolicy = None, step_up=None, file_roots=(), user_verifier=None,
-                 app_credentials=(), agent_specs=(), tool_specs=(), tool_grants=()):
+                 app_credentials=(), agent_specs=(), tool_specs=(), tool_grants=(), control_plane=None):
         self.audit = AuditLog(audit_path)
-        self.apps = AppRegistry(server_key=server_key, user_verifier=user_verifier)
+        if control_plane is not None and app_credentials:
+            raise ValueError("PostgreSQL applications must be provisioned out-of-band, not at runtime")
+        if control_plane is not None and tool_grants:
+            raise ValueError("PostgreSQL tool grants must be provisioned out-of-band, not at runtime")
+        self.control_plane = control_plane
+        self.apps = AppRegistry(server_key=server_key, user_verifier=user_verifier, store=control_plane)
         for app_id, secret, scopes in app_credentials:
             self.apps.register_app(app_id, secret, scopes=scopes)
         self.meter = UsageMeter()
@@ -38,7 +43,7 @@ class Arc:
                                    policy or RoutingPolicy(), self.meter)
         self.agents = AgentRegistry(self.audit)
         self.tools = ToolRegistry()
-        self.grants = GrantTable(self.audit)
+        self.grants = GrantTable(self.audit, store=control_plane)
         self.memory = SparkMemory(memory_path, self.audit)
         self.broker = ConfirmationBroker(step_up=step_up)
         self.orbits = Orbits(audit=self.audit)
@@ -54,7 +59,39 @@ class Arc:
         self.memory.close()
 
     def _register_host_capabilities(self, agent_specs, tool_specs, tool_grants, file_roots):
-        """Register only capabilities explicitly supplied by the embedding application."""
+        """Register only explicit host executors; PostgreSQL configuration is provisioned separately."""
+        if self.control_plane is not None:
+            if tool_grants or file_roots:
+                raise ValueError("persistent mode accepts only separately provisioned tool grants and tool metadata")
+            persisted_agents = {row["name"]: row for row in self.control_plane.list_agents()}
+            supplied_agents = {spec.name: spec for spec in agent_specs}
+            if set(supplied_agents) - set(persisted_agents):
+                raise ValueError("host supplied an agent absent from the PostgreSQL catalogue")
+            from .agents import AgentSpec
+            from .types import Risk
+            for name, row in persisted_agents.items():
+                spec = supplied_agents.get(name)
+                if spec is None:
+                    spec = AgentSpec(name, row["version"], row["role"], row["system_prompt"],
+                                     Risk(row["max_risk"]), tuple(row["memory_namespaces"]), state=row["state"])
+                elif (spec.version != row["version"] or spec.role != row["role"]
+                      or spec.system_prompt != row["system_prompt"] or int(spec.max_risk) != row["max_risk"]
+                      or tuple(spec.memory_namespaces) != tuple(row["memory_namespaces"])
+                      or spec.state != row["state"]):
+                    raise ValueError(f"host agent configuration does not match persisted agent: {name}")
+                self.agents.register(spec)
+
+            persisted_tools = {row["name"]: row for row in self.control_plane.list_tools()}
+            for spec in tool_specs:
+                row = persisted_tools.get(spec.name)
+                if (row is None or not row["enabled"] or row["description"] != spec.description
+                        or int(row["risk"]) != int(spec.risk) or row["parameters"] != spec.parameters
+                        or int(row["data_class"]) != int(spec.data_class)):
+                    raise ValueError(f"host tool executor does not match enabled PostgreSQL tool metadata: {spec.name}")
+                self.tools.register(spec)
+            # Grants are queried from PostgreSQL on every permission check, so revocation is immediate.
+            return
+
         for spec in tool_specs:
             self.tools.register(spec)
         if file_roots:
