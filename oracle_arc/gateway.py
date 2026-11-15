@@ -41,7 +41,7 @@ class Arc:
         self.meter = UsageMeter()
         self.models = ModelGateway(backends if backends is not None else default_backends(),
                                    policy or RoutingPolicy(), self.meter)
-        self.agents = AgentRegistry(self.audit)
+        self.agents = AgentRegistry(self.audit, store=control_plane)
         self.tools = ToolRegistry()
         self.grants = GrantTable(self.audit, store=control_plane)
         self.memory = SparkMemory(memory_path, self.audit)
