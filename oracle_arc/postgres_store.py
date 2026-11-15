@@ -94,6 +94,11 @@ class PostgresControlPlane:
             "updated_at=clock_timestamp()",
             (app_id, salt, digest, list(scopes)))
 
+    def revoke_application_tokens(self, app_id: str) -> None:
+        self._provision(
+            "UPDATE oracle_arc_private.applications SET token_epoch=token_epoch+1,"
+            "updated_at=clock_timestamp() WHERE app_id=%s", (app_id,))
+
     def set_application_suspended(self, app_id: str, suspended: bool) -> None:
         self._provision(
             "UPDATE oracle_arc_private.applications SET suspended=%s,"
