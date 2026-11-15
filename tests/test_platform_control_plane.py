@@ -270,6 +270,7 @@ def test_worker_executes_model_and_commits_usage_atomically(tmp_path, monkeypatc
 def test_worker_policy_failure_is_not_retried(tmp_path, monkeypatch):
     from core.platform_worker import PlatformWorker
     from core.worker_identity import WorkerIdentityStore
+    import core.platform_worker as worker_module
     path, ids, identity, cp = setup(tmp_path)
     configure(cp, identity)
     cp.register_agent(identity, "research", "1.0.0", manifest())
@@ -278,6 +279,13 @@ def test_worker_policy_failure_is_not_retried(tmp_path, monkeypatch):
     workers = WorkerIdentityStore(path)
     _, token = workers.issue(identity.tenant_id, identity.application_id,
                              ["execution.claim", "execution.complete"], 3600)
+    class UnauthorizedToolRequestGateway:
+        def __init__(self, **_kwargs): pass
+        def chat(self, model, messages, tools=None, temperature=0.2):
+            return {"message":{"content":"","tool_calls":[{"id":"unauthorized-call",
+                "function":{"name":"tool_calculate","arguments":{"expression":"6 * 7"}}}]}}
+        def close(self): pass
+    monkeypatch.setattr(worker_module, "ModelGateway", UnauthorizedToolRequestGateway)
     worker = PlatformWorker(path, token)
     with pytest.raises(PermissionError):
         worker.run_once(lease_seconds=30)
