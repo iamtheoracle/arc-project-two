@@ -159,7 +159,7 @@ def test_remote_model_adapter_preserves_tool_calls_and_usage(monkeypatch):
                     "tool_calls": [{
                         "id": "call_123",
                         "type": "function",
-                        "function": {"name": "tool_calculate", "arguments": "{\\"expression\\":\\"6 * 7\\"}"},
+                        "function": {"name": "tool_calculate", "arguments": '{"expression":"6 * 7"}'},
                     }],
                 },
                 "prompt_eval_count": 12,
