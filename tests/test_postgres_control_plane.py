@@ -7,7 +7,7 @@ from oracle_arc.identity import AppRegistry
 from oracle_arc.models import ScriptedBackend
 from oracle_arc.postgres_store import PostgresControlPlane
 from oracle_arc.tools.registry import ToolSpec
-from oracle_arc.types import AuthError, DataClass
+from oracle_arc.types import AuthError, DataClass, PermissionDenied
 
 
 RUNTIME_DSN = os.environ.get("ORACLE_ARC_TEST_DATABASE_URL")
@@ -73,6 +73,17 @@ class PostgresControlPlaneTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "absent from the PostgreSQL catalogue"):
             Arc([ScriptedBackend("local")], server_key=KEY, control_plane=self.runtime,
                 agent_specs=(extra,), tool_specs=(self.tool,))
+
+    def test_grant_revocation_and_agent_suspension_are_visible_without_restart(self):
+        arc = Arc([ScriptedBackend("local")], server_key=KEY,
+                  control_plane=self.runtime, tool_specs=(self.tool,))
+        self.addCleanup(arc.close)
+        self.assertTrue(arc.grants.allowed("research-assistant", "read_profile"))
+        self.provisioner.revoke_tool("research-assistant", "read_profile")
+        self.assertFalse(arc.grants.allowed("research-assistant", "read_profile"))
+        self.provisioner.set_agent_state("research-assistant", "suspended")
+        with self.assertRaises(PermissionDenied):
+            arc.agents.get_active("research-assistant")
 
 
 if __name__ == "__main__":
