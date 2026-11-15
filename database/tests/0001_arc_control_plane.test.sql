@@ -74,11 +74,9 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 
-  BEGIN
-    EXECUTE 'SET ROLE oracle_arc_provisioner';
-    RAISE EXCEPTION 'runtime role assumed provisioner';
-  EXCEPTION WHEN insufficient_privilege THEN NULL;
-  END;
+  IF pg_has_role(current_user,'oracle_arc_provisioner','member') THEN
+    RAISE EXCEPTION 'runtime role is a member of the provisioner role';
+  END IF;
 END
 $runtime$;
 RESET ROLE;
@@ -90,11 +88,9 @@ BEGIN
   IF has_schema_privilege(current_user,'public','CREATE') THEN
     RAISE EXCEPTION 'provisioner can create objects in public schema';
   END IF;
-  BEGIN
-    EXECUTE 'SET ROLE oracle_arc_owner';
-    RAISE EXCEPTION 'provisioner assumed owner role';
-  EXCEPTION WHEN insufficient_privilege THEN NULL;
-  END;
+  IF pg_has_role(current_user,'oracle_arc_owner','member') THEN
+    RAISE EXCEPTION 'provisioner role is a member of the owner role';
+  END IF;
 END
 $provisioner$;
 RESET ROLE;
