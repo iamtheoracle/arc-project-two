@@ -25,11 +25,12 @@ class AgentSpec:
 
 
 class AgentRegistry:
-    def __init__(self, audit=None):
+    def __init__(self, audit=None, store=None):
         self._agents: dict = {}
         self._history: dict = {}
         self._lock = threading.Lock()
         self._audit = audit
+        self._store = store
 
     def register(self, spec: AgentSpec) -> None:
         with self._lock:
@@ -46,6 +47,16 @@ class AgentRegistry:
         spec = self._agents.get(name)
         if not spec:
             raise PermissionDenied(f"unknown agent: {name}")
+        if self._store is not None:
+            row = self._store.get_agent(name)
+            if row is None:
+                raise PermissionDenied(f"agent {name} is no longer registered")
+            if (spec.version != row["version"] or spec.role != row["role"]
+                    or spec.system_prompt != row["system_prompt"]
+                    or int(spec.max_risk) != row["max_risk"]
+                    or tuple(spec.memory_namespaces) != tuple(row["memory_namespaces"])):
+                raise PermissionDenied(f"agent {name} configuration changed; host restart is required")
+            spec.state = row["state"]
         if spec.state != "active":
             raise PermissionDenied(f"agent {name} is {spec.state}")
         return spec
@@ -53,6 +64,8 @@ class AgentRegistry:
     def set_state(self, name: str, state: str) -> None:
         if state not in ("active", "suspended", "retired"):
             raise ValueError(state)
+        if self._store is not None:
+            self._store.set_agent_state(name, state)
         self._agents[name].state = state
         if self._audit:
             self._audit.append("agent.state", agent=name, state=state)
