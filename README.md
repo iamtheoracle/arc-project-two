@@ -1,5 +1,10 @@
 # Arc Project Two
 
+> **Oracle Arc v0.1** — the independent, provider-neutral AI core now lives in [`oracle_arc/`](oracle_arc) with its
+> own tests and docs: see [docs/ORACLE_ARC.md](docs/ORACLE_ARC.md). The sections below describe the earlier
+> single-user CLI (`core/`, `main.py`, `web.py`), which is kept for reference and should not be network-exposed.
+
+
 **LLM-Independent Local AI System** — No API keys required. Premium, smart, and sharp.
 
 Runs entirely on your machine using Ollama. Modular plugin architecture for tools and capabilities.

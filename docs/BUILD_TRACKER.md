@@ -1,0 +1,197 @@
+# UNIBUD BUILD TRACKER
+Last updated: 2026-11-14. Labels: Current = verified in code during this session; Planned = agreed, not built; Concept = name only.
+Rule: trust code over notes. Re-verify claims before relying on them.
+
+## A8 PostgreSQL control-plane persistence — 2026-11-15
+
+- Current: work branch `feat/oracle-arc-postgres-a8-2026-11-15`, based on `feat/oracle-arc-core`, source tested at `f56dfb0f1c6c6183e7e331688f93e24c041ee620`.
+- Current: migration `database/migrations/0001_arc_control_plane.sql` creates applications, agents, tool metadata and tool grants in `oracle_arc_private`, with CHECK constraints, foreign keys, forced RLS, NOLOGIN owner/runtime/provisioner group roles and a narrow SECURITY DEFINER app lookup.
+- Current: `oracle_arc/postgres_store.py` persists and loads application, agent, tool and grant configuration; app token epochs and agent/grant revocation are re-read from PostgreSQL. Runtime gateway rejects a provisioner DSN and requires a stable signing key.
+- Current: `oracle_arc/identity.py`, `oracle_arc/agents.py`, `oracle_arc/tools/registry.py`, and `oracle_arc/gateway.py` are integrated with the optional control-plane store. Tool executors remain trusted host code and must match enabled persisted metadata.
+- Current: `database/tests/0001_arc_control_plane.test.sql` proves the database role/RLS boundary. `tests/test_postgres_control_plane.py` runs against PostgreSQL 16 with distinct runtime and provisioner login principals.
+- Current: GitHub Actions run `43695629901` passed: 108 full Python tests, 5 focused UNIBUD agent tests, PostgreSQL 16 migration/RLS test, and 6 Python PostgreSQL integration tests.
+- Planned: A8 remains partial. Production secret-manager provisioning, app-credential lookup enumeration risk, DB connection pooling/TLS/timeouts, backup/restore, multi-process concurrency, migration ledger/rollback, persistent audit and SPARK memory, persistent confirmations and usage metering, and independent security review remain open.
+- Not deployed, not merged, not production-operational.
+
+## 15. Continuation — 2026-11-18 (A8 step 2: PostgreSQL audit chain)
+- Current (database/migrations/0002_arc_audit_chain.sql): append-only hash-chained `audit_log` in `oracle_arc_private`, forced RLS, UPDATE/DELETE/TRUNCATE blocked by trigger for every role, runtime role limited to `append_audit()`, `verify_audit_chain()` and `audit_head()` (SECURITY DEFINER, pinned search_path), appends serialised by an advisory lock. Rollback: `0002_arc_audit_chain.rollback.sql`.
+- Current (database/tests/0002_arc_audit_chain.test.sql): passes on a local PostgreSQL 16 (ON_ERROR_STOP). Covers valid chain, head, runtime/provisioner/owner denial, tamper detection at the first bad row, deleted-row detection, constraint rejection, and apply -> rollback -> re-apply. Three deliberate breaks (runtime SELECT grant, trigger disabled, provisioner append grant) were each caught.
+- Current: CI step added to `.github/workflows/oracle-arc-tests.yml`. NOT yet run in GitHub Actions: CI verified = no.
+- Planned: Python adapter that routes `oracle_arc/audit.py` to `append_audit`/`verify_audit_chain` (needs psycopg, which could not be installed in the authoring sandbox; the existing SQLite `AuditLog` is unchanged and still the runtime default). Secret redaction stays in Python before the call; the database does not redact.
+- Planned: A13 external anchoring uses `audit_head()`. A superuser who disables the trigger and rewrites the tail AND recomputes hashes is not detected without an external anchor.
+- Next exact step: SPARK memory to PostgreSQL (`0003`), RLS isolating app and user, share grants, TTL, with a SQL test file and CI step in the same shape.
+
+## 1. Stopped at / Next exact step
+- Current: Oracle Arc repository is `iamtheoracle/arc-project-two`, branch `feat/oracle-arc-core`; latest verified remote HEAD is `a9edecc5eeb849202de203afe86e7749d3db6a04`.
+- Current: A12 is implemented and full-suite verified at that HEAD. The CI workflow ran the exact branch commit, installed `requirements.txt`, passed the warning-strict full suite (102 tests), and passed the focused UNIBUD registry/gateway suite (5 tests).
+- Current: The four adapter tests and one Arc composition test all pass in the repository CI run. The mapped agents are explicitly host-registered, namespaced `unibud:<id>`, capped at `Risk.READ`, and have no SPARK memory namespaces or tools/grants by default.
+- Current: The full suite still emits ignored `ResourceWarning` messages for unclosed HTTP test sockets; the command exits 0. This remains Found, not fixed and does not block A12.
+- Planned: Next item is A8 — PostgreSQL persistence and migrations, constraints, RLS, least-privilege roles, and persistence for app/agent/grant configuration. Do not claim a live database until a real PostgreSQL environment and integration tests are available.
+- Current: `unibud-live` remains abandoned/reference-only and was not modified.
+
+## 2. Repositories and verified state
+| Repo | Branch / commit | State | Tests |
+|---|---|---|---|
+| `arc-project-two` | Current: `feat/oracle-arc-core` @ `a9edecc5eeb849202de203afe86e7749d3db6a04` | Current: A6 host-registration boundary and A12 51-agent host adapter are present. SQLite/in-memory persistence remains; PostgreSQL A8 is next. | Current: GitHub Actions run 43628930371 passed: 102 full-suite tests and 5 focused A12 tests. Three ignored HTTP socket ResourceWarnings were emitted. |
+| `unibud-live` | Current: abandoned/reference-only per founder decision | Current: no new feature work authorized. | Current: not run. |
+| `unibud-app` | Current: `main` @ `3029a8761b5e42b3880f0392640abf377ba325a3`; its handoff names it as source of truth | Current: its agent contracts/registry define 16 agents, not 51. | Current: not run in this session; remote source previously inspected. |
+| `arc-project-one` | Current: previous working-copy snapshot, not part of this task | Current: no changes in this session. | Historical: 141 passed under a local vitest-compatible shim, not real vitest. |
+
+## 3. Fix queue
+1. Current: A6 gateway host-registration slice is implemented; historical full-suite evidence remains scoped to its recorded source commit.
+2. Current: A12 51-agent host mapping is implemented and verified by the full suite and focused integration tests on `a9edecc5eeb849202de203afe86e7749d3db6a04`.
+3. Planned: A8 — PostgreSQL storage, migrations, constraints, RLS, least-privilege roles; persist app/agent/grant configuration. This is the next item.
+4. Planned: A7 — separate ORACLE, SPARK, ORBITS and CONCIERGE service boundaries.
+5. Planned: A9 — ORBITS API route and governed ORACLE integration.
+6. Planned: A10 — SPARK user list/correct/delete/retention endpoints and purpose dimension.
+7. Planned: A11 — admin/staff roles, dual approval and rate limits.
+8. Planned: A13 — externally anchored audit-chain head.
+9. Planned: A14 — research provenance model before ORACLE statistics/research destinations.
+10. Planned: A15 — replace `TrustedAppAssertion` with an identity-provider integration chosen by the founder.
+
+## 4. Audit findings
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| A1 | `unibud-live` Bud uses a direct model provider | High | Current: parked because `unibud-live` is abandoned. |
+| A2 | Legacy `plugins/files.py` unrestricted path access; legacy calculator resource risk | High if network-exposed | Current: found, not fixed; legacy code outside this task. |
+| A3 | Prior report of a hardcoded admin backdoor in uploaded docs | High | Current: not established in current code; re-grep before security sign-off. |
+| A4 | `arc-project-one` CI failure cause | Medium | Current: unverified. |
+| A5 | Built-in malware scanner only detects EICAR | Medium | Current: found, not fixed. |
+| A6 | Oracle Arc gateway had hardcoded UNIBUD agents/prompts/defaults | High | Current: host registration implemented in `oracle_arc/gateway.py`; full 97-test suite passed on the tested source tree. Ignored HTTP socket ResourceWarnings remain. |
+| A7 | ORACLE, SPARK, ORBITS and CONCIERGE are one in-process object graph | High | Planned: open. |
+| A8 | Storage is SQLite/in-memory; PostgreSQL migrations/constraints/RLS/least privilege required | High | Planned: open. |
+| A9 | ORBITS has no HTTP route | Medium | Planned: open. |
+| A10 | SPARK lacks user list/correct/delete/retention endpoints and purpose dimension | Medium | Planned: open. |
+| A11 | No admin/staff roles, dual approval or rate limiting | High | Planned: open. |
+| A12 | 51-agent TypeScript registry, package verification and Oracle Arc host mapping | High | Current: supplied archive verified at 16 core + 10 specialist + 25 service; checksum-verified manifest and explicit read-only namespaced host adapter committed. Package tests passed 5/5; typecheck passed with locally available global Node typings. Oracle Arc full suite passed 102 tests and focused adapter/gateway tests passed 5/5 in CI run 43628930371. |
+| A13 | Audit chain needs externally anchored head | Medium | Planned: open. |
+| A14 | No research/statistics provenance model; eleven destinations not started | Planned | Planned: open. |
+| A15 | `TrustedAppAssertion` is a stop-gap identity model | High | Planned: open. |
+
+## 5. Important commands
+- Current: Oracle Arc suite command: `python -W error::ResourceWarning -m unittest discover -s tests -t .`; CI workflow: `.github/workflows/oracle-arc-tests.yml`.
+- Current: A12 focused command: `python -m unittest tests.test_unibud_agents tests.test_unibud_agents_gateway -v`.
+- Current: supplied package scripts are `npm run typecheck` and `npm test`. `npm test` passed 5/5 on the uploaded archive. `npm run typecheck` passed using globally available TypeScript 5.8.3 and Node typings linked locally; clean `npm install` timed out, so clean-install reproducibility remains unverified.
+- Current: no real Ollama/Qwen or remote model has been exercised; model quality remains unmeasured.
+- Current: never merge, deploy or force-push without founder approval.
+
+## 6. Found, not fixed
+- Current: `main.py` was not changed. Its CLI currently registers an application from environment variables but does not supply host agent/tool configuration. With the new empty-by-default gateway, chat execution requires an embedding host to register agents/tools/grants. Keep this explicit; do not restore implicit Bud/Concierge defaults.
+- Current: README and run instructions were not changed; they may still describe a UNIBUD app registration example.
+- Current: The 51-role source was supplied as `unibud-agents-51.zip` and inspected in this continuation. `iamtheoracle/unibud-app` still contains only 16 typed definitions and `iamtheoracle/unibud-live` remains reference-only; neither replaces the supplied package.
+- Current: `tests/test_http.py` emits ignored `ResourceWarning` messages for unclosed server sockets under the required warning-strict test command; tests still exit successfully. Found, not fixed.
+- Current: local checkout was blocked by DNS, but the exact branch archive was retrieved in a hosted Python 3.11.2 environment; branch SHA was checked against the GitHub branch API and the full suite passed 97 tests.
+
+## 7. Statistics
+| Metric | Value | As of |
+|---|---|---|
+| Oracle Arc full test suite | Current: 102 passed on CI run 43628930371 at application commit `a9edecc5eeb849202de203afe86e7749d3db6a04`; same suite passed again on tracker commit CI run 43629048440. Three ignored HTTP socket ResourceWarnings were emitted. | 2026-11-14 |
+| A12 focused tests | Current: 5 passed (four adapter tests + one Arc gateway composition test) on CI run 43628930371; rerun passed on tracker commit CI run 43629048440. | 2026-11-14 |
+| A12 registry coverage | Current: 51 definitions validated: 16 core + 10 specialist + 25 service; all mapped to namespaced, read-only host registrations without default tools or memory grants. | 2026-11-14 |
+| A12 status | Current: implemented, full-suite tested and CI verified; closed. | 2026-11-14 |
+| Next fix queue item | Planned: A8 PostgreSQL persistence, migrations, constraints, RLS and least-privilege roles. | 2026-11-14 |
+| Open audit findings | Current: A2-A5, A7-A11 and A13-A15 remain open or unverified; A1 is parked with abandoned `unibud-live`. | 2026-11-14 |
+| Reference capability families built | Current: 0 verified as built; the 13-family inventory remains research/concept only. | 2026-11-14 |
+
+## 8. Blockers and open decisions
+- Current: source-code HEAD at verification was `03c8d3da080ad8133f7b35c5e131bc45e2497296`; the subsequent tracker refresh changes documentation only, and application source remains the previously tested `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020` tree. Local container DNS still cannot resolve `github.com`; the hosted test run downloaded the exact source archive and confirmed its SHA against the GitHub branch API before running the full suite.
+- Current: GitHub Actions run `43628930371` for commit `a9edecc5eeb849202de203afe86e7749d3db6a04` completed with conclusion `success`; all six job steps including dependency install, full suite, and focused A12 tests completed successfully. The combined commit status endpoint returned no legacy status entries; the Actions run is the CI evidence.
+- Planned: identity provider choice remains open; do not create a competing identity authority.
+- Current: Oracle Arc SPARK remains user-controlled memory. The supplied UNIBUD catalogue defines its own Spark as an application coordinator; the adapter namespaces it as `unibud:spark`, explicitly distinguishes it in the prompt, grants no memory access, and does not import the package orchestration runtime into Oracle Arc.
+- Current: `unibud-agents-51.zip` is now supplied and inspected. Its `npm test` passed 5/5; `npm run typecheck` passed after making global Node typings available. A clean install timed out; the TypeScript package source itself remains outside this Oracle Arc repository.
+- Current: MoneyLeads and UNIBUD remain independent products; Oracle Arc receives no implicit access to either product's data and never moves, holds or settles money.
+
+
+## 9. UNIBUD + Oracle Arc reference capability inventory (research-only)
+- Concept: This section records the 13 reference platforms supplied by the founder as capability references, not dependencies, copied brands, provider commitments, or evidence of implementation.
+- Concept: Source coverage is 11/13 platforms with vendor or primary documentation reviewed: Day AI, Robin, Viberate, Restream, WeTransfer, Mastercard Developers Agent Toolkit, Prefect, PointOne, Specter, TinyFish, and Firecrawl.
+- Concept: CREparser and Revalidata capabilities remain founder-supplied descriptions only; their complete product implementations and accuracy claims were not independently verified.
+- Concept: Day AI patterns — source-linked entity/context graph, temporal provenance, person/agent permission inheritance, per-tool read/write controls and approval gates. Potential native consumers: Connect, Board, Quarter, Wayward, Operations; Bud/Concierge/ORACLE only through explicit, scoped access. SPARK remains user-controlled memory, not a shared orchestration graph.
+- Concept: Robin patterns — room/desk/resource reservations, interactive floor maps, check-in, visitor management, access policies, occupancy and historical analytics/export. Potential owners: Operations and participating institutions; Wayward only for approved trip/event resource coordination.
+- Concept: Viberate patterns — artist/song/playlist/festival/venue discovery, cross-channel streaming/social/radio metrics, audience geography/demographics, ranking, comparisons and alerts. Potential owners: Connect and Riff; Wayward for music events; ORACLE may research only with permitted sources and provenance.
+- Concept: Restream patterns — broadcast/event lifecycle, destination management, chat/moderation, viewer and engagement analytics, recordings, transcription and clipping. Potential owner: ORBITS media processing; eligible Connect, Riff, Square/Quad or Wayward surfaces only where existing approved experiences require it.
+- Concept: WeTransfer patterns — upload/transfer lifecycle, recipient restrictions, passwords, expiry, previews, download status, revocation and recovery. Potential owner: shared secure file-delivery service used by Bud, Board, Connect, Square, Operations and authorized Concierge workflows. No public developer API was verified in this research.
+- Concept: Mastercard Developers Agent Toolkit patterns — API/service catalogue discovery, API operation listing, documentation retrieval and OAuth/Open Finance integration guides. Potential owner: developer administration and API documentation; ORACLE may discover approved tool documentation. This toolkit is not evidence of payment-rail access or financial authorization.
+- Concept: Prefect patterns — workflow definitions/deployments, scheduler, event triggers, work pools, workers, execution states, concurrency, retries, logs and notifications. Potential owner: native Operations workflow runtime; ORACLE can request bounded workflows through grants; SPARK is not the scheduler.
+- Concept: PointOne patterns — professional time capture, matter-linked work records, billing-rule extraction/enforcement, pre-bill review, reviewer routing/comments and time analytics. Potential owner: Operations and organizations that explicitly need professional-services controls; do not assume all UNIBUD institutions are law firms.
+- Concept: Specter patterns — company, people, investor and transaction intelligence; funding/M&A/IPO history; growth/revenue estimates; talent and investor-interest signals; saved searches, network context and sourced API feeds. Potential owners: Connect and Quarter; Board/Operations only for legitimate organization research; ORACLE research requires explicit source, privacy and access controls.
+- Concept: CREparser patterns (founder-supplied, not independently verified) — lease upload/classification, clause and term extraction, rent/financial-term validation, document comparison, consent analysis and human review. Potential owners: Operations/facilities and relevant institutional document workflows; Board only where institution facilities records are authorized.
+- Concept: Revalidata patterns (founder-supplied, not independently verified) — contract understanding, obligation extraction, deadline/notice detection, source-passage citations, obligation assignment and deadline tracking. Potential owners: Operations, institutional administration, Quarter and authorized Concierge service requests; ORACLE can extract/evidence but not provide guaranteed legal conclusions.
+- Concept: TinyFish patterns — isolated browser sessions, controlled browser automation, reusable saved session state, multi-step navigation and structured extraction. Potential owner: isolated browser-worker service for approved Connect, Board, Wayward and Concierge research tasks; require domain allowlists, user/organization authorization, credential isolation and audit. Never bypass access controls.
+- Concept: Firecrawl patterns — search, scrape, crawl, map, structured extraction, document parsing, browser interaction and page/web-scale change monitoring. Potential owner: native ingestion/discovery pipeline for Connect, Board, Wayward and Quarter; ORACLE research uses provenance-bearing, untrusted source content.
+- Planned: Build a capability-to-service blueprint only after the inventory is reconciled against founder-approved space definitions and the authoritative 51-agent registry. Do not silently convert these references into new product features or agent identities.
+- Planned: Native services to evaluate as shared infrastructure: entity/context records and provenance; ingestion and deduplication; permission-aware search; workflow scheduler/queues/workers; document intelligence; secure file delivery; media processing; resource/workforce management; developer/API catalogue; analytics and audit.
+- Current: No UNIBUD or Oracle Arc application source was changed by this research. No reference platform has been integrated or adopted as a runtime dependency.
+
+
+## 10. Latest continuation verification — 2026-11-14
+- Current: GitHub branch ref for `feat/oracle-arc-core` was re-read before the tracker refresh; source HEAD was `03c8d3da080ad8133f7b35c5e131bc45e2497296`.
+- Current: That source HEAD has commit message `docs: record native capability research inventory` and changes only `docs/BUILD_TRACKER.md`. The tracker refresh itself is also documentation-only; it does not alter application source.
+- Current: Combined commit statuses returned an empty list, and the commit workflow-run query returned no runs. No CI pass is claimed for this HEAD.
+- Current: `oracle_arc/gateway.py` still accepts host-provided `agent_specs`, `tool_specs`, and `tool_grants`; it does not define default Bud/Concierge agents or prompts. `tests/test_gateway.py` contains the host-registration and empty-core tests.
+- Current: `tests/test_http.py` starts a `serve_forever` thread and registers shutdown/server-close cleanups, but does not retain and join the serving thread. This is a plausible cause of the historical socket `ResourceWarning`, not a proven root cause.
+- Current: The historical 97-test result applies to source commit `c0e0d9b4b08ef9e155172a0f38fbb2fa3949c020`, not the current branch HEAD. Tests were not run in this continuation because there is no local checkout and the prior container checkout attempt failed DNS resolution; no before/after test result is claimed.
+- Current: `iamtheoracle/unibud` main is `3ce92aa1dad1e40520de4084e2a1cca3677b8e76`; both `docs/BUILD_TRACKER.md` and `claude/BUILD_TRACKER.md` return 404 there. Project-file search also returned no attached tracker.
+- Current: `iamtheoracle/unibud-app` main is `3029a8761b5e42b3880f0392640abf377ba325a3`. Its `src/lib/agents/contracts.ts` and `src/lib/agents/registry.ts` contain 16 agent definitions, not an authoritative 51-entry catalogue. Its package exposes `typecheck` and `test` scripts; neither was run in this continuation.
+- Found, not fixed: `unibud-app/src/lib/agents/registry.ts` and `UNIBUD_IMPLEMENTATION_HANDOFF.md` describe SPARK as a coordinator/orchestrator. This conflicts with the founder's controlling decision that SPARK is user-controlled memory. Do not copy that definition into Oracle Arc. The app registry is outside this bounded gateway/test-cleanup slice.
+- Found, not fixed: No repository named `unibud-agents` was returned by repository search. The 51-role catalogue remains unavailable; do not invent the missing identities.
+- Planned: The next code change remains the narrowly scoped HTTP test-thread cleanup in `tests/test_http.py`, but it must be made only when a runnable checkout is available so the warning-strict test command can be run before and after.
+- Planned: After that test cleanup is verified, continue Task 2 only when the authoritative 51-role catalogue is available; then perform typecheck, add tests and map verified agents through explicit Oracle Arc host registration. Do not begin the later PostgreSQL/engine stages ahead of Task 2.
+
+
+## 11. Continuation — 2026-11-14
+- Current: Re-read this tracker before work. Branch `feat/oracle-arc-core` was verified at `40c640f4f782be684054a5e2e8d2f948b430c517`; this is a documentation-only tracker commit atop source-code HEAD `03c8d3da080ad8133f7b35c5e131bc45e2497296`.
+- Current: Re-read `tests/test_http.py`. `HttpTests.setUp` starts `serve_forever` on an anonymous daemon thread, registers `server_close` and `shutdown` cleanups, but never joins the serving thread. This remains a candidate explanation for the historical ignored socket `ResourceWarning`, not a proven cause.
+- Current: Re-read `oracle_arc/gateway.py`. The composition root accepts host-provided `agent_specs`, `tool_specs`, and explicit `tool_grants`; no default Bud/Concierge prompt or agent registration is present.
+- Current: Exact-HEAD combined statuses for `40c640f4f782be684054a5e2e8d2f948b430c517` returned no statuses; workflow-run lookup returned no runs. No CI pass is claimed.
+- Current: Tests were not run because a local checkout/test runtime is unavailable; the earlier clone attempt failed DNS resolution for github.com. No source changes or test results are claimed in this pass.
+- Current: Organization search for `"51" "agents"` returned only the reference-only `unibud-live/AGENT_SYSTEM.md` statement that the register has 16 core plus 35 specialist/service identities. It does not expose the 35 names or their contracts.
+- Found, not fixed: `tests/test_http.py` server-thread cleanup remains unmodified pending a runnable before/after test environment.
+- Found, not fixed: The authoritative 51-entry catalogue remains unavailable. The only located 51-count statement is in abandoned/reference-only `unibud-live/AGENT_SYSTEM.md`; it is not an implementation-ready catalogue.
+- Planned: Obtain a runnable checkout and run the warning-strict baseline; then retain the server thread, shut down the server, join the thread, and run the same suite after the change.
+- Planned: Resume Task 2 only when the authoritative 51 role identities and their responsibilities are supplied or found in an approved source. Do not implement PostgreSQL or new engines ahead of Task 2.
+
+
+## 12. Continuation — 2026-11-14 (branch reconciliation and A12 gate)
+- Current: Live repository is `iamtheoracle/arc-project-two`; target branch is `feat/oracle-arc-core`; live branch HEAD at session start is `a7144e840fe2142f00ef8615403e487b2ac0a938`. The branch points to tree `61f3460786beda74834dee7df7b6185a192a2581`. GitHub reports the branch is unprotected. No local working tree was available; `git clone --depth 1 --branch feat/oracle-arc-core https://github.com/iamtheoracle/arc-project-two.git /tmp/arc-project-two` failed with `Could not resolve host: github.com`.
+- Current: Canonical working base for this work is `feat/oracle-arc-core`, because it is the founder-designated coordinate, contains this authoritative tracker, and contains the `oracle_arc/` core package. This is a scope/base selection, not a claim that it is a technical superset of the alternatives. Do not merge or cherry-pick any competing branch without a separate reconciliation and founder approval.
+- Current: Inspected every discovered `feat/arc-*` and `feat/oracle-arc-*` branch in this repository (11 total). Every alternative comparison against `feat/oracle-arc-core` is `diverged`, with the same merge base `73bb3d1b75b899a64921298261c99b2207e12b78` and the target branch 22 commits ahead of that merge base. The alternatives have independent commits and overlapping platform concepts, but are not safe fast-forward extensions of the target.
+- Current: Branch comparison inventory (alternative HEAD; ahead/behind relative to target; changed-file count): `feat/arc-connected-execution-pipeline` `f3bd8cdbadd8171213b4225325ae350062a70b96` (391/22; 71); `feat/arc-owner-tool-grants-and-console-api` `f8c9c30896728e1e792df75d2b1e3d7837c2269c` (603/22; 108); `feat/arc-platform-control-plane-hardening` `c4a24e076159c68033c2300c22f4c74f23516b24` (366/22; 68); `feat/arc-project-one-integration-contract` `362d3f093c8f44b2b9af3bec389462f4c818ecab` (392/22; 72); `feat/arc-secure-worker-execution-runtime` `07ddbd38c8e1c667d1ad200f63387a2c30f9c1bb` (377/22; 69); `feat/oracle-arc-audio-transcription-session` `a253b00f3ac662e13632c83097cf14dd6edb3cd1` (729/22; 122); `feat/oracle-arc-claude-provider-adapter` `c9d2b071f5cf534113deeefb791001950f22a8aa` (793/22; 126); `feat/oracle-arc-network-platform-architecture` `9d598345aa9a05faeabda213c323cce36431e5ce` (470/22; 76); `feat/oracle-arc-personal-core` `b9eb9602f78b222eb9df4a04ec5da5b5a0780c83` (87/22; 24); `feat/oracle-arc-voice-audio-foundation` `2df582076b8bf3c3f444b51ba9a59ff4915cf828` (710/22; 121).
+- Current: Target tree contains 53 entries and the Oracle Arc implementation under `oracle_arc/` (`gateway.py`, `oracle.py`, `spark.py`, `orbits.py`, model and tool modules). Competing branch trees predominantly use a separate `core/` package plus `api.py`, tenant/control-plane, worker, provider, and test modules. The shared concepts include agent registry/dispatch, model gateway, tool grants, tenant identity/security, audit/store, control plane, and ORBITS/media. Later alternatives add document retrieval, ORBITS ASR/TTS/quarantine/workers, owner tool-grant APIs, provider adapters, and expanded platform routes. These are overlapping capabilities, not proof of code compatibility; path and behavior differences require a dedicated port/reconciliation plan.
+- Current: Searched GitHub repositories for `unibud-agents`; no repository was returned. Inspected recursive trees for all 11 discovered feature branches; none contains a `unibud-agents` package or a 51-entry registry. Target branch contains `oracle_arc/agents.py`, which is a generic lifecycle/health registry, not the requested 51-role catalogue. Do not substitute it, the 16-agent `unibud-app` registry, or the 15-agent `unibud-live` registry.
+- Planned: A12 is blocked. Founder must attach the authoritative `unibud-agents` package or provide its repository/branch and the complete 51 identities/contracts (16 core + 35 specialist/service). Once attached, inspect package scripts and source, repair typecheck, add tests, and map only verified definitions to Oracle Arc host registration.
+- Current: No source files were changed. No baseline test was run: local checkout was blocked by DNS; GitHub Actions status list and PR-triggered workflow-run list for live HEAD `a7144e840fe2142f00ef8615403e487b2ac0a938` were both empty. Historical 97-test evidence remains scoped to the historical commit already identified above; it is not evidence for this live HEAD.
+- Found, not fixed: Competing branches contain substantial alternate platform implementations. They remain unmerged and unverified against the current `oracle_arc/` architecture.
+- Found, not fixed: Current `tests/test_http.py` starts a daemon `serve_forever` thread without retaining/joining it. This remains outside the A12 slice; do not switch the queue to the historical socket-warning cleanup while A12 is the first unfinished item.
+- Next exact step: founder attaches the authoritative 51-agent `unibud-agents` package. Then inspect its `package.json`/TypeScript configuration and full source, run baseline typecheck/tests, and make the smallest A12 repair with before/after evidence.
+
+
+## 13. Continuation — 2026-11-14 (A12 source received and host mapping built)
+- Current: Re-read the tracker before work. Repository remains `iamtheoracle/arc-project-two`, branch `feat/oracle-arc-core`. Start commit for this continuation was `08347001959c95453321fb0cc2e562084cd07e88`; current application commits are `efbff7b2f4e9fcbfce5f1f2827c95ab1f224e4ec` (adapter/manifest/docs), `7e65955509f8a017bf347ca629ce049a82d48098` (test assertion correction), and `96f5d24f0d1ce7ab9ff96842550004209e7154ca` (Arc composition integration test). Branch HEAD before this tracker update is `96f5d24f0d1ce7ab9ff96842550004209e7154ca`. No local checkout is available; local clone still fails DNS.
+- Current: Founder-supplied `unibud-agents-51.zip` SHA-256: `77ed05b3595c086f7778588dea132d62bd67f0c4e3d76202093dd117b08fcf79`. Archive contains 45 ZIP entries and 32 source/config/test files. Typed registry source declares 51 unique IDs: 16 core, 10 specialist, 25 service. All definitions contain role, mission, duties, routing context, non-assumptions, capabilities, boundaries and collaborator references.
+- Current: Uploaded package baseline on Node.js 22.16.0: `npm test` passed 5/5. Initial `npm run typecheck` failed because `@types/node` was not installed in the extracted package. After linking the environment's existing Node type definitions locally, `tsc --noEmit` passed using globally installed TypeScript 5.8.3. A clean `npm install --ignore-scripts --no-audit --no-fund` timed out due registry/network access. The uploaded archive itself was not modified. Package engine declaration `>=20` is broader than its `--experimental-strip-types` test script support (Node 22.6+); found, not fixed.
+- Current: Generated the 51-entry JSON snapshot from the package's `ALL_AGENTS` export; verified category counts and that the generated snapshot matched the typed registry byte-for-byte before compression. Compressed snapshot SHA-256 is `93c3c862d84ad0801bcd066f16fec9a22dedb69beb32f257f56ef7ab11228652`; it is committed at `oracle_arc/agent_catalogues/unibud-51.json.bz2`. Loader verifies this digest before decompressing, then validates exact count, category counts, unique IDs, required fields and collaborator references.
+- Current: `oracle_arc/unibud_agents.py` exposes `load_unibud_agent_specs()`. It maps all 51 definitions to namespaced `unibud:<original-id>` host `AgentSpec` objects. Every mapping is capped at `Risk.READ`, has an empty SPARK memory namespace tuple, and creates no tools or grants. Capability declarations and collaborator relationships remain metadata only; system prompts explicitly prohibit claims of unconnected capabilities and actions.
+- Current: Name boundaries are preserved: `unibud:spark` is explicitly distinguished from Oracle Arc SPARK (user-controlled memory); `unibud:oracle` is distinct from Oracle Arc ORACLE; `unibud:orbit` is distinct from Oracle Arc ORBITS. The supplied package's internal Spark orchestration runtime is not imported into Oracle Arc. UNIBUD agent registrations are not installed by default; the embedding host must explicitly pass `agent_specs=load_unibud_agent_specs()`.
+- Current: Added `tests/test_unibud_agents.py` (4 focused tests) and `tests/test_unibud_agents_gateway.py` (Arc composition integration test). Four focused adapter tests passed in a temporary harness using the verified `AgentRegistry` and `Risk` definitions from this branch. The actual Arc composition test is committed but was not run locally because a full repository checkout is unavailable. Full warning-strict Oracle Arc suite was not run. No CI statuses or workflow runs are reported for current commit `96f5d24f0d1ce7ab9ff96842550004209e7154ca`.
+- Found, not fixed: The TypeScript package's `executeAgent()` treats only `authorization === "not-authorized"` as blocked; omitted/unknown authorization is not fail-closed. The runtime does not invoke extension adapters for service agents, so its model-generated `completed` result is not proof of a real payment, academic record operation, notification or other external effect. Do not use this package runtime for consequential operations until authorization, confirmation, adapter invocation and verification are enforced.
+- Found, not fixed: `createPostgresStorage()` documents expected tables but does not provide migrations/schema creation. This belongs to A8; do not treat the adapter as a completed PostgreSQL persistence implementation.
+- Current: A12 implementation is built, but A12 is not closed until the full Oracle Arc warning-strict suite and the committed Arc composition integration test pass in a runnable checkout. Keep A12 at the head of the fix queue; do not start A8 before that verification.
+- Next exact step: Obtain a runnable checkout or supported CI runner for `feat/oracle-arc-core`; run `python3 -W error::ResourceWarning -m unittest discover -s tests -t .` and `python3 -m unittest tests.test_unibud_agents tests.test_unibud_agents_gateway -v`. Fix any regression within A12 only, record actual output, then close A12 and advance to A8 PostgreSQL.
+- Current: No merge, deployment, force-push, or operational activation occurred. No provider, tool grant, memory permission, or external action was added by this slice.
+
+
+## 14. Continuation — 2026-11-14 (A12 full regression verified)
+- Current: Re-read this tracker, then verified remote repository `iamtheoracle/arc-project-two`, branch `feat/oracle-arc-core`. The branch head before CI configuration was `0bd30953ab428790cb63e24dedf0ce8e41988da5`; latest remote HEAD after the CI commit is `a9edecc5eeb849202de203afe86e7749d3db6a04`. The remote tree includes the manifest, adapter, both A12 tests, registration document and this tracker. A local working copy could not be created in this execution environment because DNS resolution for `github.com` failed; GitHub Actions checked out the exact commit successfully.
+- Current: Added `.github/workflows/oracle-arc-tests.yml`. It runs on pushes and pull requests targeting `feat/oracle-arc-core`, installs the declared Python requirements under Python 3.11, then runs the warning-strict full suite and the dedicated A12 tests.
+- Current: GitHub Actions run [43628930371](https://github.com/iamtheoracle/arc-project-two/actions/runs/43628930371) for exact HEAD `a9edecc5eeb849202de203afe86e7749d3db6a04` completed `success`. The job installed dependencies successfully, then reported: `Ran 102 tests in 10.882s` / `OK`; focused A12 suite: `Ran 5 tests in 0.012s` / `OK`.
+- Current: The warning-strict full suite emitted three ignored `ResourceWarning: unclosed socket` exceptions from HTTP test servers, but the test process exited successfully. Do not describe this as warning-free; retain it under Found, not fixed.
+- Current: The four adapter tests and one gateway composition integration test all passed on the checked-out repository source. This closes A12's remaining full-regression verification requirement.
+- Current: The four adapter tests also passed in the available temporary harness before CI; that run was supplementary and is not the repository-wide baseline.
+- Current: No baseline test was run against the pre-CI branch HEAD `0bd30953ab428790cb63e24dedf0ce8e41988da5`; the full suite was run against `a9edecc5eeb849202de203afe86e7749d3db6a04`, which adds the workflow file only and leaves application source unchanged. This distinction is retained rather than inventing a before-run.
+- Current: A12 is now verified and closed. The first next item is A8 PostgreSQL persistence. No PostgreSQL database was provisioned or connected in this slice.
+- Found, not fixed: HTTP test server sockets are not fully closed; three ResourceWarnings appear in the passing suite. Keep this finding visible for a later dedicated cleanup.
+- Found, not fixed: The supplied TypeScript package's clean-install reproducibility remains unverified because npm install previously timed out in the local environment; its archive tests passed 5/5 and typecheck passed only after local Node typings were supplied.
+- Current: No provider, runtime tool, memory namespace, grant, external action, database, merge, deployment, force-push or operational activation was added by A12.
+- Next exact step: A8 — inspect `oracle_arc/spark.py`, `oracle_arc/audit.py`, `oracle_arc/identity.py`, `oracle_arc/agents.py`, `oracle_arc/tools/registry.py`, and `oracle_arc/orbits.py`; design additive PostgreSQL migrations and a least-privilege role/RLS model; add migration and persistence integration tests against a real PostgreSQL service. Preserve existing interfaces and SQLite/in-memory behavior until migration tests pass.
+- Current: Tracker updated after CI verification.
