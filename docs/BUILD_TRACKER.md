@@ -13,6 +13,14 @@ Rule: trust code over notes. Re-verify claims before relying on them.
 - Planned: A8 remains partial. Production secret-manager provisioning, app-credential lookup enumeration risk, DB connection pooling/TLS/timeouts, backup/restore, multi-process concurrency, migration ledger/rollback, persistent audit and SPARK memory, persistent confirmations and usage metering, and independent security review remain open.
 - Not deployed, not merged, not production-operational.
 
+## 15. Continuation — 2026-11-18 (A8 step 2: PostgreSQL audit chain)
+- Current (database/migrations/0002_arc_audit_chain.sql): append-only hash-chained `audit_log` in `oracle_arc_private`, forced RLS, UPDATE/DELETE/TRUNCATE blocked by trigger for every role, runtime role limited to `append_audit()`, `verify_audit_chain()` and `audit_head()` (SECURITY DEFINER, pinned search_path), appends serialised by an advisory lock. Rollback: `0002_arc_audit_chain.rollback.sql`.
+- Current (database/tests/0002_arc_audit_chain.test.sql): passes on a local PostgreSQL 16 (ON_ERROR_STOP). Covers valid chain, head, runtime/provisioner/owner denial, tamper detection at the first bad row, deleted-row detection, constraint rejection, and apply -> rollback -> re-apply. Three deliberate breaks (runtime SELECT grant, trigger disabled, provisioner append grant) were each caught.
+- Current: CI step added to `.github/workflows/oracle-arc-tests.yml`. NOT yet run in GitHub Actions: CI verified = no.
+- Planned: Python adapter that routes `oracle_arc/audit.py` to `append_audit`/`verify_audit_chain` (needs psycopg, which could not be installed in the authoring sandbox; the existing SQLite `AuditLog` is unchanged and still the runtime default). Secret redaction stays in Python before the call; the database does not redact.
+- Planned: A13 external anchoring uses `audit_head()`. A superuser who disables the trigger and rewrites the tail AND recomputes hashes is not detected without an external anchor.
+- Next exact step: SPARK memory to PostgreSQL (`0003`), RLS isolating app and user, share grants, TTL, with a SQL test file and CI step in the same shape.
+
 ## 1. Stopped at / Next exact step
 - Current: Oracle Arc repository is `iamtheoracle/arc-project-two`, branch `feat/oracle-arc-core`; latest verified remote HEAD is `a9edecc5eeb849202de203afe86e7749d3db6a04`.
 - Current: A12 is implemented and full-suite verified at that HEAD. The CI workflow ran the exact branch commit, installed `requirements.txt`, passed the warning-strict full suite (102 tests), and passed the focused UNIBUD registry/gateway suite (5 tests).
