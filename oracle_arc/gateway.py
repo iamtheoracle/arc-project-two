@@ -1,6 +1,8 @@
 """Authenticated API gateway: composes host-registered agents and capabilities."""
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import threading
@@ -13,14 +15,21 @@ from .identity import AppRegistry
 from .models import ModelGateway, OllamaBackend, OpenAICompatBackend, RoutingPolicy, UsageMeter
 from .oracle import ArcRequest, Oracle
 from .orbits import Orbits
+from .ratelimit import RateLimiter
 from .spark import SparkMemory
 from .tools import GrantTable, ToolRegistry
 from .types import (ArcError, AuthError, ConfirmationError, DataClass, MediaRejected, ModelUnavailable,
-                    PermissionDenied, QuotaExceeded, Risk, ToolUnavailable, ValidationError)
+                    PermissionDenied, QuotaExceeded, RateLimited, Risk, ToolUnavailable, ValidationError)
 
 _STATUS = {"unauthenticated": 401, "permission_denied": 403, "invalid_request": 400, "quota_exceeded": 429,
-           "model_unavailable": 503, "tool_unavailable": 503, "confirmation_failed": 403, "media_rejected": 422}
+           "model_unavailable": 503, "tool_unavailable": 503, "confirmation_failed": 403, "media_rejected": 422,
+           "rate_limited": 429}
 MAX_BODY = 1_000_000
+# ORBITS uploads are base64 inside JSON until streaming/multipart upload exists (Planned), so only that
+# route may exceed MAX_BODY. 4/3 of the largest document limit plus JSON overhead.
+MAX_ORBITS_BODY = 28_000_000
+DEFAULT_RATE_LIMITS = {"token": (1.0, 10), "token_fail": (0.2, 10), "user": (5.0, 30),
+                       "app": (50.0, 300)}                                   # (per second, burst)
 
 
 class Arc:
@@ -28,7 +37,8 @@ class Arc:
 
     def __init__(self, backends=None, server_key=None, audit_path=":memory:", memory_path=":memory:",
                  policy: RoutingPolicy = None, step_up=None, file_roots=(), user_verifier=None,
-                 app_credentials=(), agent_specs=(), tool_specs=(), tool_grants=(), control_plane=None):
+                 app_credentials=(), agent_specs=(), tool_specs=(), tool_grants=(), control_plane=None,
+                 rate_limits=None, rate_clock=None):
         self.audit = AuditLog(audit_path)
         if control_plane is not None:
             stable_key = server_key or os.environ.get("ARC_SERVER_KEY", "").encode()
@@ -40,6 +50,12 @@ class Arc:
                 raise ValueError("PostgreSQL applications must be provisioned out-of-band, not at runtime")
             if tool_grants:
                 raise ValueError("PostgreSQL tool grants must be provisioned out-of-band, not at runtime")
+        limits = {**DEFAULT_RATE_LIMITS, **(rate_limits or {})}
+        clk = {"clock": rate_clock} if rate_clock else {}
+        self.limit_token = RateLimiter(*limits["token"], **clk)           # every attempt, per network peer
+        self.limit_token_fail = RateLimiter(*limits["token_fail"], **clk)  # failed secrets only, per application
+        self.limit_user = RateLimiter(*limits["user"], **clk)
+        self.limit_app = RateLimiter(*limits["app"], **clk)
         self.control_plane = control_plane
         self.apps = AppRegistry(server_key=server_key, user_verifier=user_verifier, store=control_plane)
         for app_id, secret, scopes in app_credentials:
@@ -119,15 +135,33 @@ class Arc:
             raise AuthError("missing bearer token")
         return self.apps.verify_token(auth[7:].strip())
 
-    def handle(self, method: str, path: str, headers: dict, body: dict) -> tuple:
+    @staticmethod
+    def _need_scope(p, scope: str) -> None:
+        if scope not in p.scopes:
+            raise PermissionDenied(f"application is not authorised for '{scope}'")
+
+    def handle(self, method: str, path: str, headers: dict, body: dict, client: str = "") -> tuple:
         try:
             if method == "GET" and path == "/v1/health":
                 return 200, {"status": "ok"}
             if method == "POST" and path == "/v1/token":
-                tok = self.apps.issue_token(str(body.get("app_id", "")), str(body.get("app_secret", "")),
-                                            str(body.get("user_id", "")), int(body.get("ttl", 900)))
+                # Throttle secret guessing: every attempt per network peer, and failed secrets per claimed
+                # application. Successful logins never consume the application's failure budget, so an
+                # attacker can slow token issuance only by actually failing, and a legitimate app is not
+                # locked out by someone else's traffic to /v1/token that succeeds.
+                app_key = f"a:{str(body.get('app_id', ''))[:64]}"
+                self.limit_token.check(f"c:{client}")
+                self.limit_token_fail.peek(app_key)
+                try:
+                    tok = self.apps.issue_token(str(body.get("app_id", "")), str(body.get("app_secret", "")),
+                                                str(body.get("user_id", "")), int(body.get("ttl", 900)))
+                except AuthError:
+                    self.limit_token_fail.charge(app_key)
+                    raise
                 return 200, {"token": tok}
             p = self._principal(headers)
+            self.limit_app.check(p.app_id)
+            self.limit_user.check(f"{p.app_id}/{p.user_id}")
             if method == "POST" and path == "/v1/chat":
                 agent = body.get("agent")
                 if not isinstance(agent, str) or not agent.strip():
@@ -163,9 +197,15 @@ class Arc:
             if method == "POST" and path == "/v1/memory/unshare":
                 self.memory.unshare(p, str(body.get("from", "")), str(body.get("to", "")))
                 return 200, {"shared": False}
+            if path.startswith("/v1/memory") and path not in ("/v1/memory/share", "/v1/memory/unshare"):
+                return self._memory_routes(p, method, path, body)
+            if path.startswith("/v1/orbits/"):
+                return self._orbits_routes(p, method, path, body)
             if method == "GET" and path == "/v1/agents":
                 return 200, {"agents": self.agents.health(), "models": self.models.status()}
             return 404, {"error": "not_found"}
+        except RateLimited as e:
+            return 429, {"error": e.code, "message": str(e), "retry_after": round(e.retry_after, 3)}
         except ArcError as e:
             return _STATUS.get(e.code, 400), {"error": e.code, "message": str(e)}
         except (ValueError, TypeError):
@@ -173,6 +213,66 @@ class Arc:
         except Exception as e:                       # never leak internals to the caller
             self.audit.append("gateway.error", error=type(e).__name__)
             return 500, {"error": "internal_error"}
+
+    # ---- SPARK user controls (A10) ---------------------------------------------------------------
+    def _memory_routes(self, p, method: str, path: str, body: dict) -> tuple:
+        self._need_scope(p, "memory")
+        if method == "GET" and path == "/v1/memory":
+            return 200, {"memories": self.memory.list_memories(p)}
+        mid = body.get("id")
+        if method == "POST" and path == "/v1/memory/correct":
+            if not isinstance(mid, str) or not mid:
+                raise ValidationError("id is required")
+            if not self.memory.correct(p, mid, body.get("content")):
+                raise PermissionDenied("memory not found")
+            return 200, {"corrected": True}
+        if method == "POST" and path == "/v1/memory/forget":
+            if not isinstance(mid, str) or not mid:
+                raise ValidationError("id is required")
+            if not self.memory.forget(p, mid):
+                raise PermissionDenied("memory not found")
+            return 200, {"forgotten": True}
+        if method == "POST" and path == "/v1/memory/forget_all":
+            if body.get("confirm") is not True:
+                raise ValidationError("forget_all requires confirm=true")
+            return 200, {"forgotten": self.memory.forget_all(p)}
+        return 404, {"error": "not_found"}
+
+    # ---- ORBITS (A9) -----------------------------------------------------------------------------
+    @staticmethod
+    def _asset_view(a) -> dict:
+        return {"id": a.id, "name": a.name, "kind": a.kind, "mime": a.mime, "size": a.size, "sha256": a.sha256,
+                "status": a.status, "scans": [{"engine": s.engine, "clean": s.clean} for s in a.scans],
+                "expires": a.expires}
+
+    def _orbits_routes(self, p, method: str, path: str, body: dict) -> tuple:
+        self._need_scope(p, "orbits")
+        if method == "POST" and path == "/v1/orbits/assets":
+            name, b64 = body.get("name"), body.get("content_base64")
+            if not isinstance(name, str) or not name.strip() or not isinstance(b64, str):
+                raise ValidationError("name and content_base64 are required")
+            try:
+                data = base64.b64decode(b64, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValidationError("content_base64 is not valid base64")
+            mime = body.get("mime", "")
+            if not isinstance(mime, str):
+                raise ValidationError("mime must be a string")
+            return 201, {"asset": self._asset_view(self.orbits.ingest(p, name, data, mime))}
+        parts = path[len("/v1/orbits/assets/"):].split("/") if path.startswith("/v1/orbits/assets/") else []
+        if not parts or not parts[0] or len(parts) > 2:
+            return 404, {"error": "not_found"}
+        asset_id, action = parts[0], (parts[1] if len(parts) == 2 else "")
+        if method == "GET" and action == "":
+            return 200, {"asset": self._asset_view(self.orbits._owned(p, asset_id))}
+        if method == "GET" and action == "content":
+            return 200, {"content_base64": base64.b64encode(self.orbits.get(p, asset_id)).decode()}
+        if method == "GET" and action == "text":
+            return 200, {"text": self.orbits.extract_text(p, asset_id)}
+        if method == "POST" and action == "delete":
+            self.orbits.delete(p, asset_id)
+            return 200, {"deleted": True}
+        return 404, {"error": "not_found"}
 
     # ---- HTTP server -----------------------------------------------------------------------------
     def make_server(self, host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
@@ -183,7 +283,8 @@ class Arc:
                 body = {}
                 if method == "POST":
                     n = int(self.headers.get("Content-Length") or 0)
-                    if n > MAX_BODY:
+                    path = self.path.split("?")[0]
+                    if n < 0 or n > (MAX_ORBITS_BODY if path == "/v1/orbits/assets" else MAX_BODY):
                         return self._send(413, {"error": "payload_too_large"})
                     try:
                         body = json.loads(self.rfile.read(n) or b"{}")
@@ -191,7 +292,8 @@ class Arc:
                             raise ValueError
                     except ValueError:
                         return self._send(400, {"error": "invalid_request", "message": "body must be a JSON object"})
-                self._send(*arc.handle(method, self.path.split("?")[0], dict(self.headers), body))
+                self._send(*arc.handle(method, self.path.split("?")[0], dict(self.headers), body,
+                                       client=self.client_address[0]))
 
             def _send(self, code, obj):
                 data = json.dumps(obj).encode()
@@ -199,6 +301,8 @@ class Arc:
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Cache-Control", "no-store")
+                if code == 429 and "retry_after" in obj:
+                    self.send_header("Retry-After", str(max(1, int(obj["retry_after"] + 0.999))))
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(data)

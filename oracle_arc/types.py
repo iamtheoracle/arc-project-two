@@ -72,6 +72,14 @@ class MediaRejected(ArcError):
     code = "media_rejected"
 
 
+class RateLimited(ArcError):
+    code = "rate_limited"
+
+    def __init__(self, message: str = "", retry_after: float = 1.0, **detail):
+        super().__init__(message or "rate limit exceeded", **detail)
+        self.retry_after = retry_after
+
+
 @dataclass
 class ChatRequest:
     messages: list

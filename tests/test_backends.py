@@ -71,7 +71,7 @@ class RemoteProtocolTests(unittest.TestCase):
     def setUp(self):
         self.srv, self.seen = serve(lambda m, p, b, h: (200, {
             "choices": [{"message": {"content": "remote hi"}}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}))
-        self.addCleanup(self.srv.shutdown)
+        self.addCleanup(self.srv.server_close); self.addCleanup(self.srv.shutdown)   # LIFO: shutdown first
         os.environ["TEST_ARC_KEY"] = "sk-test-123"
         self.addCleanup(os.environ.pop, "TEST_ARC_KEY", None)
         self.be = OpenAICompatBackend("remote", f"http://127.0.0.1:{self.srv.server_address[1]}", "m1",

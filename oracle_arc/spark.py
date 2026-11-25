@@ -44,7 +44,13 @@ class SparkMemory:
         self._lock = threading.Lock()
         self._audit, self._clock = audit, clock
         self._db.execute("CREATE TABLE IF NOT EXISTS mem (id TEXT PRIMARY KEY, space TEXT, scope TEXT, owner TEXT,"
-                         " content TEXT, dclass INTEGER, created REAL, expires REAL)")
+                         " content TEXT, dclass INTEGER, created REAL, expires REAL,"
+                         " purpose TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1)")
+        cols = {r[1] for r in self._db.execute("PRAGMA table_info(mem)")}
+        if "purpose" not in cols:                          # upgrade a database created before A10
+            self._db.execute("ALTER TABLE mem ADD COLUMN purpose TEXT NOT NULL DEFAULT ''")
+        if "version" not in cols:
+            self._db.execute("ALTER TABLE mem ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self._db.execute("CREATE TABLE IF NOT EXISTS share (user_id TEXT, from_space TEXT, to_space TEXT,"
                          " PRIMARY KEY (user_id, from_space, to_space))")
         self._db.commit()
@@ -70,20 +76,24 @@ class SparkMemory:
 
     # ---- write -------------------------------------------------------------------------------
     def remember(self, p: Principal, namespace: str, allowed_namespaces, content: str, scope: str = "personal",
-                 scope_id: str = "", data_class: DataClass = DataClass.PERSONAL, ttl_s: float = None) -> str:
+                 scope_id: str = "", data_class: DataClass = DataClass.PERSONAL, ttl_s: float = None,
+                 purpose: str = "") -> str:
         if scope not in SCOPES:
             raise ValidationError(f"unknown scope: {scope}")
         if not content or len(content) > 8000:
             raise ValidationError("memory content must be 1..8000 characters")
+        if not isinstance(purpose, str) or len(purpose) > 240:
+            raise ValidationError("purpose must be at most 240 characters")
         if scope == "task" and ttl_s is None:
             ttl_s = 3600.0                                     # temporary task context always expires
         space = self._check_ns(p, namespace, allowed_namespaces)
         mid = uuid.uuid4().hex
         now = self._clock()
         with self._lock:
-            self._db.execute("INSERT INTO mem VALUES (?,?,?,?,?,?,?,?)",
+            self._db.execute("INSERT INTO mem (id,space,scope,owner,content,dclass,created,expires,purpose)"
+                             " VALUES (?,?,?,?,?,?,?,?,?)",
                              (mid, space, scope, self._owner(p, scope, scope_id), content, int(data_class), now,
-                              now + ttl_s if ttl_s else None))
+                              now + ttl_s if ttl_s else None, purpose))
             self._db.commit()
         if self._audit:
             self._audit.append("memory.write", app_id=p.app_id, user_id=p.user_id, space=space, scope=scope, id=mid)
@@ -143,12 +153,63 @@ class SparkMemory:
                                returned=len(out[:k]))
         return out[:k]
 
+    # ---- user controls (A10). Exact owner matching only: user ids may contain LIKE wildcards. ----------
+    @staticmethod
+    def _user_owned_sql() -> str:
+        # owner is the user id itself, or "<user id>:<conversation/task id>". Never use LIKE here.
+        return "(owner = ? OR substr(owner, 1, ?) = ?) AND substr(space, 1, ?) = ?"
+
+    @staticmethod
+    def _user_owned_args(p: Principal) -> tuple:
+        prefix = p.user_id + ":"
+        app_prefix = p.app_id + "/"
+        return p.user_id, len(prefix), prefix, len(app_prefix), app_prefix
+
+    def list_memories(self, p: Principal, limit: int = 100) -> list:
+        """What SPARK holds about this user in this application (never application-owned memory)."""
+        limit = max(1, min(int(limit), 500))
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id,space,scope,content,purpose,dclass,version,created,expires FROM mem WHERE "
+                + self._user_owned_sql() + " AND (expires IS NULL OR expires > ?) ORDER BY created DESC, rowid DESC LIMIT ?",
+                (*self._user_owned_args(p), self._clock(), limit)).fetchall()
+        if self._audit:
+            self._audit.append("memory.list", app_id=p.app_id, user_id=p.user_id, returned=len(rows))
+        return [dict(id=r[0], space=r[1], scope=r[2], content=r[3], purpose=r[4], data_class=DataClass(r[5]).name,
+                     version=r[6], created=r[7], expires=r[8]) for r in rows]
+
+    def correct(self, p: Principal, memory_id: str, content: str) -> bool:
+        if not isinstance(content, str) or not content or len(content) > 8000:
+            raise ValidationError("memory content must be 1..8000 characters")
+        with self._lock:
+            cur = self._db.execute("UPDATE mem SET content=?, version=version+1 WHERE id=? AND "
+                                   + self._user_owned_sql(), (content, memory_id, *self._user_owned_args(p)))
+            self._db.commit()
+        if self._audit:
+            self._audit.append("memory.correct", app_id=p.app_id, user_id=p.user_id, id=memory_id,
+                               changed=cur.rowcount > 0)
+        return cur.rowcount > 0
+
     def forget(self, p: Principal, memory_id: str) -> bool:
         with self._lock:
-            cur = self._db.execute("DELETE FROM mem WHERE id=? AND (owner=? OR owner LIKE ?) AND space LIKE ?",
-                                   (memory_id, p.user_id, p.user_id + ":%", p.app_id + "/%"))
+            cur = self._db.execute("DELETE FROM mem WHERE id=? AND " + self._user_owned_sql(),
+                                   (memory_id, *self._user_owned_args(p)))
             self._db.commit()
+        if self._audit:
+            self._audit.append("memory.forget", app_id=p.app_id, user_id=p.user_id, id=memory_id,
+                               removed=cur.rowcount > 0)
         return cur.rowcount > 0
+
+    def forget_all(self, p: Principal) -> int:
+        """Delete everything this user has in this application, including their share grants."""
+        with self._lock:
+            cur = self._db.execute("DELETE FROM mem WHERE " + self._user_owned_sql(), self._user_owned_args(p))
+            self._db.execute("DELETE FROM share WHERE user_id=? AND substr(from_space,1,?)=?",
+                             (p.user_id, len(p.app_id) + 1, p.app_id + "/"))
+            self._db.commit()
+        if self._audit:
+            self._audit.append("memory.forget_all", app_id=p.app_id, user_id=p.user_id, removed=cur.rowcount)
+        return cur.rowcount
 
     def purge_expired(self) -> int:
         with self._lock:
